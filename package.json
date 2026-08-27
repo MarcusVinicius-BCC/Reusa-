@@ -3,6 +3,9 @@
   "version": "1.0.0",
   "private": true,
   "type": "commonjs",
+  "engines": {
+    "node": ">=20 <25"
+  },
   "scripts": {
     "start": "node backend.js",
     "dev": "node --watch backend.js",

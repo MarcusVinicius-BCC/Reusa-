@@ -10,11 +10,13 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const JWT_SECRET = process.env.JWT_SECRET || 'reusa-plus-dev-secret';
 const ROOT = __dirname;
-const DATA_DIR = path.join(ROOT, 'data');
+// Railway exposes the path of an attached Volume through this variable.
+// Without a Volume, development continues to use the local data folder.
+const DATA_DIR = process.env.DATA_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(ROOT, 'data');
 const DB_FILE = path.join(DATA_DIR, 'reusa.sqlite');
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const DIST_DIR = path.join(ROOT, 'dist');
-const UPLOAD_DIR = path.join(ROOT, 'uploads');
+const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
 
 const SCREEN_ROUTES = {
   SCREEN_2: '/criar-conta',
@@ -378,6 +380,8 @@ function seedDatabase() {
         user.email,
         passwordHash(user.password),
         user.city,
+        '',
+        '',
         JSON.stringify(user.interests),
         user.avatar,
         user.rating || 4.8,
