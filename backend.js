@@ -331,6 +331,8 @@ function seedDatabase() {
       email: 'mariana@reusa.com',
       password: '12345678',
       city: 'Santarém, PA',
+      cep: '68005-000',
+      address: 'Rua dos Reciclados, 123',
       interests: ['Eletrônicos', 'Livros', 'Móveis'],
       avatar: 'https://lh3.googleusercontent.com/aida-public/AB6AXuDfKn67wUHUzena6GPilhlMnfDTrX-AWCwJhpH14zxiCoejXVjCmxTucAueuPpn8n-U7rlurleOutdAv9CDYPpbq_d_piVERXOSL9LlJEldAYneOM-xWur8isWTqBuxA_ft7dzi7Timk6eUEJCDUm4nfvwZJ8jrPK8xrShXRX2SD8w4XW2jVbrB8or5gfnOPiF82d6nji601xBCm_Ngt9MkRuR_c4rTOstyZqS4B3TfM7ejEF6ZgsGV',
       rating: 0,
@@ -345,6 +347,8 @@ function seedDatabase() {
       email: 'ana@reusa.com',
       password: '12345678',
       city: 'Santarém - PA',
+      cep: '68010-000',
+      address: 'Avenida Tapajós, 456',
       interests: ['Eletrônicos'],
       avatar: 'https://lh3.googleusercontent.com/aida-public/AB6AXuAsueseVHwikfjZUPneZMx0rqtlGEAvV11CkF3ZlPKviIATzLTOhR-p7j1TYIeuMpJlGbMLawmQBHL60XAkrmqGp5wt-6D68qh_PsiHSJ2uhVyXDqdisWv0hZfQa58Vsnhew_Uvhh1Zqhvu6ZkmmlXBd9A2k_o_9WllEYGBTuKxQXdlrXCtW-yj3DPzIeS3OFZUVpbfTsEnzDWcO-IU5Ej2wAfYjCRbwv5EdJ3FDoH7F0kTWGkvJnB'
     },
@@ -354,6 +358,8 @@ function seedDatabase() {
       email: 'carlos@reusa.com',
       password: '12345678',
       city: 'Belém - PA',
+      cep: '66010-000',
+      address: 'Travessa da Reciclagem, 789',
       interests: ['Móveis'],
       avatar: 'https://lh3.googleusercontent.com/aida-public/AB6AXuAiQNpgXHXcxsqlUle1BD51S0EefNYNX04RVTyt0saBA8DRgBGuv_57hJHCLHG52ZGvF-H9WTCzDe68Ufjm4uAlEgryZWVFb2PNVrHS2-yMUF4POWIFsawtqpMXUqATzO51bEPkYjCRa_1TBJkX7LNkrIOIg7X1oZev-uKhXDeR178SmHGTAAwx8QKEywHcZAzXGkcdtSBu_YhT1ac28kZ3xyb0yrHpO1XzsgCYrIm6Xuq7ANzxu9aE'
     },
@@ -363,6 +369,8 @@ function seedDatabase() {
       email: 'maria@reusa.com',
       password: '12345678',
       city: 'Santarém, PA',
+      cep: '68020-000',
+      address: 'Rua das Cooperativas, 321',
       interests: ['Pilhas', 'Cooperativas'],
       avatar: 'https://lh3.googleusercontent.com/aida-public/AB6AXuD9NRHlC3dq7BBwbaGVyUiXLd5N4mQkLW3JB9vLMQFONxbw11AJQ7pnDIXN3PJv8CchCKfDUOtDgvXZelW_wTZiy3m-eKpu1nyPG_qwyrJcKW2j--yXPi2acaTIA8k66t0J3SFeg6Gl31xpNSEq8YjVnZ2537RlH2Soe6MKK8Cyi1G22lO9fGiw1e7UmyxbLvPUguyys1OvQAyRqQjLCXFaCPPzSX-SMeff2GRu42T7Wxp3AgXd3HJP'
     }
@@ -378,6 +386,8 @@ function seedDatabase() {
         user.email,
         passwordHash(user.password),
         user.city,
+        user.cep || '',
+        user.address || '',
         JSON.stringify(user.interests),
         user.avatar,
         user.rating || 4.8,
