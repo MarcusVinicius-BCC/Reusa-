@@ -32,7 +32,7 @@ export function AppRoutes() {
   }, [initialize]);
 
   useEffect(() => {
-    if (!session && !['/splash', '/login', '/criar-conta'].includes(location.pathname)) {
+    if (!session && !['/splash', '/login', '/criar-conta', '/feed', '/mapa', '/inspiracoes', '/mensagens', '/mensagens/ana', '/nova-publicacao', '/perfil'].includes(location.pathname)) {
       navigate('/login', { replace: true });
     }
   }, [session, location.pathname, navigate]);
@@ -91,28 +91,28 @@ function Shell({ children, nav, active }) {
 
 function BottomNav({ nav, active }) {
   return (
-    <nav className="bottom-nav">
+    <nav className="bottom-nav" aria-label="Navegação principal">
       {[
         ['home', 'Início', 'home'],
-        ['explore', 'Explorar', 'explore'],
-        ['post', '', 'add'],
         ['map', 'Mapa', 'map'],
+        ['post', 'Publicar', 'add'],
+        ['mensagens', 'Mensagens', 'chat_bubble'],
         ['profile', 'Perfil', 'person']
       ].map(([key, label, icon]) => {
         const to = nav[key] || navRoutes[key];
         const isAdd = key === 'post';
+        const isActive = active === to;
         return (
-          <button
+          <a
             key={key}
-            className={isAdd ? 'nav-add' : active === to ? 'nav-item nav-active' : 'nav-item'}
-            onClick={() => {
-              window.history.pushState({}, '', to);
-              window.dispatchEvent(new PopStateEvent('popstate'));
-            }}
+            href={to}
+            className={isAdd ? 'nav-item nav-add' : isActive ? 'nav-item nav-active' : 'nav-item'}
+            aria-current={isActive ? 'page' : undefined}
+            aria-label={label}
           >
             <span className="material-symbols-outlined">{icon}</span>
-            {label ? <span>{label}</span> : null}
-          </button>
+            <span>{label}</span>
+          </a>
         );
       })}
     </nav>
@@ -468,10 +468,18 @@ function ChatScreen({ onBack }) {
 
   async function send() {
     if (!text.trim()) return;
+    if (!session) {
+      alert('Entre na sua conta para enviar mensagens.');
+      return;
+    }
     const messageText = text.trim();
-    await sendMessage(threadId, { text: messageText });
-    setMessages((current) => [...current, { id: Date.now(), sender_id: session?.id, text: messageText, sent_at: new Date().toISOString() }]);
-    setText('');
+    try {
+      await sendMessage(threadId, { text: messageText });
+      setMessages((current) => [...current, { id: Date.now(), sender_id: session.id, text: messageText, sent_at: new Date().toISOString() }]);
+      setText('');
+    } catch (error) {
+      alert(error.message);
+    }
   }
 
   return (
@@ -490,13 +498,43 @@ function CreatePostScreen({ onBack, onSuccess }) {
   const setPostForm = useAppStore((state) => state.setPostForm);
   const session = useAppStore((state) => state.session);
   const [image, setImage] = useState(null);
+  const [imagePreview, setImagePreview] = useState('');
+  const categories = [
+    ['moveis', 'chair', 'Móveis'],
+    ['eletronicos', 'devices', 'Eletrônicos'],
+    ['roupas', 'checkroom', 'Roupas'],
+    ['livros', 'menu_book', 'Livros'],
+    ['outros', 'category', 'Outros']
+  ];
+
+  useEffect(() => {
+    if (!image) {
+      setImagePreview('');
+      return undefined;
+    }
+    const previewUrl = URL.createObjectURL(image);
+    setImagePreview(previewUrl);
+    return () => URL.revokeObjectURL(previewUrl);
+  }, [image]);
 
   async function submit(event) {
     event.preventDefault();
     if (!postForm.title?.trim() || !postForm.description?.trim()) return;
+    const customCategory = String(postForm.customCategory || '').trim();
+    const category = postForm.category === 'outros' ? customCategory : (postForm.category || 'moveis');
+    if (!category) {
+      alert('Informe a categoria do produto.');
+      return;
+    }
+    if (!session) {
+      alert('Entre na sua conta para publicar um anúncio.');
+      return;
+    }
     try {
-      await createPost({ ...postForm, image });
+      const { customCategory: ignoredCustomCategory, ...postPayload } = postForm;
+      await createPost({ ...postPayload, category, image });
       setPostForm({});
+      setImage(null);
       onSuccess();
     } catch (error) {
       alert(error.message);
@@ -504,43 +542,61 @@ function CreatePostScreen({ onBack, onSuccess }) {
   }
 
   return (
-    <div className="post-screen">
-      <header className="topbar compact-topbar"><button className="back-btn" onClick={onBack}><span className="material-symbols-outlined">arrow_back_ios_new</span></button><h1>Post</h1></header>
-      <main className="page padded-bottom">
-        <section className="composer-card">
-          <h2>O que você quer dar um novo destino?</h2>
-          <p>Compartilhe os detalhes do seu item.</p>
-          <form onSubmit={submit} className="composer-form">
-            <Field label="Título do item" icon="title" value={postForm.title || ''} onChange={(value) => setPostForm((prev) => ({ ...prev, title: value }))} placeholder="Ex: Cadeira de madeira antiga" />
-            <Field label="Descrição" icon="description" value={postForm.description || ''} onChange={(value) => setPostForm((prev) => ({ ...prev, description: value }))} placeholder="Descreva os detalhes..." multiline />
-            <label className="field">
-              <span>Categoria</span>
-              <select value={postForm.category || 'moveis'} onChange={(e) => setPostForm((prev) => ({ ...prev, category: e.target.value }))}>
-                <option value="moveis">Móveis</option>
-                <option value="eletronicos">Eletrônicos</option>
-                <option value="roupas">Roupas</option>
-                <option value="livros">Livros</option>
-                <option value="outros">Outros</option>
-              </select>
-            </label>
-            <div className="chip-box">
-              <label>Condição</label>
-              <div className="chip-row">
-                <button type="button" className={postForm.condition === 'Novo' || !postForm.condition ? 'chip chip-active' : 'chip'} onClick={() => setPostForm((prev) => ({ ...prev, condition: 'Novo' }))}>Novo</button>
-                <button type="button" className={postForm.condition === 'Bom estado' ? 'chip chip-active' : 'chip'} onClick={() => setPostForm((prev) => ({ ...prev, condition: 'Bom estado' }))}>Bom estado</button>
-                <button type="button" className={postForm.condition === 'Marcas de uso' ? 'chip chip-active' : 'chip'} onClick={() => setPostForm((prev) => ({ ...prev, condition: 'Marcas de uso' }))}>Marcas de uso</button>
-                <button type="button" className={postForm.condition === 'Para conserto' ? 'chip chip-active' : 'chip'} onClick={() => setPostForm((prev) => ({ ...prev, condition: 'Para conserto' }))}>Para conserto</button>
-              </div>
-            </div>
-            <div className="dual-choice">
-              <button type="button" className={postForm.goal !== 'Troca' ? 'choice choice-active' : 'choice'} onClick={() => setPostForm((prev) => ({ ...prev, goal: 'Doação' }))}>Doar</button>
-              <button type="button" className={postForm.goal === 'Troca' ? 'choice choice-active' : 'choice'} onClick={() => setPostForm((prev) => ({ ...prev, goal: 'Troca' }))}>Trocar</button>
-            </div>
-            <Field label="Localização" icon="location_on" value={postForm.location || session?.city || ''} onChange={(value) => setPostForm((prev) => ({ ...prev, location: value }))} placeholder="Usar minha localização atual" />
-            <label className="upload-field"><span className="material-symbols-outlined">add_photo_alternate</span><span>{image?.name || 'Adicionar foto do item'}</span><input type="file" accept="image/*" onChange={(event) => setImage(event.target.files?.[0] || null)} /></label>
-            <button type="submit" className="primary-btn full">Publicar anúncio <span className="material-symbols-outlined">send</span></button>
-          </form>
+    <div className="post-screen publish-screen">
+      <header className="topbar compact-topbar publish-topbar"><button className="back-btn" onClick={onBack} aria-label="Voltar"><span className="material-symbols-outlined">arrow_back_ios_new</span></button><h1>Novo anúncio</h1><span className="publish-progress">1 de 1</span></header>
+      <main className="page publish-page">
+        <section className="publish-hero">
+          <span className="publish-hero-icon material-symbols-outlined">volunteer_activism</span>
+          <div><span className="eyebrow">Dê um novo ciclo</span><h2>O que vai ganhar uma nova história?</h2><p>Capriche nos detalhes para encontrar a pessoa certa.</p></div>
         </section>
+        <form onSubmit={submit} className="publish-form">
+          <section className="publish-section publish-photo-section">
+            <div className="publish-section-head"><div><span className="publish-step">01</span><h3>Mostre seu item</h3></div><span>Uma boa foto faz diferença</span></div>
+            <label className={imagePreview ? 'publish-image-picker has-image' : 'publish-image-picker'}>
+              {imagePreview ? <><img src={imagePreview} alt="Prévia do item" /><span className="publish-change-photo"><span className="material-symbols-outlined">edit</span>Trocar foto</span></> : <><span className="publish-image-icon material-symbols-outlined">add_a_photo</span><strong>Adicionar foto</strong><small>JPG, PNG, WebP ou GIF • até 5 MB</small></>}
+              <input type="file" accept="image/jpeg,image/png,image/gif,image/webp,image/avif" onChange={(event) => setImage(event.target.files?.[0] || null)} />
+            </label>
+          </section>
+
+          <section className="publish-section">
+            <div className="publish-section-head"><div><span className="publish-step">02</span><h3>Conte sobre ele</h3></div><span>Seja direto e honesto</span></div>
+            <div className="publish-fields">
+              <Field label="Título do item" icon="title" value={postForm.title || ''} onChange={(value) => setPostForm((prev) => ({ ...prev, title: value }))} placeholder="Ex: Cadeira de madeira antiga" />
+              <Field label="Descrição" icon="description" value={postForm.description || ''} onChange={(value) => setPostForm((prev) => ({ ...prev, description: value }))} placeholder="Estado, medidas e outros detalhes..." multiline />
+            </div>
+          </section>
+
+          <section className="publish-section">
+            <div className="publish-section-head"><div><span className="publish-step">03</span><h3>Escolha a categoria</h3></div></div>
+            <div className="publish-categories">
+              {categories.map(([value, icon, label]) => <button type="button" key={value} className={(postForm.category || 'moveis') === value ? 'publish-category publish-category-active' : 'publish-category'} onClick={() => setPostForm((prev) => ({ ...prev, category: value }))} aria-pressed={(postForm.category || 'moveis') === value}><span className="material-symbols-outlined">{icon}</span><span>{label}</span></button>)}
+            </div>
+            {postForm.category === 'outros' && <div className="publish-custom-category"><Field label="Qual é a categoria?" icon="sell" value={postForm.customCategory || ''} onChange={(value) => setPostForm((prev) => ({ ...prev, customCategory: value }))} placeholder="Ex: Esportes, jardinagem, brinquedos..." maxLength={60} autoFocus /><small>Ela aparecerá no anúncio como a categoria do produto.</small></div>}
+          </section>
+
+          <section className="publish-section">
+            <div className="publish-section-head"><div><span className="publish-step">04</span><h3>Como está o item?</h3></div></div>
+            <div className="publish-options">
+              {['Novo', 'Bom estado', 'Marcas de uso', 'Para conserto'].map((condition) => <button type="button" key={condition} className={postForm.condition === condition || (!postForm.condition && condition === 'Novo') ? 'publish-option publish-option-active' : 'publish-option'} onClick={() => setPostForm((prev) => ({ ...prev, condition }))}>{condition}</button>)}
+            </div>
+          </section>
+
+          <section className="publish-section">
+            <div className="publish-section-head"><div><span className="publish-step">05</span><h3>Qual é a sua intenção?</h3></div></div>
+            <div className="publish-goals">
+              <button type="button" className={postForm.goal !== 'Troca' ? 'publish-goal publish-goal-active' : 'publish-goal'} onClick={() => setPostForm((prev) => ({ ...prev, goal: 'Doação' }))}><span className="material-symbols-outlined">volunteer_activism</span><span><strong>Doar</strong><small>Encontrar um novo lar</small></span></button>
+              <button type="button" className={postForm.goal === 'Troca' ? 'publish-goal publish-goal-active' : 'publish-goal'} onClick={() => setPostForm((prev) => ({ ...prev, goal: 'Troca' }))}><span className="material-symbols-outlined">swap_horiz</span><span><strong>Trocar</strong><small>Receber algo em troca</small></span></button>
+            </div>
+          </section>
+
+          <section className="publish-section">
+            <div className="publish-section-head"><div><span className="publish-step">06</span><h3>Onde ele está?</h3></div></div>
+            <Field label="Localização" icon="location_on" value={postForm.location || session?.city || ''} onChange={(value) => setPostForm((prev) => ({ ...prev, location: value }))} placeholder="Ex: Santarém, PA" />
+          </section>
+
+          <aside className="publish-tip"><span className="material-symbols-outlined">tips_and_updates</span><span><strong>Dica REUSA+</strong> Fotos claras e uma descrição sincera aumentam as chances de um novo encontro.</span></aside>
+          <div className="publish-submit"><button type="submit" className="primary-btn full">Publicar anúncio <span className="material-symbols-outlined">arrow_forward</span></button><small>Você poderá conversar com interessados depois da publicação.</small></div>
+        </form>
       </main>
     </div>
   );
@@ -608,6 +664,7 @@ function ProfileScreen({ onGoToFeed, onSettings }) {
 function MapScreen() {
   const collectionPoints = useAppStore((state) => state.collectionPoints);
   const session = useAppStore((state) => state.session);
+  const loadCollectionPoints = useAppStore((state) => state.loadCollectionPoints);
   const loadCollectionPointsNearby = useAppStore((state) => state.loadCollectionPointsNearby);
   const [selectedPoint, setSelectedPoint] = useState(null);
   const [userLocation, setUserLocation] = useState(null);
@@ -628,8 +685,10 @@ function MapScreen() {
       loadCollectionPointsNearby(session.city).then((result) => {
         if (result.center) setMapCenter(result.center);
       }).catch(() => {});
+      return;
     }
-  }, [loadCollectionPointsNearby, session?.city]);
+    loadCollectionPoints().catch(() => {});
+  }, [loadCollectionPoints, loadCollectionPointsNearby, session?.city]);
 
   useEffect(() => {
     if (!selectedPoint && visiblePoints[0]) setSelectedPoint(visiblePoints[0]);
@@ -756,13 +815,13 @@ function SettingsScreen({ onBack, onLogout }) {
   );
 }
 
-function Field({ label, icon, value, onChange, placeholder, type = 'text', multiline = false }) {
+function Field({ label, icon, value, onChange, placeholder, type = 'text', multiline = false, maxLength, autoFocus = false }) {
   return (
     <label className="field">
       <span>{label}</span>
       <div className="field-control">
         <span className="material-symbols-outlined">{icon}</span>
-        {multiline ? <textarea value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} rows={4} /> : <input type={type} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} />}
+        {multiline ? <textarea value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} rows={4} maxLength={maxLength} autoFocus={autoFocus} /> : <input type={type} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} maxLength={maxLength} autoFocus={autoFocus} />}
       </div>
     </label>
   );
