@@ -8,7 +8,8 @@ const initSqlJs = require('sql.js');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
-const JWT_SECRET = process.env.JWT_SECRET || 'reusa-plus-dev-secret';
+const hasConfiguredJwtSecret = Boolean(process.env.JWT_SECRET);
+const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
 const ROOT = __dirname;
 // Railway exposes the path of an attached Volume through this variable.
 // Without a Volume, development continues to use the local data folder.
@@ -17,6 +18,13 @@ const DB_FILE = path.join(DATA_DIR, 'reusa.sqlite');
 const PUBLIC_DIR = path.join(ROOT, 'public');
 const DIST_DIR = path.join(ROOT, 'dist');
 const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
+const IMAGE_EXTENSIONS = new Map([
+  ['image/jpeg', '.jpg'],
+  ['image/png', '.png'],
+  ['image/gif', '.gif'],
+  ['image/webp', '.webp'],
+  ['image/avif', '.avif']
+]);
 
 const SCREEN_ROUTES = {
   SCREEN_2: '/criar-conta',
@@ -33,7 +41,6 @@ const SCREEN_ROUTES = {
 
 const ROUTE_FILES = {
   '/splash': 'splash_screen/code.html',
-  '/onboarding': 'onboarding_1_desapegue/code.html',
   '/login': 'login/code.html',
   '/criar-conta': 'criar_conta/code.html',
   '/feed': 'feed_inicial_interligado/code.html',
@@ -51,6 +58,19 @@ const ROUTE_FILES = {
 
 let db;
 
+app.disable('x-powered-by');
+if (process.env.RAILWAY_ENVIRONMENT_NAME) {
+  app.set('trust proxy', 1);
+}
+app.use((_req, res, next) => {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  res.setHeader('X-Frame-Options', 'DENY');
+  res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+  res.setHeader('Permissions-Policy', 'geolocation=(self)');
+  res.setHeader('Content-Security-Policy', "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https://viacep.com.br https://nominatim.openstreetmap.org");
+  next();
+});
+
 function ensureDir(dirPath) {
   if (!fs.existsSync(dirPath)) {
     fs.mkdirSync(dirPath, { recursive: true });
@@ -61,12 +81,73 @@ function sha256(value) {
   return crypto.createHash('sha256').update(String(value)).digest('hex');
 }
 
-function passwordHash(password) {
+function legacyPasswordHash(password) {
   return sha256(`reusa:${password}`);
+}
+
+function passwordHash(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(String(password), salt, 64).toString('hex');
+  return `scrypt$${salt}$${hash}`;
+}
+
+function verifyPassword(password, storedHash) {
+  if (typeof storedHash !== 'string') {
+    return false;
+  }
+
+  const [algorithm, salt, digest] = storedHash.split('$');
+  if (algorithm === 'scrypt' && salt && digest) {
+    const calculated = crypto.scryptSync(String(password), salt, 64);
+    const expected = Buffer.from(digest, 'hex');
+    return expected.length === calculated.length && crypto.timingSafeEqual(calculated, expected);
+  }
+
+  const legacyHash = Buffer.from(legacyPasswordHash(password), 'hex');
+  const expected = Buffer.from(storedHash, 'hex');
+  return expected.length === legacyHash.length && crypto.timingSafeEqual(legacyHash, expected);
 }
 
 function uid(prefix) {
   return `${prefix}-${crypto.randomUUID()}`;
+}
+
+function createRateLimiter({ windowMs, maxRequests }) {
+  const attempts = new Map();
+
+  return (req, res, next) => {
+    const now = Date.now();
+    const key = `${req.ip}:${req.path}`;
+    const record = attempts.get(key);
+    const current = !record || now - record.startedAt >= windowMs
+      ? { startedAt: now, count: 0 }
+      : record;
+
+    current.count += 1;
+    attempts.set(key, current);
+
+    if (current.count > maxRequests) {
+      res.setHeader('Retry-After', Math.ceil((windowMs - (now - current.startedAt)) / 1000));
+      return res.status(429).json({ error: 'Too many requests. Try again later.' });
+    }
+
+    return next();
+  };
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const response = await fetch(url, { ...options, signal: controller.signal });
+    if (!response.ok) {
+      throw new Error(`External request failed with status ${response.status}`);
+    }
+    return response;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function loadDbBytes() {
@@ -78,7 +159,27 @@ function loadDbBytes() {
 
 function persistDb() {
   const data = db.export();
-  fs.writeFileSync(DB_FILE, Buffer.from(data));
+  const temporaryFile = `${DB_FILE}.${process.pid}.${crypto.randomUUID()}.tmp`;
+  try {
+    fs.writeFileSync(temporaryFile, Buffer.from(data));
+    fs.renameSync(temporaryFile, DB_FILE);
+  } finally {
+    if (fs.existsSync(temporaryFile)) {
+      fs.unlinkSync(temporaryFile);
+    }
+  }
+}
+
+function safeImageUrl(value, fallback) {
+  const candidate = String(value || '').trim();
+  if (!candidate) return fallback;
+
+  try {
+    const url = new URL(candidate);
+    return ['http:', 'https:'].includes(url.protocol) ? url.toString() : fallback;
+  } catch {
+    return fallback;
+  }
 }
 
 function run(sql, params = []) {
@@ -209,8 +310,11 @@ function seedDatabase() {
     );
   `);
 
+  const userColumns = new Set(all('PRAGMA table_info(users)').map((column) => column.name));
   ['cep', 'address'].forEach((column) => {
-    try { run(`ALTER TABLE users ADD COLUMN ${column} TEXT NOT NULL DEFAULT ''`); } catch {}
+    if (!userColumns.has(column)) {
+      run(`ALTER TABLE users ADD COLUMN ${column} TEXT NOT NULL DEFAULT ''`);
+    }
   });
 
   run(`
@@ -537,6 +641,10 @@ function buildExists() {
 }
 
 async function start() {
+  if (!hasConfiguredJwtSecret) {
+    console.warn('JWT_SECRET is not configured. A temporary secret was generated; sessions will end after a restart.');
+  }
+
   ensureDir(DATA_DIR);
   ensureDir(PUBLIC_DIR);
   ensureDir(UPLOAD_DIR);
@@ -552,14 +660,25 @@ async function start() {
   const uploadStorage = multer.diskStorage({
     destination: (_req, _file, callback) => callback(null, UPLOAD_DIR),
     filename: (_req, file, callback) => {
-      const ext = path.extname(file.originalname || '').toLowerCase();
+      const ext = IMAGE_EXTENSIONS.get(file.mimetype) || '.img';
       callback(null, `${Date.now()}-${crypto.randomUUID()}${ext}`);
     }
   });
 
-  const upload = multer({ storage: uploadStorage });
+  const upload = multer({
+    storage: uploadStorage,
+    limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+    fileFilter: (_req, file, callback) => {
+      if (IMAGE_EXTENSIONS.has(file.mimetype)) {
+        return callback(null, true);
+      }
+      return callback(new Error('Only JPEG, PNG, GIF, WebP or AVIF images are allowed'));
+    }
+  });
 
-  app.use(express.json());
+  const authRateLimit = createRateLimiter({ windowMs: 15 * 60 * 1000, maxRequests: 30 });
+
+  app.use(express.json({ limit: '100kb' }));
   app.use(express.urlencoded({ extended: true }));
   app.use('/assets', express.static(PUBLIC_DIR));
   app.use('/uploads', express.static(UPLOAD_DIR));
@@ -574,24 +693,40 @@ async function start() {
     res.json({ user: req.user });
   });
 
-  app.post('/api/auth/register', (req, res) => {
+  app.post('/api/auth/register', authRateLimit, (req, res) => {
     const { name, email, password, city, cep = '', address = '', interests = [] } = req.body || {};
+    const normalizedName = String(name || '').trim();
+    const normalizedEmail = String(email || '').trim().toLowerCase();
+    const normalizedPassword = String(password || '');
+    const normalizedCity = String(city || '').trim();
 
-    if (!name || !email || !password || !city) {
+    if (!normalizedName || !normalizedEmail || !normalizedPassword || !normalizedCity) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    const existingUser = get('SELECT id FROM users WHERE lower(email) = lower(?)', [email]);
+    if (normalizedName.length > 80 || normalizedCity.length > 100 || String(cep).length > 16 || String(address).length > 200) {
+      return res.status(400).json({ error: 'One or more fields exceed the allowed length' });
+    }
+
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+      return res.status(400).json({ error: 'Invalid email address' });
+    }
+
+    if (normalizedPassword.length < 8) {
+      return res.status(400).json({ error: 'Password must contain at least 8 characters' });
+    }
+
+    const existingUser = get('SELECT id FROM users WHERE lower(email) = lower(?)', [normalizedEmail]);
     if (existingUser) {
       return res.status(409).json({ error: 'Email already registered' });
     }
 
     const user = {
       id: uid('user'),
-      name,
-      email,
-      passwordHash: passwordHash(password),
-      city,
+      name: normalizedName,
+      email: normalizedEmail,
+      passwordHash: passwordHash(normalizedPassword),
+      city: normalizedCity,
       cep: String(cep).trim(),
       address: String(address).trim(),
       interests: Array.isArray(interests) ? interests : [interests].filter(Boolean),
@@ -610,7 +745,7 @@ async function start() {
         user.id,
         user.name,
         user.email,
-        passwordHash(password),
+        user.passwordHash,
         user.city,
         user.cep,
         user.address,
@@ -628,15 +763,17 @@ async function start() {
     return res.status(201).json({ token: createToken(user.id), user: { ...user, passwordHash: undefined } });
   });
 
-  app.post('/api/auth/login', (req, res) => {
+  app.post('/api/auth/login', authRateLimit, (req, res) => {
     const { email, password } = req.body || {};
+    const normalizedEmail = String(email || '').trim().toLowerCase();
+    const normalizedPassword = String(password || '');
 
-    if (!email || !password) {
+    if (!normalizedEmail || !normalizedPassword) {
       return res.status(400).json({ error: 'Email and password are required' });
     }
 
-    const user = get('SELECT * FROM users WHERE lower(email) = lower(?) LIMIT 1', [email]);
-    if (!user || user.password_hash !== passwordHash(password)) {
+    const user = get('SELECT * FROM users WHERE lower(email) = lower(?) LIMIT 1', [normalizedEmail]);
+    if (!user || !verifyPassword(normalizedPassword, user.password_hash)) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
 
@@ -662,8 +799,13 @@ async function start() {
 
   app.post('/api/inspirations', authMiddleware, (req, res) => {
     const { title, material, price, description, imageUrl } = req.body || {};
-    if (!title || !material || !price || !description) return res.status(400).json({ error: 'Title, material, price and description are required' });
-    const product = { id: uid('inspiration'), creator_id: req.user.id, title: String(title).trim(), material: String(material).trim(), price: String(price).trim(), city: req.user.city, image_url: imageUrl || 'https://images.unsplash.com/photo-1528698827591-e19ccd7bc23d?auto=format&fit=crop&w=900&q=80', description: String(description).trim(), created_at: new Date().toISOString() };
+    const normalizedTitle = String(title || '').trim();
+    const normalizedMaterial = String(material || '').trim();
+    const normalizedPrice = String(price || '').trim();
+    const normalizedDescription = String(description || '').trim();
+    if (!normalizedTitle || !normalizedMaterial || !normalizedPrice || !normalizedDescription) return res.status(400).json({ error: 'Title, material, price and description are required' });
+    if (normalizedTitle.length > 120 || normalizedMaterial.length > 120 || normalizedPrice.length > 40 || normalizedDescription.length > 2000) return res.status(400).json({ error: 'One or more fields exceed the allowed length' });
+    const product = { id: uid('inspiration'), creator_id: req.user.id, title: normalizedTitle, material: normalizedMaterial, price: normalizedPrice, city: req.user.city, image_url: safeImageUrl(imageUrl, 'https://images.unsplash.com/photo-1528698827591-e19ccd7bc23d?auto=format&fit=crop&w=900&q=80'), description: normalizedDescription, created_at: new Date().toISOString() };
     run('INSERT INTO inspiration_products (id, creator_id, title, material, price, city, image_url, description, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', Object.values(product));
     persistDb();
     res.status(201).json({ product });
@@ -672,6 +814,7 @@ async function start() {
   app.post('/api/ai/ideas', authMiddleware, (req, res) => {
     const prompt = String(req.body?.prompt || '').trim();
     if (!prompt) return res.status(400).json({ error: 'Describe what you have available' });
+    if (prompt.length > 1000) return res.status(400).json({ error: 'Prompt must contain at most 1000 characters' });
     const text = prompt.toLowerCase();
     let idea;
     if (text.includes('garrafa') || text.includes('vidro')) {
@@ -757,19 +900,26 @@ async function start() {
 
   app.post('/api/posts', authMiddleware, upload.single('image'), (req, res) => {
     const { title, description, category, condition, goal, location, chipLabel, chipIcon } = req.body || {};
+    const normalizedTitle = String(title || '').trim();
+    const normalizedDescription = String(description || '').trim();
+    const normalizedCategory = String(category || '').trim();
 
-    if (!title || !description || !category) {
+    if (!normalizedTitle || !normalizedDescription || !normalizedCategory) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    const imageUrl = req.file ? `/uploads/${req.file.filename}` : req.body.imageUrl || 'https://images.unsplash.com/photo-1517336714731-489689fd1ca8?auto=format&fit=crop&w=1200&q=80';
+    if (normalizedTitle.length > 140 || normalizedDescription.length > 3000 || normalizedCategory.length > 60) {
+      return res.status(400).json({ error: 'One or more fields exceed the allowed length' });
+    }
+
+    const imageUrl = req.file ? `/uploads/${req.file.filename}` : safeImageUrl(req.body.imageUrl, 'https://images.unsplash.com/photo-1517336714731-489689fd1ca8?auto=format&fit=crop&w=1200&q=80');
     const createdAt = new Date().toISOString();
     const post = {
       id: uid('post'),
       author_id: req.user.id,
-      title,
-      description,
-      category,
+      title: normalizedTitle,
+      description: normalizedDescription,
+      category: normalizedCategory,
       condition: condition || 'Bom estado',
       goal: goal || 'Doação',
       image_url: imageUrl,
@@ -837,9 +987,11 @@ async function start() {
 
   app.post('/api/messages/threads/:id/messages', authMiddleware, (req, res) => {
     const { text } = req.body || {};
-    if (!text || !String(text).trim()) {
+    const normalizedText = String(text || '').trim();
+    if (!normalizedText) {
       return res.status(400).json({ error: 'Message text is required' });
     }
+    if (normalizedText.length > 1000) return res.status(400).json({ error: 'Message must contain at most 1000 characters' });
 
     const thread = get('SELECT * FROM threads WHERE id = ?', [req.params.id]);
     if (!thread) {
@@ -854,7 +1006,7 @@ async function start() {
       id: uid('msg'),
       thread_id: thread.id,
       sender_id: req.user.id,
-      text: String(text).trim(),
+      text: normalizedText,
       sent_at: sentAt,
       status: 'sent'
     };
@@ -896,13 +1048,13 @@ async function start() {
     const cityName = city.split(',')[0].trim();
     const registered = all('SELECT * FROM collection_points WHERE lower(location) LIKE lower(?) ORDER BY name ASC', [`%${cityName}%`]).map((row) => ({ id: row.id, name: row.name, categories: JSON.parse(row.categories_json || '[]'), hours: row.hours, location: row.location, status: row.status, source: 'Cadastrado no Reusa+' }));
     try {
-      const geocodeResponse = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=br&q=${encodeURIComponent(city)}`, { headers: { 'User-Agent': 'ReusaPlus/1.0 contact@reusa.local' } });
+      const geocodeResponse = await fetchWithTimeout(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=br&q=${encodeURIComponent(city)}`, { headers: { 'User-Agent': 'ReusaPlus/1.0 contact@reusa.local' } });
       const places = await geocodeResponse.json();
       if (!places.length) return res.json({ city, source: 'Cadastrado no Reusa+', collectionPoints: registered });
       const latitude = Number(places[0].lat);
       const longitude = Number(places[0].lon);
       const query = `[out:json][timeout:10];(nwr["amenity"~"recycling|waste_transfer_station",i](around:15000,${latitude},${longitude});nwr["shop"="second_hand"](around:15000,${latitude},${longitude}););out center tags;`;
-      const overpassResponse = await fetch('https://overpass-api.de/api/interpreter', { method: 'POST', headers: { 'Content-Type': 'text/plain', 'User-Agent': 'ReusaPlus/1.0' }, body: query });
+      const overpassResponse = await fetchWithTimeout('https://overpass-api.de/api/interpreter', { method: 'POST', headers: { 'Content-Type': 'text/plain', 'User-Agent': 'ReusaPlus/1.0' }, body: query }, 12000);
       const overpass = await overpassResponse.json();
       const publicPoints = (overpass.elements || []).map((element) => {
         const tags = element.tags || {};
@@ -932,22 +1084,46 @@ async function start() {
 
   app.put('/api/profile', authMiddleware, (req, res) => {
     const { name, city, cep, address, interests } = req.body || {};
-    const nextName = name || req.user.name;
-    const nextCity = city || req.user.city;
-    const nextInterests = Array.isArray(interests) ? interests : req.user.interests;
+    const nextName = typeof name === 'string' ? name.trim() || req.user.name : req.user.name;
+    const nextCity = typeof city === 'string' ? city.trim() || req.user.city : req.user.city;
+    const nextCep = typeof cep === 'string' ? cep.trim() : req.user.cep || '';
+    const nextAddress = typeof address === 'string' ? address.trim() : req.user.address || '';
+    const nextInterests = Array.isArray(interests) ? interests.map((item) => String(item).trim()).filter(Boolean) : req.user.interests;
 
-    run('UPDATE users SET name = ?, city = ?, cep = ?, address = ?, interests_json = ? WHERE id = ?', [nextName, nextCity, cep ?? req.user.cep ?? '', address ?? req.user.address ?? '', JSON.stringify(nextInterests), req.user.id]);
+    if (nextName.length > 80 || nextCity.length > 100 || nextCep.length > 16 || nextAddress.length > 200 || nextInterests.length > 20 || nextInterests.some((item) => item.length > 40)) {
+      return res.status(400).json({ error: 'One or more fields exceed the allowed length' });
+    }
+
+    run('UPDATE users SET name = ?, city = ?, cep = ?, address = ?, interests_json = ? WHERE id = ?', [nextName, nextCity, nextCep, nextAddress, JSON.stringify(nextInterests), req.user.id]);
     persistDb();
 
     const updated = get('SELECT * FROM users WHERE id = ?', [req.user.id]);
     return res.json({ user: userFromRow(updated) });
   });
 
+  app.use((error, req, res, next) => {
+    if (error?.type === 'entity.parse.failed') {
+      return res.status(400).json({ error: 'Invalid JSON payload' });
+    }
+    if (error instanceof multer.MulterError) {
+      const message = error.code === 'LIMIT_FILE_SIZE' ? 'Image must be at most 5 MB' : 'Invalid upload';
+      return res.status(400).json({ error: message });
+    }
+    if (error?.message === 'Only JPEG, PNG, GIF, WebP or AVIF images are allowed') {
+      return res.status(400).json({ error: error.message });
+    }
+    if (req.path.startsWith('/api/')) {
+      console.error(error);
+      return res.status(500).json({ error: 'Internal server error' });
+    }
+    return next(error);
+  });
+
   app.get('/', (_req, res) => res.redirect('/splash'));
 
   if (buildExists()) {
     app.use(express.static(DIST_DIR));
-    app.get(/^\/(?!api).*/, (_req, res) => res.sendFile(path.join(DIST_DIR, 'index.html')));
+    app.get(/^\/(?!api|uploads|assets).*/, (_req, res) => res.sendFile(path.join(DIST_DIR, 'index.html')));
   } else {
     Object.keys(ROUTE_FILES).forEach((routePath) => {
       app.get(routePath, (_req, res) => {

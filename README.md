@@ -9,7 +9,7 @@ Aplicacao web para reutilizacao e doacao de itens. O backend Express serve a API
    - build: `npm run build`
    - inicio: `npm start`
    - healthcheck: `/api/health`
-3. Em **Variables**, crie `JWT_SECRET` com um valor longo e aleatorio. Nao envie esse valor para o GitHub.
+3. Em **Variables**, crie `JWT_SECRET` com um valor longo e aleatorio. Ela e obrigatoria em producao: sem ela, o app usa uma chave temporaria e encerra todas as sessoes ao reiniciar. Nao envie esse valor para o GitHub.
 4. Em **Volumes**, adicione um Volume ao servico e use o ponto de montagem `/data`.
    O app detecta o caminho do Volume e guarda nele o banco SQLite e os uploads, preservando-os entre deploys.
 5. Em **Networking**, gere um dominio publico. O app deve responder em `https://seu-dominio/api/health` com `{ "ok": true }`.

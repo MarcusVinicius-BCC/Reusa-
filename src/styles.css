@@ -47,6 +47,9 @@ img { display: block; max-width: 100%; }
 .splash-stage h1, .hero-card h1, .auth-card h2, .composer-card h2, .profile-header h1, .topbar h1 { font-family: 'Hanken Grotesk', sans-serif; letter-spacing: -0.02em; }
 .splash-stage h1 { margin: 0; font-size: 44px; line-height: 1; color: var(--text); z-index: 1; }
 .splash-stage p { margin: 0; color: var(--text-variant); z-index: 1; }
+.splash-actions { width: min(100%, 360px); display: grid; gap: 14px; margin-top: 12px; z-index: 1; text-align: center; }
+.splash-actions p { font-size: 14px; }
+.splash-actions small { color: var(--text-variant); font-size: 11px; line-height: 1.45; }
 
 .primary-btn, .ghost-btn, .text-btn, .pill, .chip, .choice, .tab, .nav-item, .nav-add { border: 0; cursor: pointer; }
 .primary-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; min-height: 48px; padding: 0 20px; border-radius: 16px; background: var(--primary); color: var(--on-primary); box-shadow: 0 10px 20px rgba(0, 109, 61, 0.18); text-decoration: none; }

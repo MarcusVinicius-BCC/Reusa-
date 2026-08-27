@@ -32,7 +32,7 @@ export function AppRoutes() {
   }, [initialize]);
 
   useEffect(() => {
-    if (!session && !['/splash', '/onboarding', '/login', '/criar-conta'].includes(location.pathname)) {
+    if (!session && !['/splash', '/login', '/criar-conta'].includes(location.pathname)) {
       navigate('/login', { replace: true });
     }
   }, [session, location.pathname, navigate]);
@@ -46,9 +46,9 @@ function ScreenRouter({ location, navigate }) {
     case '/':
       return <Navigate to="/splash" replace />;
     case '/splash':
-      return <SplashScreen onContinue={() => navigate('/onboarding')} />;
+      return <SplashScreen onCreateAccount={() => navigate('/criar-conta')} onLogin={() => navigate('/login')} />;
     case '/onboarding':
-      return <OnboardingScreen onSkip={() => navigate('/login')} onStart={() => navigate('/login')} />;
+      return <Navigate to="/login" replace />;
     case '/login':
       return <LoginScreen onGoToRegister={() => navigate('/criar-conta')} onSuccess={() => navigate('/feed')} />;
     case '/criar-conta':
@@ -119,33 +119,21 @@ function BottomNav({ nav, active }) {
   );
 }
 
-function SplashScreen({ onContinue }) {
+function SplashScreen({ onCreateAccount, onLogin }) {
   return (
-    <div className="center-stage splash-stage" onClick={onContinue} role="button" tabIndex={0}>
+    <main className="center-stage splash-stage">
       <div className="splash-orb" />
       <div className="logo-badge">
         <img src="https://lh3.googleusercontent.com/aida-public/AB6AXuBOFtyytVWbcN0yp6q-fl1hVuGZc2T-IkiFJZf1JbR8gICaEsLcjvzh0cLTnlkKeFXV0eKB8KGySBJZVI32kemRvuIBroTd7scTzBKsKAYOVCfa27zNu5caOKkTqvovxOyQ64Hoh9gB58Eu8W4bd4FZS_59Jns0yBzldcGWwM1XKO7g8GkM1st1X_H57AEQuitrAETSMgGC_lQ-c8kQ1BhbADOsMOBfKWBjs-xlaG5uL2-op8eOGdUN" alt="REUSA+" />
       </div>
       <h1>REUSA+</h1>
       <p>Desapegue. Reutilize. Reconecte.</p>
-      <button className="primary-btn">Entrar</button>
-    </div>
-  );
-}
-
-function OnboardingScreen({ onSkip, onStart }) {
-  return (
-    <Shell nav={{ home: '/login', explore: '/mapa', post: '/nova-publicacao', map: '/mapa', profile: '/perfil' }} active="/onboarding">
-      <div className="hero-card">
-        <span className="eyebrow">Economia circular</span>
-        <h1>Desapegue e encontre um novo destino para seus itens.</h1>
-        <p>Uma experiência limpa, social e funcional, com a mesma identidade visual do protótipo.</p>
-        <div className="hero-actions">
-          <button className="ghost-btn" onClick={onSkip}>Pular</button>
-          <button className="primary-btn" onClick={onStart}>Começar</button>
-        </div>
+      <div className="splash-actions">
+        <button className="primary-btn full" onClick={onCreateAccount}>Criar nova conta</button>
+        <p>Já tem uma conta? <button className="text-btn" onClick={onLogin}>Entrar</button></p>
+        <small>Ao continuar, você concorda com os termos de uso da REUSA+.</small>
       </div>
-    </Shell>
+    </main>
   );
 }
 
