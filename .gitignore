@@ -1,0 +1,31 @@
+# Dependencias instaladas localmente
+node_modules/
+
+# Arquivos de build gerados pelo Vite
+dist/
+
+# Dados locais gerados durante a execucao
+data/*.sqlite
+data/*.sqlite-shm
+data/*.sqlite-wal
+data/state.json
+uploads/*
+!uploads/.gitkeep
+
+# Variaveis de ambiente e segredos locais
+.env
+.env.*
+!.env.example
+
+# Logs e relatorios temporarios
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+coverage/
+
+# Arquivos do sistema e de editores
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/

@@ -1,0 +1,121 @@
+<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" name="viewport"><link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Plus+Jakarta+Sans:wght@400;500&amp;display=swap" rel="stylesheet"><link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config = { darkMode: "class", theme: { extend: { "colors": { "surface-container-low": "#eff4ff", "tertiary": "#ae2f34", "outline-variant": "#bacbbc", "primary": "#006d3d", "surface": "#f8f9ff", "error": "#ba1a1a", "inverse-on-surface": "#eaf1ff", "on-secondary-fixed": "#002115", "secondary-fixed-dim": "#a8cfbc", "surface-bright": "#f8f9ff", "inverse-primary": "#28e288", "primary-fixed": "#5affa3", "inverse-surface": "#27313f", "surface-tint": "#006d3d", "on-primary-fixed-variant": "#00522d", "on-surface-variant": "#3c4a3f", "surface-container-lowest": "#ffffff", "error-container": "#ffdad6", "on-error-container": "#93000a", "on-tertiary": "#ffffff", "on-primary": "#ffffff", "surface-variant": "#d9e3f6", "on-error": "#ffffff", "surface-container-high": "#dee9fc", "surface-container-highest": "#d9e3f6", "on-secondary-container": "#476c5b", "tertiary-container": "#ffa29f", "on-secondary-fixed-variant": "#294e3f", "on-secondary": "#ffffff", "on-primary-fixed": "#00210f", "primary-container": "#00d67d", "outline": "#6b7b6e", "on-tertiary-fixed-variant": "#8c1520", "secondary-fixed": "#c3ecd7", "on-background": "#121c2a", "primary-fixed-dim": "#28e288", "on-tertiary-fixed": "#410006", "on-surface": "#121c2a", "secondary": "#416656", "on-tertiary-container": "#921a23", "tertiary-fixed": "#ffdad8", "surface-container": "#e6eeff", "on-primary-container": "#00572f", "tertiary-fixed-dim": "#ffb3b0", "secondary-container": "#c3ecd7", "surface-dim": "#d0dbed", "background": "#f8f9ff" }, "borderRadius": { "DEFAULT": "0.25rem", "lg": "0.5rem", "xl": "0.75rem", "full": "9999px" }, "spacing": { "base": "8px", "gutter": "24px", "margin-mobile": "16px", "margin-desktop": "40px", "container-max": "1280px" }, "fontFamily": { "body-lg": ["Plus Jakarta Sans"], "caption": ["Plus Jakarta Sans"], "headline-lg-mobile": ["Hanken Grotesk"], "body-md": ["Plus Jakarta Sans"], "headline-md": ["Hanken Grotesk"], "display": ["Hanken Grotesk"], "headline-lg": ["Hanken Grotesk"], "label-md": ["Hanken Grotesk"] } } } }</script><style>@layer base { body { -webkit-tap-highlight-color: transparent; } .pt-safe { padding-top: env(safe-area-inset-top, 0px); } .pb-safe { padding-bottom: env(safe-area-inset-bottom, 0px); } } </style></head><body class="bg-surface font-body-md text-on-surface"><header class="fixed top-0 w-full z-50 bg-surface/80 backdrop-blur-xl pt-safe shadow-[0_1px_8px_rgba(0,0,0,0.04)]"><div class="h-16 px-4 flex items-center gap-2"><button class="w-12 h-12 flex items-center justify-center text-on-surface" onclick="history.back()"><span class="material-symbols-outlined">arrow_back</span></button><h1 class="font-headline-md text-headline-md text-on-surface truncate">Conversa Direta</h1><div class="ml-auto flex items-center gap-2"><button class="w-10 h-10 flex items-center justify-center text-on-surface-variant"><span class="material-symbols-outlined">more_vert</span></button></div></div></header><main class="relative w-full pt-16 bg-surface min-h-screen"><div class="flex flex-col w-full p-margin-mobile gap-gutter pb-safe">
+<div class="flex flex-col gap-2 pt-4">
+<h2 class="font-headline-lg-mobile text-headline-lg-mobile text-on-surface">Crie sua conta</h2>
+<p class="font-body-md text-body-md text-on-surface-variant">Junte-se à maior comunidade de economia circular.</p>
+</div>
+<form class="flex flex-col gap-6" onsubmit="event.preventDefault();">
+<div class="flex flex-col gap-4">
+<div class="flex flex-col gap-1.5">
+<label class="font-label-md text-label-md text-on-surface" for="name">Nome completo</label>
+<div class="relative w-full h-12 bg-surface-container-lowest rounded-lg overflow-hidden ring-1 ring-outline-variant focus-within:ring-2 focus-within:ring-primary focus-within:shadow-[0_0_12px_rgba(0,109,61,0.1)] transition-all">
+<div class="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-on-surface-variant">
+<span class="material-symbols-outlined text-[20px]">person</span>
+</div>
+<input class="w-full h-full bg-transparent pl-10 pr-3 font-body-md text-body-md text-on-surface placeholder:text-on-surface-variant/50 focus:outline-none" id="name" placeholder="Como devemos chamar você?" required="" type="text">
+</div>
+</div>
+<div class="flex flex-col gap-1.5">
+<label class="font-label-md text-label-md text-on-surface" for="email">E-mail</label>
+<div class="relative w-full h-12 bg-surface-container-lowest rounded-lg overflow-hidden ring-1 ring-outline-variant focus-within:ring-2 focus-within:ring-primary focus-within:shadow-[0_0_12px_rgba(0,109,61,0.1)] transition-all">
+<div class="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-on-surface-variant">
+<span class="material-symbols-outlined text-[20px]">mail</span>
+</div>
+<input class="w-full h-full bg-transparent pl-10 pr-3 font-body-md text-body-md text-on-surface placeholder:text-on-surface-variant/50 focus:outline-none" id="email" placeholder="seu@email.com.br" required="" type="email">
+</div>
+</div>
+<div class="flex flex-col gap-1.5">
+<label class="font-label-md text-label-md text-on-surface" for="password">Senha</label>
+<div class="relative w-full h-12 bg-surface-container-lowest rounded-lg overflow-hidden ring-1 ring-outline-variant focus-within:ring-2 focus-within:ring-primary focus-within:shadow-[0_0_12px_rgba(0,109,61,0.1)] transition-all">
+<div class="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-on-surface-variant">
+<span class="material-symbols-outlined text-[20px]">lock</span>
+</div>
+<input class="w-full h-full bg-transparent pl-10 pr-10 font-body-md text-body-md text-on-surface placeholder:text-on-surface-variant/50 focus:outline-none" id="password" placeholder="Mínimo 8 caracteres" required="" type="password">
+<button class="absolute inset-y-0 right-0 flex items-center pr-3 text-on-surface-variant hover:text-primary transition-colors" onclick="togglePassword()" type="button">
+<span class="material-symbols-outlined text-[20px]" id="visibility-icon">visibility_off</span>
+</button>
+</div>
+<script>
+                    function togglePassword() {
+                        const input = document.getElementById('password');
+                        const icon = document.getElementById('visibility-icon');
+                        if (input.type === 'password') {
+                            input.type = 'text';
+                            icon.textContent = 'visibility';
+                        } else {
+                            input.type = 'password';
+                            icon.textContent = 'visibility_off';
+                        }
+                    }
+                </script>
+</div>
+<div class="flex flex-col gap-1.5">
+<label class="font-label-md text-label-md text-on-surface" for="city">Cidade</label>
+<div class="relative w-full h-12 bg-surface-container-lowest rounded-lg overflow-hidden ring-1 ring-outline-variant focus-within:ring-2 focus-within:ring-primary focus-within:shadow-[0_0_12px_rgba(0,109,61,0.1)] transition-all">
+<div class="absolute inset-y-0 left-0 flex items-center pl-3 pointer-events-none text-on-surface-variant">
+<span class="material-symbols-outlined text-[20px]">location_on</span>
+</div>
+<input class="w-full h-full bg-transparent pl-10 pr-3 font-body-md text-body-md text-on-surface placeholder:text-on-surface-variant/50 focus:outline-none" id="city" placeholder="Ex: São Paulo, SP" required="" type="text">
+</div>
+</div>
+</div>
+<div class="flex flex-col gap-3 bg-surface-container-low p-4 rounded-xl">
+<label class="font-label-md text-label-md text-on-surface">O que você mais se interessa em reutilizar?</label>
+<div class="flex flex-wrap gap-2" id="interest-chips">
+<button class="interest-chip h-8 px-4 rounded-full bg-surface-container-highest text-on-surface-variant font-caption text-caption transition-colors focus:outline-none ring-1 ring-outline-variant" onclick="toggleChip(this)" type="button">Eletrônicos</button>
+<button class="interest-chip h-8 px-4 rounded-full bg-surface-container-highest text-on-surface-variant font-caption text-caption transition-colors focus:outline-none ring-1 ring-outline-variant" onclick="toggleChip(this)" type="button">Roupas</button>
+<button class="interest-chip h-8 px-4 rounded-full bg-surface-container-highest text-on-surface-variant font-caption text-caption transition-colors focus:outline-none ring-1 ring-outline-variant" onclick="toggleChip(this)" type="button">Móveis</button>
+<button class="interest-chip h-8 px-4 rounded-full bg-surface-container-highest text-on-surface-variant font-caption text-caption transition-colors focus:outline-none ring-1 ring-outline-variant" onclick="toggleChip(this)" type="button">Livros</button>
+<button class="interest-chip h-8 px-4 rounded-full bg-surface-container-highest text-on-surface-variant font-caption text-caption transition-colors focus:outline-none ring-1 ring-outline-variant" onclick="toggleChip(this)" type="button">Outros</button>
+</div>
+<script>
+                function toggleChip(btn) {
+                    btn.classList.toggle('bg-primary-container');
+                    btn.classList.toggle('text-on-primary-container');
+                    btn.classList.toggle('ring-transparent');
+                    
+                    btn.classList.toggle('bg-surface-container-highest');
+                    btn.classList.toggle('text-on-surface-variant');
+                    btn.classList.toggle('ring-outline-variant');
+                }
+            </script>
+</div>
+<label class="flex items-start gap-3 cursor-pointer group">
+<div class="relative flex items-center justify-center w-5 h-5 mt-0.5">
+<input class="peer appearance-none w-5 h-5 rounded-[4px] ring-1 ring-outline-variant checked:ring-primary checked:bg-primary transition-all focus:outline-none focus-visible:ring-2 focus-visible:ring-offset-2 focus-visible:ring-offset-surface cursor-pointer" required="" type="checkbox">
+<span class="material-symbols-outlined text-[16px] text-on-primary absolute opacity-0 peer-checked:opacity-100 pointer-events-none transition-opacity" style="font-variation-settings: 'FILL' 1;">check</span>
+</div>
+<span class="font-body-md text-body-md text-on-surface-variant group-hover:text-on-surface transition-colors flex-1">
+                Li e concordo com os <a class="text-primary font-bold hover:underline" href="#">Termos de Uso</a> e <a class="text-primary font-bold hover:underline" href="#">Política de Privacidade</a>.
+            </span>
+</label>
+<button class="w-full h-12 bg-primary text-on-primary font-label-md text-label-md rounded-lg flex items-center justify-center gap-2 hover:bg-primary/90 active:scale-[0.98] transition-all shadow-md mt-2" type="submit" onclick="window.location.href='{{DATA:SCREEN:SCREEN_15}}'">
+            Criar Conta
+            <span class="material-symbols-outlined text-[20px]">arrow_forward</span>
+</button>
+</form>
+<div class="flex flex-col gap-6 mt-4">
+<div class="flex items-center gap-4 w-full">
+<div class="h-px flex-1 bg-outline-variant/30"></div>
+<span class="font-caption text-caption text-on-surface-variant px-2">Ou cadastre-se com</span>
+<div class="h-px flex-1 bg-outline-variant/30"></div>
+</div>
+<div class="flex gap-4">
+<button class="flex-1 h-12 bg-surface-container-lowest rounded-lg flex items-center justify-center gap-2 ring-1 ring-outline-variant hover:bg-surface-container-low transition-colors shadow-sm">
+<svg class="w-5 h-5" viewBox="0 0 24 24"><path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"></path><path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"></path><path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"></path><path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"></path><path d="M1 1h22v22H1z" fill="none"></path></svg>
+<span class="font-label-md text-label-md text-on-surface">Google</span>
+</button>
+<button class="flex-1 h-12 bg-surface-container-lowest rounded-lg flex items-center justify-center gap-2 ring-1 ring-outline-variant hover:bg-surface-container-low transition-colors shadow-sm">
+<svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24"><path d="M13.397 20.997v-8.196h2.765l.411-3.209h-3.176V7.548c0-.926.258-1.56 1.587-1.56h1.684V3.127A22.336 22.336 0 0 0 14.201 3c-2.444 0-4.122 1.492-4.122 4.231v2.355H7.332v3.209h2.753v8.202h3.312z"></path></svg>
+<span class="font-label-md text-label-md text-on-surface">Facebook</span>
+</button>
+</div>
+</div>
+<div class="flex justify-center mt-6 pb-8">
+<p class="font-body-md text-body-md text-on-surface-variant">
+            Já tem uma conta? <a class="text-primary font-bold hover:underline" href="{{DATA:SCREEN:SCREEN_4}}">Entre</a>
+</p>
+</div>
+</div></main>
+
+</body></html>

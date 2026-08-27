@@ -1,0 +1,194 @@
+<!DOCTYPE html><html lang="pt-BR" style="scroll-behavior: smooth;"><head><meta charset="utf-8"><meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" name="viewport"><link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Plus+Jakarta+Sans:wght@400;500&amp;display=swap" rel="stylesheet"><link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config = { darkMode: "class", theme: { extend: { "colors": { "surface-container-low": "#eff4ff", "tertiary": "#ae2f34", "outline-variant": "#bacbbc", "primary": "#006d3d", "surface": "#f8f9ff", "error": "#ba1a1a", "inverse-on-surface": "#eaf1ff", "on-secondary-fixed": "#002115", "secondary-fixed-dim": "#a8cfbc", "surface-bright": "#f8f9ff", "inverse-primary": "#28e288", "primary-fixed": "#5affa3", "inverse-surface": "#27313f", "surface-tint": "#006d3d", "on-primary-fixed-variant": "#00522d", "on-surface-variant": "#3c4a3f", "surface-container-lowest": "#ffffff", "error-container": "#ffdad6", "on-error-container": "#93000a", "on-tertiary": "#ffffff", "on-primary": "#ffffff", "surface-variant": "#d9e3f6", "on-error": "#ffffff", "surface-container-high": "#dee9fc", "surface-container-highest": "#d9e3f6", "on-secondary-container": "#476c5b", "tertiary-container": "#ffa29f", "on-secondary-fixed-variant": "#294e3f", "on-secondary": "#ffffff", "on-primary-fixed": "#00210f", "primary-container": "#00d67d", "outline": "#6b7b6e", "on-tertiary-fixed-variant": "#8c1520", "secondary-fixed": "#c3ecd7", "on-background": "#121c2a", "primary-fixed-dim": "#28e288", "on-tertiary-fixed": "#410006", "on-surface": "#121c2a", "secondary": "#416656", "on-tertiary-container": "#921a23", "tertiary-fixed": "#ffdad8", "surface-container": "#e6eeff", "on-primary-container": "#00572f", "tertiary-fixed-dim": "#ffb3b0", "secondary-container": "#c3ecd7", "surface-dim": "#d0dbed", "background": "#f8f9ff" }, "borderRadius": { "DEFAULT": "0.25rem", "lg": "0.5rem", "xl": "0.75rem", "full": "9999px" }, "spacing": { "base": "8px", "gutter": "24px", "margin-mobile": "16px", "margin-desktop": "40px", "container-max": "1280px" }, "fontFamily": { "body-lg": ["Plus Jakarta Sans"], "caption": ["Plus Jakarta Sans"], "headline-lg-mobile": ["Hanken Grotesk"], "body-md": ["Plus Jakarta Sans"], "headline-md": ["Hanken Grotesk"], "display": ["Hanken Grotesk"], "headline-lg": ["Hanken Grotesk"], "label-md": ["Hanken Grotesk"] } } } }</script><style>@layer base { body { -webkit-tap-highlight-color: transparent; } .pt-safe { padding-top: env(safe-area-inset-top, 0px); } .pb-safe { padding-bottom: env(safe-area-inset-bottom, 0px); } } </style></head><body class="bg-surface font-body-md text-on-surface"><header class="fixed top-0 w-full z-50 bg-surface/80 backdrop-blur-xl pt-safe shadow-[0_1px_8px_rgba(0,0,0,0.04)]"><div class="h-16 px-4 flex items-center gap-2"><button class="w-12 h-12 flex items-center justify-center text-on-surface" onclick="window.location.href='{{DATA:SCREEN:SCREEN_11}}'"><span class="material-symbols-outlined">arrow_back</span></button><h1 class="font-headline-md text-headline-md text-on-surface truncate">Conversa Direta</h1><div class="ml-auto flex items-center gap-2"><button class="w-10 h-10 flex items-center justify-center text-on-surface-variant" onclick="window.location.href='{{DATA:SCREEN:SCREEN_11}}'"><span class="material-symbols-outlined">more_vert</span></button></div></div></header><main class="relative w-full pt-16 bg-surface min-h-screen"><div class="flex flex-col w-full pb-safe max-w-container-max mx-auto md:px-margin-desktop md:pt-margin-desktop">
+<!-- Desktop Header -->
+<div class="hidden md:block mb-12 px-margin-mobile md:px-0">
+<h1 class="font-display text-display text-on-surface tracking-tight">Configurações</h1>
+<p class="font-body-lg text-body-lg text-on-surface-variant mt-2 max-w-2xl">Gerencie suas preferências de conta, notificações e privacidade.</p>
+</div>
+<div class="grid grid-cols-1 lg:grid-cols-12 gap-8 px-margin-mobile md:px-0">
+<!-- Sidebar Navigation (Desktop Only) -->
+<div class="hidden lg:block lg:col-span-3">
+<nav class="sticky top-24 flex flex-col gap-2">
+<a class="px-4 py-3 rounded-xl bg-surface-container-high text-on-surface font-label-md flex items-center gap-3 transition-colors hover:bg-surface-variant" href="#account">
+<span class="material-symbols-outlined text-primary">person</span> Conta
+                </a>
+<a class="px-4 py-3 rounded-xl text-on-surface-variant font-body-md flex items-center gap-3 transition-colors hover:bg-surface-container hover:text-on-surface" href="#notifications">
+<span class="material-symbols-outlined">notifications</span> Notificações
+                </a>
+<a class="px-4 py-3 rounded-xl text-on-surface-variant font-body-md flex items-center gap-3 transition-colors hover:bg-surface-container hover:text-on-surface" href="#privacy">
+<span class="material-symbols-outlined">shield</span> Privacidade
+                </a>
+<a class="px-4 py-3 rounded-xl text-on-surface-variant font-body-md flex items-center gap-3 transition-colors hover:bg-surface-container hover:text-on-surface" href="#preferences">
+<span class="material-symbols-outlined">tune</span> Preferências
+                </a>
+<a class="px-4 py-3 rounded-xl text-on-surface-variant font-body-md flex items-center gap-3 transition-colors hover:bg-surface-container hover:text-on-surface" href="#support">
+<span class="material-symbols-outlined">help</span> Suporte
+                </a>
+</nav>
+</div>
+<!-- Main Content Area -->
+<div class="lg:col-span-9 flex flex-col gap-12 lg:pr-12 xl:pr-24">
+<!-- Account Section -->
+<section class="scroll-mt-24" id="account">
+<div class="flex items-center gap-3 mb-6">
+<div class="w-10 h-10 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shrink-0">
+<span class="material-symbols-outlined">person</span>
+</div>
+<h2 class="font-headline-md text-headline-md text-on-surface">Conta</h2>
+</div>
+<div class="bg-surface-container-lowest rounded-xl shadow-sm p-2 flex flex-col relative overflow-hidden group">
+<div class="absolute -right-16 -top-16 w-32 h-32 bg-primary-container/10 rounded-full blur-2xl transition-transform group-hover:scale-150"></div>
+<button class="flex items-center justify-between p-4 hover:bg-surface-container-low rounded-lg transition-colors text-left relative z-10 w-full">
+<div class="flex items-center gap-4">
+<span class="material-symbols-outlined text-outline">edit</span>
+<div>
+<h3 class="font-label-md text-label-md text-on-surface">Editar Perfil</h3>
+<p class="font-caption text-caption text-on-surface-variant">Nome, foto e biografia</p>
+</div>
+</div>
+<span class="material-symbols-outlined text-outline">chevron_right</span>
+</button>
+<div class="h-[1px] w-[calc(100%-32px)] mx-auto bg-outline-variant/30"></div>
+<button class="flex items-center justify-between p-4 hover:bg-surface-container-low rounded-lg transition-colors text-left relative z-10 w-full">
+<div class="flex items-center gap-4">
+<span class="material-symbols-outlined text-outline">lock</span>
+<div>
+<h3 class="font-label-md text-label-md text-on-surface">Alterar Senha</h3>
+<p class="font-caption text-caption text-on-surface-variant">Atualize suas credenciais</p>
+</div>
+</div>
+<span class="material-symbols-outlined text-outline">chevron_right</span>
+</button>
+<div class="h-[1px] w-[calc(100%-32px)] mx-auto bg-outline-variant/30"></div>
+<button class="flex items-center justify-between p-4 hover:bg-surface-container-low rounded-lg transition-colors text-left relative z-10 w-full">
+<div class="flex items-center gap-4">
+<span class="material-symbols-outlined text-outline">location_on</span>
+<div>
+<h3 class="font-label-md text-label-md text-on-surface">Localização Padrão</h3>
+<p class="font-caption text-caption text-on-surface-variant">Para sugestões de itens próximos</p>
+</div>
+</div>
+<span class="material-symbols-outlined text-outline">chevron_right</span>
+</button>
+</div>
+</section>
+<!-- Notifications Section -->
+<section class="scroll-mt-24" id="notifications">
+<div class="flex items-center gap-3 mb-6">
+<div class="w-10 h-10 rounded-full bg-secondary-container text-on-secondary-container flex items-center justify-center shrink-0">
+<span class="material-symbols-outlined">notifications</span>
+</div>
+<h2 class="font-headline-md text-headline-md text-on-surface">Notificações</h2>
+</div>
+<div class="bg-surface-container-lowest rounded-xl shadow-sm p-2 flex flex-col">
+<label class="flex items-center justify-between p-4 hover:bg-surface-container-low rounded-lg transition-colors cursor-pointer w-full">
+<div class="flex items-center gap-4">
+<span class="material-symbols-outlined text-outline">chat</span>
+<div>
+<h3 class="font-label-md text-label-md text-on-surface">Novas Mensagens</h3>
+<p class="font-caption text-caption text-on-surface-variant">Quando alguém enviar mensagem sobre um item</p>
+</div>
+</div>
+<div class="relative inline-block w-12 h-6 align-middle select-none transition duration-200 ease-in">
+<input checked="" class="toggle-checkbox absolute block w-6 h-6 rounded-full bg-surface-container-lowest border-2 border-outline-variant appearance-none cursor-pointer checked:right-0 checked:border-primary-container checked:bg-primary-container transition-all duration-300" name="toggle" type="checkbox">
+<div class="toggle-label block overflow-hidden h-6 rounded-full bg-surface-container-high cursor-pointer transition-colors duration-300 peer-checked:bg-primary-container/20"></div>
+</div>
+</label>
+<div class="h-[1px] w-[calc(100%-32px)] mx-auto bg-outline-variant/30"></div>
+<label class="flex items-center justify-between p-4 hover:bg-surface-container-low rounded-lg transition-colors cursor-pointer w-full">
+<div class="flex items-center gap-4">
+<span class="material-symbols-outlined text-outline">favorite</span>
+<div>
+<h3 class="font-label-md text-label-md text-on-surface">Interesse em Meus Itens</h3>
+<p class="font-caption text-caption text-on-surface-variant">Quando alguém favoritar seus anúncios</p>
+</div>
+</div>
+<div class="relative inline-block w-12 h-6 align-middle select-none transition duration-200 ease-in">
+<input checked="" class="toggle-checkbox absolute block w-6 h-6 rounded-full bg-surface-container-lowest border-2 border-outline-variant appearance-none cursor-pointer checked:right-0 checked:border-primary-container checked:bg-primary-container transition-all duration-300" name="toggle" type="checkbox">
+<div class="toggle-label block overflow-hidden h-6 rounded-full bg-surface-container-high cursor-pointer transition-colors duration-300 peer-checked:bg-primary-container/20"></div>
+</div>
+</label>
+<div class="h-[1px] w-[calc(100%-32px)] mx-auto bg-outline-variant/30"></div>
+<label class="flex items-center justify-between p-4 hover:bg-surface-container-low rounded-lg transition-colors cursor-pointer w-full">
+<div class="flex items-center gap-4">
+<span class="material-symbols-outlined text-outline">my_location</span>
+<div>
+<h3 class="font-label-md text-label-md text-on-surface">Novos Itens Perto de Mim</h3>
+
+</div>
+</div>
+<div class="relative inline-block w-12 h-6 align-middle select-none transition duration-200 ease-in">
+<input class="toggle-checkbox absolute block w-6 h-6 rounded-full bg-surface-container-lowest border-2 border-outline-variant appearance-none cursor-pointer checked:right-0 checked:border-primary-container checked:bg-primary-container transition-all duration-300" name="toggle" type="checkbox">
+<div class="toggle-label block overflow-hidden h-6 rounded-full bg-surface-container-high cursor-pointer transition-colors duration-300 peer-checked:bg-primary-container/20"></div>
+</div>
+</label>
+<div class="h-[1px] w-[calc(100%-32px)] mx-auto bg-outline-variant/30"></div>
+<label class="flex items-center justify-between p-4 hover:bg-surface-container-low rounded-lg transition-colors cursor-pointer w-full">
+<div class="flex items-center gap-4">
+<span class="material-symbols-outlined text-outline">eco</span>
+<div>
+<h3 class="font-label-md text-label-md text-on-surface">Dicas de Sustentabilidade</h3>
+<p class="font-caption text-caption text-on-surface-variant">Notícias e dicas do REUSA+</p>
+</div>
+</div>
+<div class="relative inline-block w-12 h-6 align-middle select-none transition duration-200 ease-in">
+<input checked="" class="toggle-checkbox absolute block w-6 h-6 rounded-full bg-surface-container-lowest border-2 border-outline-variant appearance-none cursor-pointer checked:right-0 checked:border-primary-container checked:bg-primary-container transition-all duration-300" name="toggle" type="checkbox">
+<div class="toggle-label block overflow-hidden h-6 rounded-full bg-surface-container-high cursor-pointer transition-colors duration-300 peer-checked:bg-primary-container/20"></div>
+</div>
+</label>
+</div>
+</section>
+<!-- Danger Zone -->
+<section class="scroll-mt-24 mt-12 mb-24" id="danger">
+<div class="bg-error-container/20 rounded-xl p-6 flex flex-col gap-4 items-start relative overflow-hidden group">
+<div class="absolute -right-8 -bottom-8 opacity-5 transition-transform group-hover:scale-110">
+<span class="material-symbols-outlined text-[120px] text-error">warning</span>
+</div>
+<h2 class="font-headline-md text-headline-md text-on-error-container relative z-10">Zona de Perigo</h2>
+<p class="font-body-md text-body-md text-on-surface-variant mb-2 max-w-md relative z-10">Ações destrutivas relativas à sua conta. Proceda com cautela.</p>
+<div class="w-full flex flex-col sm:flex-row gap-4 relative z-10">
+<button class="px-6 py-3 rounded-lg border border-outline font-label-md text-label-md text-on-surface hover:bg-surface-container-high transition-colors text-center w-full sm:w-auto" onclick="window.location.href='{{DATA:SCREEN:SCREEN_4}}'">
+                            Sair
+                        </button>
+<button class="px-6 py-3 rounded-lg bg-error text-on-error font-label-md text-label-md hover:bg-error/90 transition-colors flex items-center justify-center gap-2 w-full sm:w-auto">
+<span class="material-symbols-outlined text-lg">delete_forever</span>
+                            Excluir Conta
+                        </button>
+</div>
+</div>
+</section>
+</div>
+</div>
+</div>
+<style>
+    /* Custom styles for checkbox toggles to ensure smooth transitions */
+    .toggle-checkbox:checked {
+        right: 0;
+        border-color: theme('colors.primary-container');
+    }
+    .toggle-checkbox:checked + .toggle-label {
+        background-color: theme('colors.primary-container');
+    }
+</style>
+<script>
+    // Enhance scrollspy functionality for sidebar if needed, though native smooth scrolling works well with scroll-mt
+    document.documentElement.style.scrollBehavior = 'smooth';
+    
+    // Add custom toggle interaction logic if necessary for accessibility or state management
+    const toggles = document.querySelectorAll('.toggle-checkbox');
+    toggles.forEach(toggle => {
+        toggle.addEventListener('change', (e) => {
+            // Optional: visual feedback or API call placeholder
+            const label = e.target.closest('label');
+            if(e.target.checked) {
+                label.classList.add('bg-primary-container/5');
+            } else {
+                label.classList.remove('bg-primary-container/5');
+            }
+        });
+    });
+</script></main>
+
+
+
+</body></html>

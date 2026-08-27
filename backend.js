@@ -1,0 +1,967 @@
+const express = require('express');
+const fs = require('fs');
+const path = require('path');
+const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
+const multer = require('multer');
+const initSqlJs = require('sql.js');
+
+const app = express();
+const PORT = process.env.PORT || 3000;
+const JWT_SECRET = process.env.JWT_SECRET || 'reusa-plus-dev-secret';
+const ROOT = __dirname;
+const DATA_DIR = path.join(ROOT, 'data');
+const DB_FILE = path.join(DATA_DIR, 'reusa.sqlite');
+const PUBLIC_DIR = path.join(ROOT, 'public');
+const DIST_DIR = path.join(ROOT, 'dist');
+const UPLOAD_DIR = path.join(ROOT, 'uploads');
+
+const SCREEN_ROUTES = {
+  SCREEN_2: '/criar-conta',
+  SCREEN_4: '/login',
+  SCREEN_5: '/configuracoes',
+  SCREEN_6: '/mensagens/ana',
+  SCREEN_7: '/mensagens',
+  SCREEN_9: '/nova-publicacao',
+  SCREEN_11: '/perfil',
+  SCREEN_13: '/mapa',
+  SCREEN_15: '/feed',
+  SCREEN_17: '/splash'
+};
+
+const ROUTE_FILES = {
+  '/splash': 'splash_screen/code.html',
+  '/onboarding': 'onboarding_1_desapegue/code.html',
+  '/login': 'login/code.html',
+  '/criar-conta': 'criar_conta/code.html',
+  '/feed': 'feed_inicial_interligado/code.html',
+  '/feed-base': 'feed_inicial/code.html',
+  '/mensagens': 'mensagens/code.html',
+  '/mensagens/ana': 'conversa_com_ana/code.html',
+  '/nova-publicacao': 'nova_publica_o/code.html',
+  '/perfil': 'meu_perfil_interligado/code.html',
+  '/perfil-base-1': 'meu_perfil_1/code.html',
+  '/perfil-base-2': 'meu_perfil_2/code.html',
+  '/mapa': 'pontos_de_coleta_interligado/code.html',
+  '/mapa-base': 'pontos_de_coleta/code.html',
+  '/configuracoes': 'configura_es/code.html'
+};
+
+let db;
+
+function ensureDir(dirPath) {
+  if (!fs.existsSync(dirPath)) {
+    fs.mkdirSync(dirPath, { recursive: true });
+  }
+}
+
+function sha256(value) {
+  return crypto.createHash('sha256').update(String(value)).digest('hex');
+}
+
+function passwordHash(password) {
+  return sha256(`reusa:${password}`);
+}
+
+function uid(prefix) {
+  return `${prefix}-${crypto.randomUUID()}`;
+}
+
+function loadDbBytes() {
+  if (fs.existsSync(DB_FILE)) {
+    return fs.readFileSync(DB_FILE);
+  }
+  return null;
+}
+
+function persistDb() {
+  const data = db.export();
+  fs.writeFileSync(DB_FILE, Buffer.from(data));
+}
+
+function run(sql, params = []) {
+  db.run(sql, params);
+}
+
+function get(sql, params = []) {
+  const result = db.exec(sql, params);
+  if (!result.length || !result[0].values.length) {
+    return null;
+  }
+
+  return Object.fromEntries(result[0].columns.map((column, index) => [column, result[0].values[0][index]]));
+}
+
+function all(sql, params = []) {
+  const result = db.exec(sql, params);
+  if (!result.length) {
+    return [];
+  }
+
+  const { columns, values } = result[0];
+  return values.map((row) => Object.fromEntries(columns.map((column, index) => [column, row[index]])));
+}
+
+function userFromRow(row) {
+  return {
+    id: row.id,
+    name: row.name,
+    email: row.email,
+    city: row.city,
+    cep: row.cep || '',
+    address: row.address || '',
+    interests: JSON.parse(row.interests_json || '[]'),
+    avatar: row.avatar,
+    rating: row.rating,
+    donations: row.donations,
+    received: row.received,
+    carbonSavedPercent: row.carbon_saved_percent,
+    achievements: JSON.parse(row.achievements_json || '[]')
+  };
+}
+
+function publicPost(row) {
+  const author = get('SELECT id, name, city, avatar FROM users WHERE id = ?', [row.author_id]);
+  return {
+    id: row.id,
+    authorId: row.author_id,
+    author: author ? { id: author.id, name: author.name, city: author.city, avatar: author.avatar } : null,
+    title: row.title,
+    description: row.description,
+    category: row.category,
+    condition: row.condition,
+    goal: row.goal,
+    imageUrl: row.image_url,
+    likes: row.likes,
+    comments: row.comments,
+    location: row.location,
+    createdAt: row.created_at,
+    chipIcon: row.chip_icon,
+    chipLabel: row.chip_label
+  };
+}
+
+function threadSummary(row, currentUserId) {
+  const participants = JSON.parse(row.participants_json || '[]');
+  const otherParticipantId = participants.find((participantId) => participantId !== currentUserId) || participants[0];
+  const otherUser = otherParticipantId ? get('SELECT id, name, avatar FROM users WHERE id = ?', [otherParticipantId]) : null;
+  const lastMessage = get('SELECT text, sent_at FROM messages WHERE thread_id = ? ORDER BY sent_at DESC LIMIT 1', [row.id]);
+  const post = get('SELECT title FROM posts WHERE id = ?', [row.post_id]);
+
+  return {
+    id: row.id,
+    threadId: row.id,
+    unreadCount: row.unread_count,
+    title: otherUser ? otherUser.name : 'Conversa',
+    subtitle: lastMessage ? lastMessage.text : post ? post.title : 'Sem mensagens',
+    time: lastMessage ? new Date(lastMessage.sent_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '',
+    avatar: otherUser ? otherUser.avatar : null,
+    route: '/mensagens/ana'
+  };
+}
+
+function createToken(userId) {
+  return jwt.sign({ sub: userId }, JWT_SECRET, { expiresIn: '7d' });
+}
+
+function authMiddleware(req, res, next) {
+  const header = req.headers.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+
+  if (!token) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    const user = get('SELECT * FROM users WHERE id = ?', [payload.sub]);
+
+    if (!user) {
+      return res.status(401).json({ error: 'Invalid token' });
+    }
+
+    req.user = userFromRow(user);
+    next();
+  } catch (error) {
+    return res.status(401).json({ error: 'Invalid token' });
+  }
+}
+
+function seedDatabase() {
+  run(`
+    CREATE TABLE IF NOT EXISTS users (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      email TEXT NOT NULL UNIQUE,
+      password_hash TEXT NOT NULL,
+      city TEXT NOT NULL,
+      cep TEXT NOT NULL DEFAULT '',
+      address TEXT NOT NULL DEFAULT '',
+      interests_json TEXT NOT NULL DEFAULT '[]',
+      avatar TEXT NOT NULL,
+      rating REAL NOT NULL DEFAULT 4.8,
+      donations INTEGER NOT NULL DEFAULT 0,
+      received INTEGER NOT NULL DEFAULT 0,
+      carbon_saved_percent INTEGER NOT NULL DEFAULT 0,
+      achievements_json TEXT NOT NULL DEFAULT '[]'
+    );
+  `);
+
+  ['cep', 'address'].forEach((column) => {
+    try { run(`ALTER TABLE users ADD COLUMN ${column} TEXT NOT NULL DEFAULT ''`); } catch {}
+  });
+
+  run(`
+    CREATE TABLE IF NOT EXISTS posts (
+      id TEXT PRIMARY KEY,
+      author_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL,
+      category TEXT NOT NULL,
+      condition TEXT NOT NULL,
+      goal TEXT NOT NULL,
+      image_url TEXT NOT NULL,
+      likes INTEGER NOT NULL DEFAULT 0,
+      comments INTEGER NOT NULL DEFAULT 0,
+      location TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      chip_icon TEXT NOT NULL,
+      chip_label TEXT NOT NULL,
+      FOREIGN KEY(author_id) REFERENCES users(id)
+    );
+  `);
+
+  run(`
+    CREATE TABLE IF NOT EXISTS threads (
+      id TEXT PRIMARY KEY,
+      post_id TEXT NOT NULL,
+      participants_json TEXT NOT NULL,
+      unread_count INTEGER NOT NULL DEFAULT 0,
+      last_message_at TEXT NOT NULL,
+      FOREIGN KEY(post_id) REFERENCES posts(id)
+    );
+  `);
+
+  run(`
+    CREATE TABLE IF NOT EXISTS messages (
+      id TEXT PRIMARY KEY,
+      thread_id TEXT NOT NULL,
+      sender_id TEXT NOT NULL,
+      text TEXT NOT NULL,
+      sent_at TEXT NOT NULL,
+      status TEXT NOT NULL,
+      FOREIGN KEY(thread_id) REFERENCES threads(id),
+      FOREIGN KEY(sender_id) REFERENCES users(id)
+    );
+  `);
+
+  run(`
+    CREATE TABLE IF NOT EXISTS collection_points (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      categories_json TEXT NOT NULL,
+      hours TEXT NOT NULL,
+      location TEXT NOT NULL,
+      status TEXT NOT NULL
+    );
+  `);
+
+  run(`
+    CREATE TABLE IF NOT EXISTS inspiration_products (
+      id TEXT PRIMARY KEY,
+      creator_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      material TEXT NOT NULL,
+      price TEXT NOT NULL,
+      city TEXT NOT NULL,
+      image_url TEXT NOT NULL,
+      description TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(creator_id) REFERENCES users(id)
+    );
+  `);
+
+  run(`
+    CREATE TABLE IF NOT EXISTS comments (
+      id TEXT PRIMARY KEY,
+      post_id TEXT NOT NULL,
+      author_id TEXT NOT NULL,
+      text TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(post_id) REFERENCES posts(id),
+      FOREIGN KEY(author_id) REFERENCES users(id)
+    );
+  `);
+
+  run(`
+    CREATE TABLE IF NOT EXISTS post_likes (
+      post_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (post_id, user_id),
+      FOREIGN KEY(post_id) REFERENCES posts(id),
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    );
+  `);
+
+  run(`
+    CREATE TABLE IF NOT EXISTS notifications (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      type TEXT NOT NULL,
+      title TEXT NOT NULL,
+      text TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      read_at TEXT,
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    );
+  `);
+
+  run(`UPDATE users SET rating = 0 WHERE donations = 0 AND received = 0 AND carbon_saved_percent = 0 AND achievements_json = '["Novo membro"]'`);
+
+  const userCount = get('SELECT COUNT(*) AS count FROM users')?.count || 0;
+  if (userCount > 0) {
+    return;
+  }
+
+  const seedUsers = [
+    {
+      id: 'user-mariana',
+      name: 'Mariana Silva',
+      email: 'mariana@reusa.com',
+      password: '12345678',
+      city: 'Santarém, PA',
+      interests: ['Eletrônicos', 'Livros', 'Móveis'],
+      avatar: 'https://lh3.googleusercontent.com/aida-public/AB6AXuDfKn67wUHUzena6GPilhlMnfDTrX-AWCwJhpH14zxiCoejXVjCmxTucAueuPpn8n-U7rlurleOutdAv9CDYPpbq_d_piVERXOSL9LlJEldAYneOM-xWur8isWTqBuxA_ft7dzi7Timk6eUEJCDUm4nfvwZJ8jrPK8xrShXRX2SD8w4XW2jVbrB8or5gfnOPiF82d6nji601xBCm_Ngt9MkRuR_c4rTOstyZqS4B3TfM7ejEF6ZgsGV',
+      rating: 0,
+      donations: 12,
+      received: 5,
+      carbonSavedPercent: 65,
+      achievements: ['Doador Ativo', 'Parceiro Ambiental', 'Pioneiro']
+    },
+    {
+      id: 'user-ana',
+      name: 'Ana Costa',
+      email: 'ana@reusa.com',
+      password: '12345678',
+      city: 'Santarém - PA',
+      interests: ['Eletrônicos'],
+      avatar: 'https://lh3.googleusercontent.com/aida-public/AB6AXuAsueseVHwikfjZUPneZMx0rqtlGEAvV11CkF3ZlPKviIATzLTOhR-p7j1TYIeuMpJlGbMLawmQBHL60XAkrmqGp5wt-6D68qh_PsiHSJ2uhVyXDqdisWv0hZfQa58Vsnhew_Uvhh1Zqhvu6ZkmmlXBd9A2k_o_9WllEYGBTuKxQXdlrXCtW-yj3DPzIeS3OFZUVpbfTsEnzDWcO-IU5Ej2wAfYjCRbwv5EdJ3FDoH7F0kTWGkvJnB'
+    },
+    {
+      id: 'user-carlos',
+      name: 'Carlos Eduardo',
+      email: 'carlos@reusa.com',
+      password: '12345678',
+      city: 'Belém - PA',
+      interests: ['Móveis'],
+      avatar: 'https://lh3.googleusercontent.com/aida-public/AB6AXuAiQNpgXHXcxsqlUle1BD51S0EefNYNX04RVTyt0saBA8DRgBGuv_57hJHCLHG52ZGvF-H9WTCzDe68Ufjm4uAlEgryZWVFb2PNVrHS2-yMUF4POWIFsawtqpMXUqATzO51bEPkYjCRa_1TBJkX7LNkrIOIg7X1oZev-uKhXDeR178SmHGTAAwx8QKEywHcZAzXGkcdtSBu_YhT1ac28kZ3xyb0yrHpO1XzsgCYrIm6Xuq7ANzxu9aE'
+    },
+    {
+      id: 'user-maria',
+      name: 'Maria Silva',
+      email: 'maria@reusa.com',
+      password: '12345678',
+      city: 'Santarém, PA',
+      interests: ['Pilhas', 'Cooperativas'],
+      avatar: 'https://lh3.googleusercontent.com/aida-public/AB6AXuD9NRHlC3dq7BBwbaGVyUiXLd5N4mQkLW3JB9vLMQFONxbw11AJQ7pnDIXN3PJv8CchCKfDUOtDgvXZelW_wTZiy3m-eKpu1nyPG_qwyrJcKW2j--yXPi2acaTIA8k66t0J3SFeg6Gl31xpNSEq8YjVnZ2537RlH2Soe6MKK8Cyi1G22lO9fGiw1e7UmyxbLvPUguyys1OvQAyRqQjLCXFaCPPzSX-SMeff2GRu42T7Wxp3AgXd3HJP'
+    }
+  ];
+
+  seedUsers.forEach((user) => {
+    run(
+      `INSERT INTO users (id, name, email, password_hash, city, cep, address, interests_json, avatar, rating, donations, received, carbon_saved_percent, achievements_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        user.id,
+        user.name,
+        user.email,
+        passwordHash(user.password),
+        user.city,
+        JSON.stringify(user.interests),
+        user.avatar,
+        user.rating || 4.8,
+        user.donations || 0,
+        user.received || 0,
+        user.carbonSavedPercent || 0,
+        JSON.stringify(user.achievements || [])
+      ]
+    );
+  });
+
+  const seedPosts = [
+    {
+      id: 'post-ana-notebook',
+      authorId: 'user-ana',
+      title: 'Notebook antigo para reaproveitamento',
+      description: 'Notebook antigo que não utilizo mais. A tela funciona perfeitamente, mas o teclado precisa de reparos. Ideal para retirada de peças ou conserto simples.',
+      category: 'Eletrônicos',
+      condition: 'Para conserto',
+      goal: 'Doação',
+      imageUrl: 'https://lh3.googleusercontent.com/aida-public/AB6AXuAKZQEUXdT_Hr8jvwzGd8COIr3aOEpoPNRH21AJJW4XMCNqGnogNVe9-K0-oB040C5TRFGW7GZGwe0dbIs7xbzj6IPATaOF0vnOVAv8brlal2teQzm4N7Fts1tX2Yvq6JVnFLAUWiO6RhqAu4yMu54WGVKd-YLj60bm8VrXFYYYO3FWUXRaqv-7aCS5qjpK16baewAO3F_-Ki-FcKBj1e3T-I2h71ynhClmOOnF84mKiBYOL44WA3Nq',
+      likes: 12,
+      comments: 3,
+      location: 'Santarém - PA',
+      createdAt: '2026-08-26T10:42:00.000Z',
+      chipIcon: 'devices',
+      chipLabel: 'Para doação'
+    },
+    {
+      id: 'post-carlos-chair',
+      authorId: 'user-carlos',
+      title: 'Cadeira de madeira maciça',
+      description: 'Cadeira clássica de madeira, muito resistente. Possui algumas marcas de uso no verniz, mas a estrutura está intacta. Aceito troca por vasos de plantas grandes.',
+      category: 'Móveis',
+      condition: 'Bom estado',
+      goal: 'Troca',
+      imageUrl: 'https://lh3.googleusercontent.com/aida-public/AB6AXuCCiNbwxhEqOsxltDg6QfXsEHO8XzDAHo_3NNioJ8RRnN_TQ7rfWmKLWERa_BVBD1aF08AKQyd92tK3Jo1WrQzglnnm8EazHq65-0oDfEnYYBaPWh7y-1uLgTbE6WdYsWz7fvSZdWlJ24avEsZ3kiInD7j2-YNyJnlXDgl2DW6syKLZUCzF2MjthNP-GmWiicU3JNfZRBdnGSVVbvWhX6h66fnM9luYqcxJOLKLF0fL6jA6a2jHFdwn',
+      likes: 24,
+      comments: 8,
+      location: 'Belém - PA',
+      createdAt: '2026-08-25T09:15:00.000Z',
+      chipIcon: 'chair',
+      chipLabel: 'Troca'
+    }
+  ];
+
+  seedPosts.forEach((post) => {
+    run(
+      `INSERT INTO posts (id, author_id, title, description, category, condition, goal, image_url, likes, comments, location, created_at, chip_icon, chip_label)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        post.id,
+        post.authorId,
+        post.title,
+        post.description,
+        post.category,
+        post.condition,
+        post.goal,
+        post.imageUrl,
+        post.likes,
+        post.comments,
+        post.location,
+        post.createdAt,
+        post.chipIcon,
+        post.chipLabel
+      ]
+    );
+  });
+
+  const seedThreads = [
+    {
+      id: 'thread-ana-notebook',
+      postId: 'post-ana-notebook',
+      participants: ['user-mariana', 'user-ana'],
+      unreadCount: 2,
+      lastMessageAt: '2026-08-26T10:45:00.000Z',
+      messages: [
+        { id: 'msg-1', senderId: 'user-mariana', text: 'Olá! Tenho interesse nesse aparelho. Ainda está disponível?', sentAt: '2026-08-26T10:42:00.000Z', status: 'read' },
+        { id: 'msg-2', senderId: 'user-ana', text: 'Sim, ainda está disponível.', sentAt: '2026-08-26T10:45:00.000Z', status: 'read' },
+        { id: 'msg-3', senderId: 'user-ana', text: 'Pode retirar comigo em um ponto público?', sentAt: '2026-08-26T10:45:00.000Z', status: 'read' }
+      ]
+    },
+    {
+      id: 'thread-carlos-chair',
+      postId: 'post-carlos-chair',
+      participants: ['user-mariana', 'user-carlos'],
+      unreadCount: 0,
+      lastMessageAt: '2026-08-25T18:20:00.000Z',
+      messages: [
+        { id: 'msg-4', senderId: 'user-carlos', text: 'Pode retirar comigo.', sentAt: '2026-08-25T18:10:00.000Z', status: 'read' },
+        { id: 'msg-5', senderId: 'user-mariana', text: 'Obrigado pela oferta! Vou confirmar o horário.', sentAt: '2026-08-25T18:20:00.000Z', status: 'read' }
+      ]
+    }
+  ];
+
+  seedThreads.forEach((thread) => {
+    run(
+      `INSERT INTO threads (id, post_id, participants_json, unread_count, last_message_at)
+       VALUES (?, ?, ?, ?, ?)`,
+      [thread.id, thread.postId, JSON.stringify(thread.participants), thread.unreadCount, thread.lastMessageAt]
+    );
+
+    thread.messages.forEach((message) => {
+      run(
+        `INSERT INTO messages (id, thread_id, sender_id, text, sent_at, status)
+         VALUES (?, ?, ?, ?, ?, ?)`,
+        [message.id, thread.id, message.senderId, message.text, message.sentAt, message.status]
+      );
+    });
+  });
+
+  const seedPoints = [
+    { id: 'point-1', name: 'EcoCentro Santarém', categories: ['Eletrônicos', 'plástico', 'metal'], hours: '08:00 – 17:00', location: 'Santarém, Pará, Brasil', status: 'Aberto' },
+    { id: 'point-2', name: 'Central Recicla Belém', categories: ['Pilhas', 'óleo', 'Cooperativas'], hours: '09:00 – 18:00', location: 'Belém, Pará, Brasil', status: 'Aberto' }
+  ];
+
+  seedPoints.forEach((point) => {
+    run(
+      `INSERT INTO collection_points (id, name, categories_json, hours, location, status)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [point.id, point.name, JSON.stringify(point.categories), point.hours, point.location, point.status]
+    );
+  });
+
+  persistDb();
+}
+
+function routeForPath(pathname) {
+  return ROUTE_FILES[pathname] || null;
+}
+
+function renderScreenFile(routePath) {
+  const filePath = routeForPath(routePath);
+  if (!filePath) {
+    return null;
+  }
+
+  const absolutePath = path.join(ROOT, filePath);
+  let html = fs.readFileSync(absolutePath, 'utf8');
+
+  html = html.replace(/\{\{DATA:SCREEN:SCREEN_(\d+)\}\}/g, (_, screenNumber) => SCREEN_ROUTES[`SCREEN_${screenNumber}`] || '/feed');
+  html = html.replace(/SCREEN_(\d+)\.html/g, (_, screenNumber) => SCREEN_ROUTES[`SCREEN_${screenNumber}`] || '/feed');
+
+  if (html.includes('</body>')) {
+    html = html.replace(/<\/body>/i, `<script>window.__REUSA_ROUTE__=${JSON.stringify(routePath)};window.__REUSA_ROUTES__=${JSON.stringify(SCREEN_ROUTES)};window.__REUSA_API__='/api';</script><script src="/assets/app.js" defer></script></body>`);
+  }
+
+  return html;
+}
+
+function buildExists() {
+  return fs.existsSync(path.join(DIST_DIR, 'index.html'));
+}
+
+async function start() {
+  ensureDir(DATA_DIR);
+  ensureDir(PUBLIC_DIR);
+  ensureDir(UPLOAD_DIR);
+
+  const SQL = await initSqlJs({
+    locateFile: (file) => path.join(ROOT, 'node_modules', 'sql.js', 'dist', file)
+  });
+
+  const bytes = loadDbBytes();
+  db = bytes ? new SQL.Database(bytes) : new SQL.Database();
+  seedDatabase();
+
+  const uploadStorage = multer.diskStorage({
+    destination: (_req, _file, callback) => callback(null, UPLOAD_DIR),
+    filename: (_req, file, callback) => {
+      const ext = path.extname(file.originalname || '').toLowerCase();
+      callback(null, `${Date.now()}-${crypto.randomUUID()}${ext}`);
+    }
+  });
+
+  const upload = multer({ storage: uploadStorage });
+
+  app.use(express.json());
+  app.use(express.urlencoded({ extended: true }));
+  app.use('/assets', express.static(PUBLIC_DIR));
+  app.use('/uploads', express.static(UPLOAD_DIR));
+
+  if (buildExists()) {
+    app.use(express.static(DIST_DIR));
+  }
+
+  app.get('/api/health', (_req, res) => res.json({ ok: true }));
+
+  app.get('/api/auth/me', authMiddleware, (req, res) => {
+    res.json({ user: req.user });
+  });
+
+  app.post('/api/auth/register', (req, res) => {
+    const { name, email, password, city, cep = '', address = '', interests = [] } = req.body || {};
+
+    if (!name || !email || !password || !city) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    const existingUser = get('SELECT id FROM users WHERE lower(email) = lower(?)', [email]);
+    if (existingUser) {
+      return res.status(409).json({ error: 'Email already registered' });
+    }
+
+    const user = {
+      id: uid('user'),
+      name,
+      email,
+      passwordHash: passwordHash(password),
+      city,
+      cep: String(cep).trim(),
+      address: String(address).trim(),
+      interests: Array.isArray(interests) ? interests : [interests].filter(Boolean),
+      avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=00d67d&color=ffffff&bold=true`,
+      rating: 0,
+      donations: 0,
+      received: 0,
+      carbonSavedPercent: 0,
+      achievements: ['Novo membro']
+    };
+
+    run(
+      `INSERT INTO users (id, name, email, password_hash, city, cep, address, interests_json, avatar, rating, donations, received, carbon_saved_percent, achievements_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [
+        user.id,
+        user.name,
+        user.email,
+        passwordHash(password),
+        user.city,
+        user.cep,
+        user.address,
+        JSON.stringify(user.interests),
+        user.avatar,
+        user.rating,
+        user.donations,
+        user.received,
+        user.carbonSavedPercent,
+        JSON.stringify(user.achievements)
+      ]
+    );
+    persistDb();
+
+    return res.status(201).json({ token: createToken(user.id), user: { ...user, passwordHash: undefined } });
+  });
+
+  app.post('/api/auth/login', (req, res) => {
+    const { email, password } = req.body || {};
+
+    if (!email || !password) {
+      return res.status(400).json({ error: 'Email and password are required' });
+    }
+
+    const user = get('SELECT * FROM users WHERE lower(email) = lower(?) LIMIT 1', [email]);
+    if (!user || user.password_hash !== passwordHash(password)) {
+      return res.status(401).json({ error: 'Invalid credentials' });
+    }
+
+    const normalized = userFromRow(user);
+    return res.json({ token: createToken(normalized.id), user: normalized });
+  });
+
+  app.get('/api/feed', (_req, res) => {
+    const rows = all('SELECT * FROM posts ORDER BY created_at DESC');
+    res.json({ posts: rows.map(publicPost) });
+  });
+
+  app.get('/api/inspirations', (_req, res) => {
+    const featured = [
+      { id: 'inspiration-1', title: 'Luminária de garrafas', creator: 'Ateliê Recomeço', material: 'Garrafas de vidro', price: 'R$ 89,90', city: 'Santarém, PA', imageUrl: 'https://images.unsplash.com/photo-1513506003901-1e6a229e2d15?auto=format&fit=crop&w=900&q=80', description: 'Peças únicas feitas com garrafas reaproveitadas e iluminação LED.' },
+      { id: 'inspiration-2', title: 'Banco de pallet', creator: 'Carlos Eduardo', material: 'Madeira de pallet', price: 'R$ 160,00', city: 'Belém, PA', imageUrl: 'https://images.unsplash.com/photo-1493663284031-b7e3aefcae8?auto=format&fit=crop&w=900&q=80', description: 'Banco resistente com acabamento à base de água e madeira recuperada.' },
+      { id: 'inspiration-3', title: 'Bolsa de banner', creator: 'Costura Circular', material: 'Banners vinílicos', price: 'R$ 54,00', city: 'Manaus, AM', imageUrl: 'https://images.unsplash.com/photo-1553062407-98eeb64c6a62?auto=format&fit=crop&w=900&q=80', description: 'Bolsas duráveis produzidas a partir de banners que seriam descartados.' },
+      { id: 'inspiration-4', title: 'Cachepô de lata', creator: 'Maria Silva', material: 'Latas de alumínio', price: 'R$ 32,00', city: 'Santarém, PA', imageUrl: 'https://images.unsplash.com/photo-1485955900006-10f4d324d411?auto=format&fit=crop&w=900&q=80', description: 'Cachepôs pintados à mão para dar vida nova às latas.' }
+    ];
+    const community = all('SELECT * FROM inspiration_products ORDER BY created_at DESC').map((product) => ({ id: product.id, title: product.title, creator: get('SELECT name FROM users WHERE id = ?', [product.creator_id])?.name || 'Criador Reusa+', material: product.material, price: product.price, city: product.city, imageUrl: product.image_url, description: product.description }));
+    res.json({ products: [...community, ...featured] });
+  });
+
+  app.post('/api/inspirations', authMiddleware, (req, res) => {
+    const { title, material, price, description, imageUrl } = req.body || {};
+    if (!title || !material || !price || !description) return res.status(400).json({ error: 'Title, material, price and description are required' });
+    const product = { id: uid('inspiration'), creator_id: req.user.id, title: String(title).trim(), material: String(material).trim(), price: String(price).trim(), city: req.user.city, image_url: imageUrl || 'https://images.unsplash.com/photo-1528698827591-e19ccd7bc23d?auto=format&fit=crop&w=900&q=80', description: String(description).trim(), created_at: new Date().toISOString() };
+    run('INSERT INTO inspiration_products (id, creator_id, title, material, price, city, image_url, description, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', Object.values(product));
+    persistDb();
+    res.status(201).json({ product });
+  });
+
+  app.post('/api/ai/ideas', authMiddleware, (req, res) => {
+    const prompt = String(req.body?.prompt || '').trim();
+    if (!prompt) return res.status(400).json({ error: 'Describe what you have available' });
+    const text = prompt.toLowerCase();
+    let idea;
+    if (text.includes('garrafa') || text.includes('vidro')) {
+      idea = { title: 'Luminária ou vaso de vidro', summary: 'Transforme garrafas limpas em uma peça decorativa útil.', materials: ['Garrafa de vidro', 'Lixa fina', 'Barbante ou tinta à base de água', 'Luz LED ou terra e muda'], steps: ['Lave e remova o rótulo com cuidado.', 'Lixe bordas cortadas ou mantenha a garrafa inteira.', 'Decore com materiais reaproveitados.', 'Teste a peça longe de calor e umidade excessiva.'], time: '30 a 60 minutos', care: 'Use luvas e nunca coloque vela de chama aberta dentro do vidro.' };
+    } else if (text.includes('pallet') || text.includes('madeira')) {
+      idea = { title: 'Prateleira ou banco de madeira', summary: 'Dê uma nova função à madeira com acabamento simples.', materials: ['Madeira reaproveitada', 'Lixa', 'Parafusos', 'Selador ou tinta à base de água'], steps: ['Verifique se a madeira está seca e sem pregos expostos.', 'Lixe até remover farpas.', 'Monte a estrutura e reforce as junções.', 'Aplique acabamento e aguarde a secagem completa.'], time: '2 a 4 horas', care: 'Use máscara ao lixar e confirme a resistência antes de sentar ou fixar na parede.' };
+    } else if (text.includes('lata') || text.includes('alumínio') || text.includes('aluminio')) {
+      idea = { title: 'Horta vertical em latas', summary: 'Converta latas em vasos para temperos e pequenas plantas.', materials: ['Latas limpas', 'Prego e martelo', 'Tinta', 'Terra e mudas'], steps: ['Lave as latas e remova rebarbas.', 'Faça furos de drenagem no fundo.', 'Pinte por fora e espere secar.', 'Plante mudas de pequeno porte.'], time: '45 a 90 minutos', care: 'Proteja as bordas cortantes e mantenha os furos livres para não acumular água.' };
+    } else {
+      idea = { title: 'Organizador modular reutilizado', summary: 'Comece com caixas, potes ou embalagens firmes e crie um organizador para sua rotina.', materials: ['Embalagens limpas e resistentes', 'Cola ou fita forte', 'Tesoura', 'Papel, tecido ou tinta para acabamento'], steps: ['Separe embalagens por tamanho e função.', 'Lave, seque e remova partes cortantes.', 'Monte os módulos antes de colar.', 'Personalize e identifique cada compartimento.'], time: '30 a 90 minutos', care: 'Não reutilize embalagens que armazenaram produtos tóxicos ou ficaram contaminadas.' };
+    }
+    res.json({ prompt, idea });
+  });
+
+  app.get('/api/posts/:id', (req, res) => {
+    const row = get('SELECT * FROM posts WHERE id = ?', [req.params.id]);
+    if (!row) {
+      return res.status(404).json({ error: 'Post not found' });
+    }
+
+    return res.json({ post: publicPost(row) });
+  });
+
+  app.post('/api/posts/:id/like', authMiddleware, (req, res) => {
+    const row = get('SELECT * FROM posts WHERE id = ?', [req.params.id]);
+    if (!row) {
+      return res.status(404).json({ error: 'Post not found' });
+    }
+
+    const existingLike = get('SELECT post_id FROM post_likes WHERE post_id = ? AND user_id = ?', [req.params.id, req.user.id]);
+    const now = new Date().toISOString();
+    if (existingLike) {
+      run('DELETE FROM post_likes WHERE post_id = ? AND user_id = ?', [req.params.id, req.user.id]);
+      run('UPDATE posts SET likes = MAX(likes - 1, 0) WHERE id = ?', [req.params.id]);
+    } else {
+      run('INSERT INTO post_likes (post_id, user_id, created_at) VALUES (?, ?, ?)', [req.params.id, req.user.id, now]);
+      run('UPDATE posts SET likes = likes + 1 WHERE id = ?', [req.params.id]);
+      if (row.author_id !== req.user.id) {
+        run('INSERT INTO notifications (id, user_id, type, title, text, created_at) VALUES (?, ?, ?, ?, ?, ?)', [uid('notification'), row.author_id, 'like', 'Nova curtida', `${req.user.name} curtiu seu anúncio.`, now]);
+      }
+    }
+    persistDb();
+    const updated = get('SELECT likes FROM posts WHERE id = ?', [req.params.id]);
+    return res.json({ likes: updated.likes, liked: !existingLike });
+  });
+
+  app.delete('/api/posts/:id', authMiddleware, (req, res) => {
+    const post = get('SELECT author_id FROM posts WHERE id = ?', [req.params.id]);
+    if (!post) return res.status(404).json({ error: 'Post not found' });
+    if (post.author_id !== req.user.id) return res.status(403).json({ error: 'You can only delete your own posts' });
+    const threads = all('SELECT id FROM threads WHERE post_id = ?', [req.params.id]);
+    threads.forEach((thread) => run('DELETE FROM messages WHERE thread_id = ?', [thread.id]));
+    run('DELETE FROM threads WHERE post_id = ?', [req.params.id]);
+    run('DELETE FROM comments WHERE post_id = ?', [req.params.id]);
+    run('DELETE FROM post_likes WHERE post_id = ?', [req.params.id]);
+    run('DELETE FROM posts WHERE id = ?', [req.params.id]);
+    persistDb();
+    res.json({ ok: true });
+  });
+
+  app.get('/api/posts/:id/comments', (_req, res) => {
+    const post = get('SELECT id FROM posts WHERE id = ?', [_req.params.id]);
+    if (!post) return res.status(404).json({ error: 'Post not found' });
+    const comments = all('SELECT comments.id, comments.text, comments.created_at, users.name, users.avatar FROM comments JOIN users ON users.id = comments.author_id WHERE post_id = ? ORDER BY comments.created_at ASC', [_req.params.id]);
+    res.json({ comments });
+  });
+
+  app.post('/api/posts/:id/comments', authMiddleware, (req, res) => {
+    const text = String(req.body?.text || '').trim();
+    const post = get('SELECT id FROM posts WHERE id = ?', [req.params.id]);
+    if (!post) return res.status(404).json({ error: 'Post not found' });
+    if (!text || text.length > 500) return res.status(400).json({ error: 'Comment must have between 1 and 500 characters' });
+    const comment = { id: uid('comment'), post_id: req.params.id, author_id: req.user.id, text, created_at: new Date().toISOString() };
+    run('INSERT INTO comments (id, post_id, author_id, text, created_at) VALUES (?, ?, ?, ?, ?)', Object.values(comment));
+    run('UPDATE posts SET comments = comments + 1 WHERE id = ?', [req.params.id]);
+    const owner = get('SELECT author_id, title FROM posts WHERE id = ?', [req.params.id]);
+    if (owner.author_id !== req.user.id) {
+      run('INSERT INTO notifications (id, user_id, type, title, text, created_at) VALUES (?, ?, ?, ?, ?, ?)', [uid('notification'), owner.author_id, 'comment', 'Novo comentário', `${req.user.name} comentou em "${owner.title}".`, comment.created_at]);
+    }
+    persistDb();
+    res.status(201).json({ comment: { ...comment, name: req.user.name, avatar: req.user.avatar }, comments: get('SELECT comments FROM posts WHERE id = ?', [req.params.id]).comments });
+  });
+
+  app.post('/api/posts', authMiddleware, upload.single('image'), (req, res) => {
+    const { title, description, category, condition, goal, location, chipLabel, chipIcon } = req.body || {};
+
+    if (!title || !description || !category) {
+      return res.status(400).json({ error: 'Missing required fields' });
+    }
+
+    const imageUrl = req.file ? `/uploads/${req.file.filename}` : req.body.imageUrl || 'https://images.unsplash.com/photo-1517336714731-489689fd1ca8?auto=format&fit=crop&w=1200&q=80';
+    const createdAt = new Date().toISOString();
+    const post = {
+      id: uid('post'),
+      author_id: req.user.id,
+      title,
+      description,
+      category,
+      condition: condition || 'Bom estado',
+      goal: goal || 'Doação',
+      image_url: imageUrl,
+      likes: 0,
+      comments: 0,
+      location: location || req.user.city,
+      created_at: createdAt,
+      chip_icon: chipIcon || (goal === 'Troca' ? 'swap_horiz' : 'volunteer_activism'),
+      chip_label: chipLabel || goal || 'Disponível'
+    };
+
+    run(
+      `INSERT INTO posts (id, author_id, title, description, category, condition, goal, image_url, likes, comments, location, created_at, chip_icon, chip_label)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      [post.id, post.author_id, post.title, post.description, post.category, post.condition, post.goal, post.image_url, post.likes, post.comments, post.location, post.created_at, post.chip_icon, post.chip_label]
+    );
+
+    const threadId = uid('thread');
+    run(
+      `INSERT INTO threads (id, post_id, participants_json, unread_count, last_message_at)
+       VALUES (?, ?, ?, ?, ?)`,
+      [threadId, post.id, JSON.stringify([req.user.id]), 0, createdAt]
+    );
+
+    persistDb();
+    return res.status(201).json({ post: publicPost(get('SELECT * FROM posts WHERE id = ?', [post.id])) });
+  });
+
+  app.post('/api/messages/threads', authMiddleware, (req, res) => {
+    const post = get('SELECT * FROM posts WHERE id = ?', [req.body?.postId]);
+    if (!post) return res.status(404).json({ error: 'Post not found' });
+    if (post.author_id === req.user.id) return res.status(400).json({ error: 'You cannot contact yourself' });
+
+    const rows = all('SELECT * FROM threads');
+    const existing = rows.find((row) => {
+      const participants = JSON.parse(row.participants_json || '[]');
+      return row.post_id === post.id && participants.includes(req.user.id) && participants.includes(post.author_id);
+    });
+    if (existing) return res.json({ thread: threadSummary(existing, req.user.id) });
+
+    const thread = { id: uid('thread'), post_id: post.id, participants_json: JSON.stringify([req.user.id, post.author_id]), unread_count: 0, last_message_at: new Date().toISOString() };
+    run('INSERT INTO threads (id, post_id, participants_json, unread_count, last_message_at) VALUES (?, ?, ?, ?, ?)', [thread.id, thread.post_id, thread.participants_json, thread.unread_count, thread.last_message_at]);
+    run('INSERT INTO notifications (id, user_id, type, title, text, created_at) VALUES (?, ?, ?, ?, ?, ?)', [uid('notification'), post.author_id, 'message', 'Nova conversa', `${req.user.name} demonstrou interesse em "${post.title}".`, thread.last_message_at]);
+    persistDb();
+    return res.status(201).json({ thread: threadSummary(thread, req.user.id) });
+  });
+
+  app.get('/api/messages/threads', authMiddleware, (req, res) => {
+    const rows = all('SELECT * FROM threads ORDER BY last_message_at DESC').filter((row) => JSON.parse(row.participants_json || '[]').includes(req.user.id));
+    const threads = rows.map((row) => threadSummary(row, req.user.id));
+    res.json({ threads });
+  });
+
+  app.get('/api/messages/threads/:id', authMiddleware, (req, res) => {
+    const row = get('SELECT * FROM threads WHERE id = ?', [req.params.id]);
+    if (!row) {
+      return res.status(404).json({ error: 'Thread not found' });
+    }
+
+    const participants = JSON.parse(row.participants_json || '[]');
+    if (!participants.includes(req.user.id)) return res.status(403).json({ error: 'Thread access denied' });
+    const messages = all('SELECT * FROM messages WHERE thread_id = ? ORDER BY sent_at ASC', [row.id]);
+    res.json({ thread: row, participants: JSON.parse(row.participants_json || '[]'), messages });
+  });
+
+  app.post('/api/messages/threads/:id/messages', authMiddleware, (req, res) => {
+    const { text } = req.body || {};
+    if (!text || !String(text).trim()) {
+      return res.status(400).json({ error: 'Message text is required' });
+    }
+
+    const thread = get('SELECT * FROM threads WHERE id = ?', [req.params.id]);
+    if (!thread) {
+      return res.status(404).json({ error: 'Thread not found' });
+    }
+    if (!JSON.parse(thread.participants_json || '[]').includes(req.user.id)) {
+      return res.status(403).json({ error: 'Thread access denied' });
+    }
+
+    const sentAt = new Date().toISOString();
+    const message = {
+      id: uid('msg'),
+      thread_id: thread.id,
+      sender_id: req.user.id,
+      text: String(text).trim(),
+      sent_at: sentAt,
+      status: 'sent'
+    };
+
+    run(
+      `INSERT INTO messages (id, thread_id, sender_id, text, sent_at, status)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [message.id, message.thread_id, message.sender_id, message.text, message.sent_at, message.status]
+    );
+    run('UPDATE threads SET last_message_at = ? WHERE id = ?', [sentAt, thread.id]);
+    const recipientId = JSON.parse(thread.participants_json || '[]').find((id) => id !== req.user.id);
+    if (recipientId) {
+      run('INSERT INTO notifications (id, user_id, type, title, text, created_at) VALUES (?, ?, ?, ?, ?, ?)', [uid('notification'), recipientId, 'message', 'Nova mensagem', `${req.user.name} enviou uma mensagem.`, sentAt]);
+    }
+    persistDb();
+
+    return res.status(201).json({ message });
+  });
+
+  app.get('/api/notifications', authMiddleware, (req, res) => {
+    const notifications = all('SELECT id, type, title, text, created_at AS createdAt, read_at AS readAt FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 50', [req.user.id]);
+    res.json({ notifications, unreadCount: notifications.filter((notification) => !notification.readAt).length });
+  });
+
+  app.post('/api/notifications/read', authMiddleware, (req, res) => {
+    run('UPDATE notifications SET read_at = ? WHERE user_id = ? AND read_at IS NULL', [new Date().toISOString(), req.user.id]);
+    persistDb();
+    res.json({ ok: true });
+  });
+
+  app.get('/api/collection-points', (_req, res) => {
+    const rows = all('SELECT * FROM collection_points ORDER BY name ASC');
+    res.json({ collectionPoints: rows.map((row) => ({ id: row.id, name: row.name, categories: JSON.parse(row.categories_json || '[]'), hours: row.hours, location: row.location, status: row.status })) });
+  });
+
+  app.get('/api/collection-points/nearby', async (req, res) => {
+    const city = String(req.query.city || '').trim();
+    if (!city) return res.status(400).json({ error: 'City is required' });
+    const cityName = city.split(',')[0].trim();
+    const registered = all('SELECT * FROM collection_points WHERE lower(location) LIKE lower(?) ORDER BY name ASC', [`%${cityName}%`]).map((row) => ({ id: row.id, name: row.name, categories: JSON.parse(row.categories_json || '[]'), hours: row.hours, location: row.location, status: row.status, source: 'Cadastrado no Reusa+' }));
+    try {
+      const geocodeResponse = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=br&q=${encodeURIComponent(city)}`, { headers: { 'User-Agent': 'ReusaPlus/1.0 contact@reusa.local' } });
+      const places = await geocodeResponse.json();
+      if (!places.length) return res.json({ city, source: 'Cadastrado no Reusa+', collectionPoints: registered });
+      const latitude = Number(places[0].lat);
+      const longitude = Number(places[0].lon);
+      const query = `[out:json][timeout:10];(nwr["amenity"~"recycling|waste_transfer_station",i](around:15000,${latitude},${longitude});nwr["shop"="second_hand"](around:15000,${latitude},${longitude}););out center tags;`;
+      const overpassResponse = await fetch('https://overpass-api.de/api/interpreter', { method: 'POST', headers: { 'Content-Type': 'text/plain', 'User-Agent': 'ReusaPlus/1.0' }, body: query });
+      const overpass = await overpassResponse.json();
+      const publicPoints = (overpass.elements || []).map((element) => {
+        const tags = element.tags || {};
+        const pointLatitude = element.lat || element.center?.lat;
+        const pointLongitude = element.lon || element.center?.lon;
+        return { id: `osm-${element.type}-${element.id}`, name: tags.name || 'Ponto de reciclagem', categories: [tags.recycling_type || (tags.shop === 'second_hand' ? 'Reutilização' : 'Reciclagem')], hours: tags.opening_hours || 'Horário não informado', location: [tags['addr:street'], tags['addr:housenumber'], tags['addr:city'] || cityName].filter(Boolean).join(', '), status: 'Encontrado no mapa', latitude: pointLatitude, longitude: pointLongitude, source: 'OpenStreetMap' };
+      }).filter((point) => Number.isFinite(point.latitude) && Number.isFinite(point.longitude));
+      res.json({ city, center: [latitude, longitude], source: publicPoints.length ? 'OpenStreetMap' : 'Cadastrado no Reusa+', collectionPoints: [...publicPoints, ...registered] });
+    } catch {
+      res.json({ city, source: 'Cadastrado no Reusa+', collectionPoints: registered });
+    }
+  });
+
+  app.get('/api/profile', authMiddleware, (req, res) => {
+    const posts = all('SELECT * FROM posts WHERE author_id = ?', [req.user.id]);
+    res.json({
+      user: req.user,
+      stats: {
+        donations: req.user.donations ?? posts.length,
+        received: req.user.received ?? 0,
+        rating: req.user.rating ?? 0,
+        carbonSavedPercent: req.user.carbonSavedPercent ?? 0
+      },
+      achievements: req.user.achievements || []
+    });
+  });
+
+  app.put('/api/profile', authMiddleware, (req, res) => {
+    const { name, city, cep, address, interests } = req.body || {};
+    const nextName = name || req.user.name;
+    const nextCity = city || req.user.city;
+    const nextInterests = Array.isArray(interests) ? interests : req.user.interests;
+
+    run('UPDATE users SET name = ?, city = ?, cep = ?, address = ?, interests_json = ? WHERE id = ?', [nextName, nextCity, cep ?? req.user.cep ?? '', address ?? req.user.address ?? '', JSON.stringify(nextInterests), req.user.id]);
+    persistDb();
+
+    const updated = get('SELECT * FROM users WHERE id = ?', [req.user.id]);
+    return res.json({ user: userFromRow(updated) });
+  });
+
+  app.get('/', (_req, res) => res.redirect('/splash'));
+
+  if (buildExists()) {
+    app.use(express.static(DIST_DIR));
+    app.get(/^\/(?!api).*/, (_req, res) => res.sendFile(path.join(DIST_DIR, 'index.html')));
+  } else {
+    Object.keys(ROUTE_FILES).forEach((routePath) => {
+      app.get(routePath, (_req, res) => {
+        const html = renderScreenFile(routePath);
+        if (!html) {
+          return res.status(404).send('Screen not found');
+        }
+        res.type('html').send(html);
+      });
+    });
+  }
+
+  app.listen(PORT, () => {
+    console.log(`REUSA+ running at http://localhost:${PORT}`);
+  });
+}
+
+start().catch((error) => {
+  console.error(error);
+  process.exit(1);
+});

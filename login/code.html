@@ -1,0 +1,81 @@
+<!DOCTYPE html><html lang="pt-BR"><head><meta charset="utf-8"><meta content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" name="viewport"><link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@600;700;800&amp;family=Plus+Jakarta+Sans:wght@400;500&amp;display=swap" rel="stylesheet"><link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:opsz,wght,FILL,GRAD@20..48,100..700,0..1,-50..200" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"><script src="https://cdn.tailwindcss.com"></script><script id="tailwind-config">tailwind.config = { darkMode: "class", theme: { extend: { "colors": { "surface-container-low": "#eff4ff", "tertiary": "#ae2f34", "outline-variant": "#bacbbc", "primary": "#006d3d", "surface": "#f8f9ff", "error": "#ba1a1a", "inverse-on-surface": "#eaf1ff", "on-secondary-fixed": "#002115", "secondary-fixed-dim": "#a8cfbc", "surface-bright": "#f8f9ff", "inverse-primary": "#28e288", "primary-fixed": "#5affa3", "inverse-surface": "#27313f", "surface-tint": "#006d3d", "on-primary-fixed-variant": "#00522d", "on-surface-variant": "#3c4a3f", "surface-container-lowest": "#ffffff", "error-container": "#ffdad6", "on-error-container": "#93000a", "on-tertiary": "#ffffff", "on-primary": "#ffffff", "surface-variant": "#d9e3f6", "on-error": "#ffffff", "surface-container-high": "#dee9fc", "surface-container-highest": "#d9e3f6", "on-secondary-container": "#476c5b", "tertiary-container": "#ffa29f", "on-secondary-fixed-variant": "#294e3f", "on-secondary": "#ffffff", "on-primary-fixed": "#00210f", "primary-container": "#00d67d", "outline": "#6b7b6e", "on-tertiary-fixed-variant": "#8c1520", "secondary-fixed": "#c3ecd7", "on-background": "#121c2a", "primary-fixed-dim": "#28e288", "on-tertiary-fixed": "#410006", "on-surface": "#121c2a", "secondary": "#416656", "on-tertiary-container": "#921a23", "tertiary-fixed": "#ffdad8", "surface-container": "#e6eeff", "on-primary-container": "#00572f", "tertiary-fixed-dim": "#ffb3b0", "secondary-container": "#c3ecd7", "surface-dim": "#d0dbed", "background": "#f8f9ff" }, "borderRadius": { "DEFAULT": "0.25rem", "lg": "0.5rem", "xl": "0.75rem", "full": "9999px" }, "spacing": { "base": "8px", "gutter": "24px", "margin-mobile": "16px", "margin-desktop": "40px", "container-max": "1280px" }, "fontFamily": { "body-lg": ["Plus Jakarta Sans"], "caption": ["Plus Jakarta Sans"], "headline-lg-mobile": ["Hanken Grotesk"], "body-md": ["Plus Jakarta Sans"], "headline-md": ["Hanken Grotesk"], "display": ["Hanken Grotesk"], "headline-lg": ["Hanken Grotesk"], "label-md": ["Hanken Grotesk"] } } } }</script><style>@layer base { body { -webkit-tap-highlight-color: transparent; } .pt-safe { padding-top: env(safe-area-inset-top, 0px); } .pb-safe { padding-bottom: env(safe-area-inset-bottom, 0px); } } </style></head><body class="bg-surface font-body-md text-on-surface"><header class="fixed top-0 w-full z-50 bg-surface/80 backdrop-blur-xl pt-safe shadow-[0_1px_8px_rgba(0,0,0,0.04)]"><div class="h-16 px-4 flex items-center gap-2"><button class="w-12 h-12 flex items-center justify-center text-on-surface" onclick="history.back()"><span class="material-symbols-outlined">arrow_back</span></button><h1 class="font-headline-md text-headline-md text-on-surface truncate">Conversa Direta</h1><div class="ml-auto flex items-center gap-2"><button class="w-10 h-10 flex items-center justify-center text-on-surface-variant"><span class="material-symbols-outlined">more_vert</span></button></div></div></header><main class="relative w-full pt-16 bg-surface min-h-screen"><div class="flex flex-col w-full h-full min-h-[calc(100vh-64px)] px-margin-mobile py-8 pb-safe items-center justify-center relative">
+<!-- Background Decor (Optional, subtle tech-minimalist touch) -->
+<div class="absolute inset-0 pointer-events-none overflow-hidden z-0 flex items-center justify-center opacity-30">
+<div class="w-full aspect-square rounded-full bg-gradient-to-tr from-primary/10 to-transparent blur-3xl translate-y-1/4 scale-150"></div>
+</div>
+<!-- Main Container -->
+<div class="w-full max-w-sm flex flex-col items-center relative z-10 gap-8">
+<!-- Header & Logo -->
+<div class="flex flex-col items-center gap-4 w-full">
+<div class="w-20 h-20 rounded-2xl bg-surface-container flex items-center justify-center shadow-sm p-2 overflow-hidden">
+<img alt="REUSA+ Logo" class="w-full h-full object-contain mix-blend-multiply" src="https://lh3.googleusercontent.com/aida/AEtjO1VOja6lawait8cD7S4qIsbQT98rITCBL6-POGM3Xx0XjHBo5cAU4kPuywpjwlZoU_y6mmt78ljE-YUp9F773y7Z2Oa6Ve8eiRe7o7q_FSCqHh4RDQRkqXF-qFmWwPB6tdbSl3y2Ih37wzyRcRd4UqnnLybL_2ZAMcWMTPY7ua2MjgD3RzNkykyWgJPAfwsciiNoasg-mgoQNU4TCU0Yvz60CZ6T4Yfg3TsAAHs_dv1SPtQfPYynmlvcEwc">
+</div>
+<div class="text-center">
+<h2 class="font-headline-lg-mobile text-headline-lg-mobile text-on-surface mb-2">Bem-vindo de volta!</h2>
+<p class="font-body-md text-body-md text-on-surface-variant">Pronto para causar impacto hoje?</p>
+</div>
+</div>
+<!-- Form Section -->
+<form class="w-full flex flex-col gap-5" onsubmit="event.preventDefault(); this.querySelector('button[type=submit]').classList.add('opacity-80', 'scale-95'); setTimeout(() =&gt; this.querySelector('button[type=submit]').classList.remove('opacity-80', 'scale-95'), 150);">
+<div class="flex flex-col gap-4">
+<div class="flex flex-col gap-2">
+<label class="font-label-md text-label-md text-on-surface-variant" for="email">E-mail</label>
+<div class="relative flex items-center group">
+<span class="material-symbols-outlined absolute left-4 text-on-surface-variant group-focus-within:text-primary transition-colors">mail</span>
+<input class="w-full h-14 pl-12 pr-4 bg-surface-container-lowest text-on-surface font-body-md text-body-md rounded-xl shadow-sm focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all placeholder:text-on-surface-variant/50" id="email" placeholder="seu@email.com" type="email">
+</div>
+</div>
+<div class="flex flex-col gap-2">
+<div class="flex justify-between items-center">
+<label class="font-label-md text-label-md text-on-surface-variant" for="password">Senha</label>
+<a class="font-caption text-caption text-primary hover:text-primary-container transition-colors" href="#">Esqueceu sua senha?</a>
+</div>
+<div class="relative flex items-center group">
+<span class="material-symbols-outlined absolute left-4 text-on-surface-variant group-focus-within:text-primary transition-colors">lock</span>
+<input class="w-full h-14 pl-12 pr-12 bg-surface-container-lowest text-on-surface font-body-md text-body-md rounded-xl shadow-sm focus:outline-none focus:ring-2 focus:ring-primary/50 transition-all placeholder:text-on-surface-variant/50" id="password" placeholder="••••••••" type="password">
+<button class="absolute right-4 text-on-surface-variant hover:text-on-surface transition-colors focus:outline-none p-1" onclick="const p = document.getElementById('password'); const icon = this.querySelector('span'); if(p.type === 'password') { p.type = 'text'; icon.textContent = 'visibility_off'; } else { p.type = 'password'; icon.textContent = 'visibility'; }" type="button">
+<span class="material-symbols-outlined text-[20px]">visibility</span>
+</button>
+</div>
+</div>
+</div>
+<a href="{{DATA:SCREEN:SCREEN_15}}" class="w-full h-14 bg-primary text-on-primary font-label-md text-label-md rounded-xl shadow-[0_8px_16px_rgba(0,214,125,0.2)] hover:bg-primary-container hover:shadow-[0_12px_24px_rgba(0,214,125,0.3)] transition-all active:scale-95 flex items-center justify-center gap-2 mt-2">
+<span class="">Entrar</span>
+<span class="material-symbols-outlined text-[20px]">arrow_forward</span>
+</a>
+</form>
+<!-- Social Login Divider -->
+<div class="w-full flex items-center gap-4">
+<div class="h-px bg-surface-container-high flex-1"></div>
+<span class="font-caption text-caption text-on-surface-variant uppercase tracking-wider">Ou continue com</span>
+<div class="h-px bg-surface-container-high flex-1"></div>
+</div>
+<!-- Social Buttons -->
+<div class="w-full flex gap-4">
+<button class="flex-1 h-12 bg-surface-container-lowest flex items-center justify-center gap-2 rounded-xl shadow-sm hover:bg-surface-container-low transition-colors group">
+<svg class="w-5 h-5 text-on-surface group-hover:text-primary transition-colors" fill="currentColor" viewBox="0 0 24 24">
+<path d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z" fill="#4285F4"></path>
+<path d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z" fill="#34A853"></path>
+<path d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z" fill="#FBBC05"></path>
+<path d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z" fill="#EA4335"></path>
+</svg>
+<span class="font-label-md text-label-md text-on-surface hidden sm:block">Google</span>
+</button>
+<button class="flex-1 h-12 bg-surface-container-lowest flex items-center justify-center gap-2 rounded-xl shadow-sm hover:bg-surface-container-low transition-colors group">
+<svg class="w-5 h-5 text-on-surface group-hover:text-primary transition-colors" fill="currentColor" viewBox="0 0 24 24">
+<path d="M17.05 13.92c-.02-3.15 2.58-4.67 2.69-4.74-1.46-2.14-3.73-2.43-4.54-2.47-1.92-.19-3.75 1.14-4.73 1.14-1.01 0-2.52-1.11-4.1-1.09-2.04.03-3.92 1.19-4.97 2.99-2.14 3.71-.55 9.18 1.54 12.21 1.02 1.48 2.21 3.13 3.8 3.07 1.54-.06 2.13-1 3.96-1 1.83 0 2.37 1 3.98.98 1.65-.03 2.68-1.5 3.68-2.98 1.16-1.7 1.64-3.34 1.66-3.42-.03-.02-3.09-1.18-3.11-4.69z"></path>
+<path d="M14.9 5.25c.84-1.02 1.41-2.44 1.25-3.86-1.22.05-2.7.81-3.56 1.83-.77.91-1.42 2.36-1.24 3.75 1.36.1 2.7-.68 3.55-1.72z"></path>
+</svg>
+<span class="font-label-md text-label-md text-on-surface hidden sm:block">Apple</span>
+</button>
+</div>
+<!-- Footer -->
+<div class="mt-8 text-center w-full">
+<span class="font-body-md text-body-md text-on-surface-variant">Não tem uma conta?</span>
+<a class="font-label-md text-label-md text-primary ml-1 hover:text-primary-container transition-colors relative after:content-[''] after:absolute after:-bottom-1 after:left-0 after:w-full after:h-[2px] after:bg-primary after:scale-x-0 hover:after:scale-x-100 after:transition-transform after:origin-left" href="{{DATA:SCREEN:SCREEN_2}}">Cadastre-se</a>
+</div>
+</div>
+</div></main>
+
+</body></html>
