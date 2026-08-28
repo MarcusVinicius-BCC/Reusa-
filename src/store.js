@@ -12,6 +12,7 @@ export const useAppStore = create((set, get) => ({
   posts: fallbackPosts,
   threads: [],
   collectionPoints: [],
+  favorites: [],
   profile: null,
   search: '',
   authBusy: false,
@@ -85,6 +86,11 @@ export const useAppStore = create((set, get) => ({
     set({ profile: result });
     return result;
   },
+  loadFavorites: async () => {
+    const result = await api.favorites();
+    set({ favorites: result.posts || [] });
+    return result.posts || [];
+  },
   updateProfile: async (payload) => {
     const result = await api.updateProfile(payload);
     set((state) => ({ profile: state.profile ? { ...state.profile, user: result.user } : { user: result.user } }));
@@ -109,6 +115,36 @@ export const useAppStore = create((set, get) => ({
     set((state) => ({
       posts: state.posts.map((post) => post.id === postId ? { ...post, likes: result.likes, liked: result.liked } : post)
     }));
+    return result;
+  },
+  toggleFavorite: async (postId) => {
+    const result = await api.toggleFavorite(postId);
+    set((state) => ({
+      posts: state.posts.map((post) => post.id === postId ? { ...post, saved: result.saved } : post),
+      favorites: result.saved
+        ? state.favorites.some((post) => post.id === postId) ? state.favorites : [state.posts.find((post) => post.id === postId), ...state.favorites].filter(Boolean)
+        : state.favorites.filter((post) => post.id !== postId)
+    }));
+    return result;
+  },
+  updatePost: async (postId, payload) => {
+    const result = await api.updatePost(postId, payload);
+    set((state) => ({ posts: state.posts.map((post) => post.id === postId ? result.post : post) }));
+    return result.post;
+  },
+  updatePostStatus: async (postId, status) => {
+    const result = await api.updatePostStatus(postId, status);
+    set((state) => ({ posts: state.posts.map((post) => post.id === postId ? result.post : post) }));
+    return result.post;
+  },
+  reservePost: async (postId, interestedId) => {
+    const result = await api.reservePost(postId, interestedId);
+    set((state) => ({ posts: state.posts.map((post) => post.id === postId ? result.post : post) }));
+    return result.post;
+  },
+  completePost: async (postId, outcome) => {
+    const result = await api.completePost(postId, outcome);
+    set((state) => ({ posts: state.posts.map((post) => post.id === postId ? result.post : post) }));
     return result;
   },
   deletePost: async (postId) => {

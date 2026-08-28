@@ -100,3 +100,59 @@ test('registration validates data and persists a new account', async () => {
   });
   assert.equal(login.response.status, 200);
 });
+
+test('favorites, negotiation status and reviews persist with permission checks', async () => {
+  const suffix = Date.now();
+  const ownerEmail = `owner-${suffix}@example.test`;
+  const interestedEmail = `interested-${suffix}@example.test`;
+
+  const ownerRegistration = await request('/api/auth/register', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Dono do item', email: ownerEmail, password: 'senha-segura-123', city: 'Sao Paulo, SP' })
+  });
+  assert.equal(ownerRegistration.response.status, 201);
+  const ownerToken = ownerRegistration.payload.token;
+
+  const created = await request('/api/posts', {
+    method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerToken}` },
+    body: JSON.stringify({ title: 'Mesa circular', description: 'Mesa em bom estado para doação.', category: 'Móveis', condition: 'Bom estado', goal: 'Doação', location: 'Centro, Sao Paulo, SP' })
+  });
+  assert.equal(created.response.status, 201);
+  const postId = created.payload.post.id;
+  assert.equal(created.payload.post.status, 'Disponível');
+
+  const interestedRegistration = await request('/api/auth/register', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Pessoa interessada', email: interestedEmail, password: 'senha-segura-123', city: 'Sao Paulo, SP' })
+  });
+  assert.equal(interestedRegistration.response.status, 201);
+  const interestedToken = interestedRegistration.payload.token;
+  const interestedId = interestedRegistration.payload.user.id;
+
+  const favorite = await request(`/api/posts/${postId}/favorite`, { method: 'POST', headers: { Authorization: `Bearer ${interestedToken}` } });
+  assert.equal(favorite.response.status, 200);
+  assert.equal(favorite.payload.saved, true);
+  const saved = await request('/api/favorites', { headers: { Authorization: `Bearer ${interestedToken}` } });
+  assert.equal(saved.payload.posts[0].id, postId);
+
+  const thread = await request('/api/messages/threads', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${interestedToken}` }, body: JSON.stringify({ postId }) });
+  assert.equal(thread.response.status, 201);
+
+  const reserve = await request(`/api/posts/${postId}/reserve`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerToken}` }, body: JSON.stringify({ interestedId }) });
+  assert.equal(reserve.response.status, 200);
+  assert.equal(reserve.payload.post.status, 'Reservado');
+
+  const completed = await request(`/api/posts/${postId}/complete`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerToken}` }, body: JSON.stringify({ outcome: 'Doado' }) });
+  assert.equal(completed.response.status, 200);
+  assert.equal(completed.payload.post.status, 'Doado');
+
+  const negotiation = await request(`/api/posts/${postId}/negotiation`, { headers: { Authorization: `Bearer ${interestedToken}` } });
+  assert.equal(negotiation.response.status, 200);
+  assert.equal(negotiation.payload.negotiation.status, 'completed');
+
+  const review = await request(`/api/negotiations/${negotiation.payload.negotiation.id}/reviews`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${interestedToken}` }, body: JSON.stringify({ rating: 5, comment: 'Tudo certo na entrega.' }) });
+  assert.equal(review.response.status, 201);
+  const reviews = await request(`/api/users/${ownerRegistration.payload.user.id}/reviews`);
+  assert.equal(reviews.payload.reputation.count, 1);
+  assert.equal(reviews.payload.reputation.rating, 5);
+});

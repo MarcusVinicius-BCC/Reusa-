@@ -205,6 +205,22 @@ function all(sql, params = []) {
   return values.map((row) => Object.fromEntries(columns.map((column, index) => [column, row[index]])));
 }
 
+function ensureColumn(table, column, definition) {
+  const columns = all(`PRAGMA table_info(${table})`);
+  if (!columns.some((item) => item.name === column)) {
+    run(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`);
+  }
+}
+
+function jsonArray(value) {
+  try {
+    const parsed = JSON.parse(value || '[]');
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
 function userFromRow(row) {
   return {
     id: row.id,
@@ -213,22 +229,52 @@ function userFromRow(row) {
     city: row.city,
     cep: row.cep || '',
     address: row.address || '',
-    interests: JSON.parse(row.interests_json || '[]'),
-    avatar: row.avatar,
+    interests: jsonArray(row.interests_json),
+    avatar: safeAvatar(row.avatar),
     rating: row.rating,
     donations: row.donations,
     received: row.received,
     carbonSavedPercent: row.carbon_saved_percent,
-    achievements: JSON.parse(row.achievements_json || '[]')
+    achievements: jsonArray(row.achievements_json),
+    role: row.role || 'user',
+    suspended: Boolean(row.suspended),
+    notificationPreferences: jsonArray(row.notification_preferences_json)
   };
 }
 
-function publicPost(row) {
+function safeAvatar(value) {
+  const avatar = String(value || '').trim();
+  return avatar.includes('ui-avatars.com') ? '' : avatar;
+}
+
+function isAdmin(user) {
+  return user?.role === 'admin';
+}
+
+function adminMiddleware(req, res, next) {
+  if (!isAdmin(req.user)) {
+    return res.status(403).json({ error: 'Administrator access required' });
+  }
+  return next();
+}
+
+function notification(userId, type, title, text, link = '') {
+  run(
+    'INSERT INTO notifications (id, user_id, type, title, text, created_at, link) VALUES (?, ?, ?, ?, ?, ?, ?)',
+    [uid('notification'), userId, type, title, text, new Date().toISOString(), link]
+  );
+}
+
+function publicPost(row, viewerId = null) {
   const author = get('SELECT id, name, city, avatar FROM users WHERE id = ?', [row.author_id]);
+  const interestCount = get("SELECT COUNT(*) AS count FROM negotiations WHERE post_id = ? AND status IN ('interested', 'reserved', 'completed')", [row.id])?.count || 0;
+  const saved = viewerId ? Boolean(get('SELECT post_id FROM favorites WHERE user_id = ? AND post_id = ?', [viewerId, row.id])) : false;
+  const liked = viewerId ? Boolean(get('SELECT post_id FROM post_likes WHERE user_id = ? AND post_id = ?', [viewerId, row.id])) : false;
+  const reputation = author ? get('SELECT ROUND(AVG(rating), 1) AS average, COUNT(*) AS count FROM reviews WHERE reviewee_id = ?', [author.id]) : null;
   return {
     id: row.id,
     authorId: row.author_id,
-    author: author ? { id: author.id, name: author.name, city: author.city, avatar: author.avatar } : null,
+    author: author ? { id: author.id, name: author.name, city: author.city, avatar: safeAvatar(author.avatar) } : null,
     title: row.title,
     description: row.description,
     category: row.category,
@@ -237,10 +283,18 @@ function publicPost(row) {
     imageUrl: row.image_url,
     likes: row.likes,
     comments: row.comments,
-    location: row.location,
+    location: approximateLocation(row.location),
     createdAt: row.created_at,
     chipIcon: row.chip_icon,
-    chipLabel: row.chip_label
+    chipLabel: row.chip_label,
+    status: row.status || 'Disponível',
+    views: Number(row.views || 0),
+    interestedCount: Number(interestCount),
+    saved,
+    liked,
+    updatedAt: row.updated_at || row.created_at,
+    authorReputation: Number(reputation?.average || 0),
+    authorReviewCount: Number(reputation?.count || 0)
   };
 }
 
@@ -283,6 +337,10 @@ function authMiddleware(req, res, next) {
       return res.status(401).json({ error: 'Invalid token' });
     }
 
+    if (user.suspended) {
+      return res.status(403).json({ error: 'This account is suspended' });
+    }
+
     req.user = userFromRow(user);
     next();
   } catch (error) {
@@ -306,7 +364,11 @@ function seedDatabase() {
       donations INTEGER NOT NULL DEFAULT 0,
       received INTEGER NOT NULL DEFAULT 0,
       carbon_saved_percent INTEGER NOT NULL DEFAULT 0,
-      achievements_json TEXT NOT NULL DEFAULT '[]'
+      achievements_json TEXT NOT NULL DEFAULT '[]',
+      role TEXT NOT NULL DEFAULT 'user',
+      suspended INTEGER NOT NULL DEFAULT 0,
+      notification_preferences_json TEXT NOT NULL DEFAULT '[]',
+      created_at TEXT
     );
   `);
 
@@ -333,6 +395,12 @@ function seedDatabase() {
       created_at TEXT NOT NULL,
       chip_icon TEXT NOT NULL,
       chip_label TEXT NOT NULL,
+      status TEXT NOT NULL DEFAULT 'Disponível',
+      reserved_by TEXT,
+      completed_with TEXT,
+      completed_at TEXT,
+      views INTEGER NOT NULL DEFAULT 0,
+      updated_at TEXT,
       FOREIGN KEY(author_id) REFERENCES users(id)
     );
   `);
@@ -368,7 +436,11 @@ function seedDatabase() {
       categories_json TEXT NOT NULL,
       hours TEXT NOT NULL,
       location TEXT NOT NULL,
-      status TEXT NOT NULL
+      status TEXT NOT NULL,
+      origin TEXT NOT NULL DEFAULT 'ReUsa+',
+      last_updated TEXT,
+      latitude REAL,
+      longitude REAL
     );
   `);
 
@@ -411,6 +483,108 @@ function seedDatabase() {
   `);
 
   run(`
+    CREATE TABLE IF NOT EXISTS favorites (
+      user_id TEXT NOT NULL,
+      post_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, post_id),
+      FOREIGN KEY(user_id) REFERENCES users(id),
+      FOREIGN KEY(post_id) REFERENCES posts(id)
+    );
+  `);
+
+  run(`
+    CREATE TABLE IF NOT EXISTS post_views (
+      post_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      viewed_at TEXT NOT NULL,
+      PRIMARY KEY (post_id, user_id),
+      FOREIGN KEY(post_id) REFERENCES posts(id),
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    );
+  `);
+
+  run(`
+    CREATE TABLE IF NOT EXISTS negotiations (
+      id TEXT PRIMARY KEY,
+      post_id TEXT NOT NULL,
+      owner_id TEXT NOT NULL,
+      interested_id TEXT NOT NULL,
+      thread_id TEXT,
+      status TEXT NOT NULL DEFAULT 'interested',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      completed_at TEXT,
+      UNIQUE(post_id, interested_id),
+      FOREIGN KEY(post_id) REFERENCES posts(id),
+      FOREIGN KEY(owner_id) REFERENCES users(id),
+      FOREIGN KEY(interested_id) REFERENCES users(id)
+    );
+  `);
+
+  run(`
+    CREATE TABLE IF NOT EXISTS reviews (
+      id TEXT PRIMARY KEY,
+      negotiation_id TEXT NOT NULL,
+      reviewer_id TEXT NOT NULL,
+      reviewee_id TEXT NOT NULL,
+      rating INTEGER NOT NULL,
+      comment TEXT NOT NULL DEFAULT '',
+      created_at TEXT NOT NULL,
+      UNIQUE(negotiation_id, reviewer_id),
+      FOREIGN KEY(negotiation_id) REFERENCES negotiations(id),
+      FOREIGN KEY(reviewer_id) REFERENCES users(id),
+      FOREIGN KEY(reviewee_id) REFERENCES users(id)
+    );
+  `);
+
+  run(`
+    CREATE TABLE IF NOT EXISTS reports (
+      id TEXT PRIMARY KEY,
+      reporter_id TEXT NOT NULL,
+      target_type TEXT NOT NULL,
+      target_id TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      details TEXT NOT NULL DEFAULT '',
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT NOT NULL,
+      reviewed_at TEXT,
+      reviewed_by TEXT,
+      UNIQUE(reporter_id, target_type, target_id),
+      FOREIGN KEY(reporter_id) REFERENCES users(id)
+    );
+  `);
+
+  run(`
+    CREATE TABLE IF NOT EXISTS blocked_users (
+      blocker_id TEXT NOT NULL,
+      blocked_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (blocker_id, blocked_id),
+      FOREIGN KEY(blocker_id) REFERENCES users(id),
+      FOREIGN KEY(blocked_id) REFERENCES users(id)
+    );
+  `);
+
+  run(`
+    CREATE TABLE IF NOT EXISTS collection_point_suggestions (
+      id TEXT PRIMARY KEY,
+      user_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      categories_json TEXT NOT NULL,
+      hours TEXT NOT NULL DEFAULT '',
+      location TEXT NOT NULL,
+      latitude REAL,
+      longitude REAL,
+      status TEXT NOT NULL DEFAULT 'pending',
+      created_at TEXT NOT NULL,
+      reviewed_at TEXT,
+      reviewed_by TEXT,
+      FOREIGN KEY(user_id) REFERENCES users(id)
+    );
+  `);
+
+  run(`
     CREATE TABLE IF NOT EXISTS notifications (
       id TEXT PRIMARY KEY,
       user_id TEXT NOT NULL,
@@ -423,7 +597,31 @@ function seedDatabase() {
     );
   `);
 
+  ensureColumn('users', 'role', "TEXT NOT NULL DEFAULT 'user'");
+  ensureColumn('users', 'suspended', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn('users', 'notification_preferences_json', "TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn('users', 'last_active_at', 'TEXT');
+  ensureColumn('users', 'created_at', 'TEXT');
+  ensureColumn('posts', 'status', "TEXT NOT NULL DEFAULT 'Disponível'");
+  ensureColumn('posts', 'reserved_by', 'TEXT');
+  ensureColumn('posts', 'completed_with', 'TEXT');
+  ensureColumn('posts', 'completed_at', 'TEXT');
+  ensureColumn('posts', 'views', 'INTEGER NOT NULL DEFAULT 0');
+  ensureColumn('posts', 'updated_at', 'TEXT');
+  ensureColumn('collection_points', 'origin', "TEXT NOT NULL DEFAULT 'ReUsa+'");
+  ensureColumn('collection_points', 'last_updated', 'TEXT');
+  ensureColumn('collection_points', 'latitude', 'REAL');
+  ensureColumn('collection_points', 'longitude', 'REAL');
+  ensureColumn('notifications', 'link', "TEXT NOT NULL DEFAULT ''");
+
   run(`UPDATE users SET rating = 0 WHERE donations = 0 AND received = 0 AND carbon_saved_percent = 0 AND achievements_json = '["Novo membro"]'`);
+  run(`UPDATE users SET avatar = '' WHERE avatar LIKE '%ui-avatars.com%'`);
+  run('UPDATE users SET created_at = COALESCE(created_at, ?)', [new Date().toISOString()]);
+
+  const adminEmail = String(process.env.ADMIN_EMAIL || 'mariana@reusa.com').trim().toLowerCase();
+  if (adminEmail) {
+    run('UPDATE users SET role = ? WHERE lower(email) = lower(?)', ['admin', adminEmail]);
+  }
 
   const userCount = get('SELECT COUNT(*) AS count FROM users')?.count || 0;
   if (userCount > 0) {
@@ -610,7 +808,81 @@ function seedDatabase() {
     );
   });
 
+  if (adminEmail) {
+    run('UPDATE users SET role = ? WHERE lower(email) = lower(?)', ['admin', adminEmail]);
+  }
+
   persistDb();
+}
+
+function optionalAuth(req, _res, next) {
+  const header = req.headers.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+  if (!token) return next();
+  try {
+    const payload = jwt.verify(token, JWT_SECRET);
+    const user = get('SELECT * FROM users WHERE id = ?', [payload.sub]);
+    if (user && !user.suspended) req.user = userFromRow(user);
+  } catch {
+    // Public routes continue to work without a valid optional session.
+  }
+  return next();
+}
+
+function approximateLocation(value) {
+  const parts = String(value || '').split(',').map((part) => part.trim()).filter(Boolean);
+  return parts.length > 1 ? parts.slice(-2).join(', ') : parts[0] || '';
+}
+
+function usersAreBlocked(firstUserId, secondUserId) {
+  return Boolean(get(
+    'SELECT blocker_id FROM blocked_users WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)',
+    [firstUserId, secondUserId, secondUserId, firstUserId]
+  ));
+}
+
+function impactForUser(userId) {
+  const completed = all(
+    `SELECT negotiations.*, posts.goal
+     FROM negotiations JOIN posts ON posts.id = negotiations.post_id
+     WHERE negotiations.status = 'completed' AND (negotiations.owner_id = ? OR negotiations.interested_id = ?)`,
+    [userId, userId]
+  );
+  const donated = completed.filter((item) => item.owner_id === userId && item.goal === 'Doação').length;
+  const received = completed.filter((item) => item.interested_id === userId && item.goal === 'Doação').length;
+  const exchanges = completed.filter((item) => item.goal === 'Troca').length;
+  const beneficiaries = new Set(completed.map((item) => item.owner_id === userId ? item.interested_id : item.owner_id)).size;
+  const published = get('SELECT COUNT(*) AS count FROM posts WHERE author_id = ?', [userId])?.count || 0;
+  return {
+    itemsReused: completed.length,
+    itemsDonated: donated,
+    itemsReceived: received,
+    exchanges,
+    beneficiaries,
+    publications: published,
+    recycledMaterials: 0,
+    divertedFromDisposal: completed.length,
+    estimated: true
+  };
+}
+
+function refreshUserMetrics(userId) {
+  const impact = impactForUser(userId);
+  const achievements = [];
+  if (impact.publications >= 1) achievements.push('Primeiro Desapego');
+  if (impact.itemsReused >= 5) achievements.push('Reutilizador');
+  if (impact.itemsReused >= 10) achievements.push('Economia Circular');
+  if ((get('SELECT COUNT(*) AS count FROM inspiration_products WHERE creator_id = ?', [userId])?.count || 0) >= 5) achievements.push('Criador Sustentável');
+  if ((get("SELECT COUNT(*) AS count FROM collection_point_suggestions WHERE user_id = ? AND status = 'approved'", [userId])?.count || 0) >= 1) achievements.push('Colaborador');
+  run('UPDATE users SET donations = ?, received = ?, carbon_saved_percent = ?, achievements_json = ? WHERE id = ?', [impact.itemsDonated, impact.itemsReceived, impact.itemsReused, JSON.stringify(achievements), userId]);
+  return impact;
+}
+
+function communityImpact() {
+  const completed = get("SELECT COUNT(*) AS count FROM negotiations WHERE status = 'completed'")?.count || 0;
+  const exchanges = get("SELECT COUNT(*) AS count FROM negotiations JOIN posts ON posts.id = negotiations.post_id WHERE negotiations.status = 'completed' AND posts.goal = 'Troca'")?.count || 0;
+  const beneficiaries = get("SELECT COUNT(DISTINCT interested_id) AS count FROM negotiations WHERE status = 'completed'")?.count || 0;
+  return { itemsReused: completed, divertedFromDisposal: completed, exchanges, beneficiaries, estimated: true };
 }
 
 function routeForPath(pathname) {
@@ -730,7 +1002,7 @@ async function start() {
       cep: String(cep).trim(),
       address: String(address).trim(),
       interests: Array.isArray(interests) ? interests : [interests].filter(Boolean),
-      avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=00d67d&color=ffffff&bold=true`,
+      avatar: '',
       rating: 0,
       donations: 0,
       received: 0,
@@ -758,6 +1030,7 @@ async function start() {
         JSON.stringify(user.achievements)
       ]
     );
+    run('UPDATE users SET last_active_at = ?, created_at = ? WHERE id = ?', [new Date().toISOString(), new Date().toISOString(), user.id]);
     persistDb();
 
     return res.status(201).json({ token: createToken(user.id), user: { ...user, passwordHash: undefined } });
@@ -778,12 +1051,14 @@ async function start() {
     }
 
     const normalized = userFromRow(user);
+    run('UPDATE users SET last_active_at = ? WHERE id = ?', [new Date().toISOString(), normalized.id]);
+    persistDb();
     return res.json({ token: createToken(normalized.id), user: normalized });
   });
 
-  app.get('/api/feed', (_req, res) => {
+  app.get('/api/feed', optionalAuth, (req, res) => {
     const rows = all('SELECT * FROM posts ORDER BY created_at DESC');
-    res.json({ posts: rows.map(publicPost) });
+    res.json({ posts: rows.map((row) => publicPost(row, req.user?.id)) });
   });
 
   app.get('/api/inspirations', (_req, res) => {
@@ -812,9 +1087,13 @@ async function start() {
   });
 
   app.post('/api/ai/ideas', authMiddleware, (req, res) => {
-    const prompt = String(req.body?.prompt || '').trim();
+    const prompt = String(req.body?.material || req.body?.prompt || '').trim();
+    const quantity = String(req.body?.quantity || '').trim();
+    const objective = String(req.body?.objective || '').trim();
+    const difficulty = String(req.body?.difficulty || 'Fácil').trim();
     if (!prompt) return res.status(400).json({ error: 'Describe what you have available' });
     if (prompt.length > 1000) return res.status(400).json({ error: 'Prompt must contain at most 1000 characters' });
+    if (quantity.length > 120 || objective.length > 300 || !['Fácil', 'Média', 'Avançada'].includes(difficulty)) return res.status(400).json({ error: 'Invalid idea preferences' });
     const text = prompt.toLowerCase();
     let idea;
     if (text.includes('garrafa') || text.includes('vidro')) {
@@ -826,16 +1105,39 @@ async function start() {
     } else {
       idea = { title: 'Organizador modular reutilizado', summary: 'Comece com caixas, potes ou embalagens firmes e crie um organizador para sua rotina.', materials: ['Embalagens limpas e resistentes', 'Cola ou fita forte', 'Tesoura', 'Papel, tecido ou tinta para acabamento'], steps: ['Separe embalagens por tamanho e função.', 'Lave, seque e remova partes cortantes.', 'Monte os módulos antes de colar.', 'Personalize e identifique cada compartimento.'], time: '30 a 90 minutos', care: 'Não reutilize embalagens que armazenaram produtos tóxicos ou ficaram contaminadas.' };
     }
-    res.json({ prompt, idea });
+    res.json({ prompt, quantity, objective, idea: { ...idea, difficulty, reuse: idea.summary } });
   });
 
-  app.get('/api/posts/:id', (req, res) => {
+  app.get('/api/posts/:id', optionalAuth, (req, res) => {
     const row = get('SELECT * FROM posts WHERE id = ?', [req.params.id]);
     if (!row) {
       return res.status(404).json({ error: 'Post not found' });
     }
 
-    return res.json({ post: publicPost(row) });
+    if (req.user && req.user.id !== row.author_id && !get('SELECT post_id FROM post_views WHERE post_id = ? AND user_id = ?', [row.id, req.user.id])) {
+      run('INSERT INTO post_views (post_id, user_id, viewed_at) VALUES (?, ?, ?)', [row.id, req.user.id, new Date().toISOString()]);
+      run('UPDATE posts SET views = views + 1 WHERE id = ?', [row.id]);
+      persistDb();
+    }
+    return res.json({ post: publicPost(get('SELECT * FROM posts WHERE id = ?', [row.id]), req.user?.id) });
+  });
+
+  app.get('/api/favorites', authMiddleware, (req, res) => {
+    const rows = all('SELECT posts.* FROM favorites JOIN posts ON posts.id = favorites.post_id WHERE favorites.user_id = ? ORDER BY favorites.created_at DESC', [req.user.id]);
+    res.json({ posts: rows.map((row) => publicPost(row, req.user.id)) });
+  });
+
+  app.post('/api/posts/:id/favorite', authMiddleware, (req, res) => {
+    const post = get('SELECT id FROM posts WHERE id = ?', [req.params.id]);
+    if (!post) return res.status(404).json({ error: 'Post not found' });
+    const existing = get('SELECT post_id FROM favorites WHERE user_id = ? AND post_id = ?', [req.user.id, post.id]);
+    if (existing) {
+      run('DELETE FROM favorites WHERE user_id = ? AND post_id = ?', [req.user.id, post.id]);
+    } else {
+      run('INSERT INTO favorites (user_id, post_id, created_at) VALUES (?, ?, ?)', [req.user.id, post.id, new Date().toISOString()]);
+    }
+    persistDb();
+    return res.json({ saved: !existing });
   });
 
   app.post('/api/posts/:id/like', authMiddleware, (req, res) => {
@@ -870,16 +1172,161 @@ async function start() {
     run('DELETE FROM threads WHERE post_id = ?', [req.params.id]);
     run('DELETE FROM comments WHERE post_id = ?', [req.params.id]);
     run('DELETE FROM post_likes WHERE post_id = ?', [req.params.id]);
+    run('DELETE FROM favorites WHERE post_id = ?', [req.params.id]);
+    run('DELETE FROM post_views WHERE post_id = ?', [req.params.id]);
+    const negotiationIds = all('SELECT id FROM negotiations WHERE post_id = ?', [req.params.id]).map((item) => item.id);
+    negotiationIds.forEach((id) => run('DELETE FROM reviews WHERE negotiation_id = ?', [id]));
+    run('DELETE FROM negotiations WHERE post_id = ?', [req.params.id]);
+    run('DELETE FROM reports WHERE target_type = ? AND target_id = ?', ['post', req.params.id]);
     run('DELETE FROM posts WHERE id = ?', [req.params.id]);
     persistDb();
     res.json({ ok: true });
+  });
+
+  app.put('/api/posts/:id', authMiddleware, upload.single('image'), (req, res) => {
+    const post = get('SELECT * FROM posts WHERE id = ?', [req.params.id]);
+    if (!post) return res.status(404).json({ error: 'Post not found' });
+    if (post.author_id !== req.user.id) return res.status(403).json({ error: 'You can only edit your own posts' });
+    if (['Doado', 'Trocado', 'Encerrado'].includes(post.status)) return res.status(400).json({ error: 'Completed posts cannot be edited' });
+    const title = typeof req.body?.title === 'string' ? req.body.title.trim() : post.title;
+    const description = typeof req.body?.description === 'string' ? req.body.description.trim() : post.description;
+    const category = typeof req.body?.category === 'string' ? req.body.category.trim() : post.category;
+    const condition = typeof req.body?.condition === 'string' ? req.body.condition.trim() : post.condition;
+    const goal = typeof req.body?.goal === 'string' ? req.body.goal.trim() : post.goal;
+    const location = typeof req.body?.location === 'string' ? req.body.location.trim() : post.location;
+    if (!title || !description || !category) return res.status(400).json({ error: 'Title, description and category are required' });
+    if (title.length > 140 || description.length > 3000 || category.length > 60 || condition.length > 60 || goal.length > 40 || location.length > 160) return res.status(400).json({ error: 'One or more fields exceed the allowed length' });
+    const imageUrl = req.file ? `/uploads/${req.file.filename}` : post.image_url;
+    const updatedAt = new Date().toISOString();
+    run('UPDATE posts SET title = ?, description = ?, category = ?, condition = ?, goal = ?, location = ?, image_url = ?, updated_at = ? WHERE id = ?', [title, description, category, condition, goal, location, imageUrl, updatedAt, post.id]);
+    persistDb();
+    return res.json({ post: publicPost(get('SELECT * FROM posts WHERE id = ?', [post.id]), req.user.id) });
+  });
+
+  app.get('/api/posts/:id/interested', authMiddleware, (req, res) => {
+    const post = get('SELECT * FROM posts WHERE id = ?', [req.params.id]);
+    if (!post) return res.status(404).json({ error: 'Post not found' });
+    if (post.author_id !== req.user.id) return res.status(403).json({ error: 'Only the owner can view interested users' });
+    const negotiations = all('SELECT * FROM negotiations WHERE post_id = ? ORDER BY created_at DESC', [post.id]).map((item) => {
+      const user = get('SELECT id, name, city, avatar FROM users WHERE id = ?', [item.interested_id]);
+      return { id: item.id, status: item.status, createdAt: item.created_at, threadId: item.thread_id, user: user ? { ...user, avatar: safeAvatar(user.avatar) } : null };
+    });
+    return res.json({ negotiations });
+  });
+
+  app.get('/api/posts/:id/negotiation', authMiddleware, (req, res) => {
+    const post = get('SELECT id, author_id FROM posts WHERE id = ?', [req.params.id]);
+    if (!post) return res.status(404).json({ error: 'Post not found' });
+    const negotiation = get('SELECT * FROM negotiations WHERE post_id = ? AND (owner_id = ? OR interested_id = ?) ORDER BY updated_at DESC LIMIT 1', [post.id, req.user.id, req.user.id]);
+    return res.json({ negotiation: negotiation ? { id: negotiation.id, status: negotiation.status, ownerId: negotiation.owner_id, interestedId: negotiation.interested_id, completedAt: negotiation.completed_at } : null });
+  });
+
+  app.post('/api/posts/:id/reserve', authMiddleware, (req, res) => {
+    const post = get('SELECT * FROM posts WHERE id = ?', [req.params.id]);
+    const interestedId = String(req.body?.interestedId || '');
+    if (!post) return res.status(404).json({ error: 'Post not found' });
+    if (post.author_id !== req.user.id) return res.status(403).json({ error: 'Only the owner can reserve this post' });
+    if (!['Disponível', 'Reservado'].includes(post.status || 'Disponível')) return res.status(400).json({ error: 'This post is no longer available' });
+    const negotiation = get('SELECT * FROM negotiations WHERE post_id = ? AND interested_id = ?', [post.id, interestedId]);
+    if (!negotiation || negotiation.status === 'cancelled') return res.status(400).json({ error: 'Choose a user who demonstrated interest' });
+    const now = new Date().toISOString();
+    run("UPDATE negotiations SET status = 'interested', updated_at = ? WHERE post_id = ? AND status = 'reserved'", [now, post.id]);
+    run("UPDATE negotiations SET status = 'reserved', updated_at = ? WHERE id = ?", [now, negotiation.id]);
+    run("UPDATE posts SET status = 'Reservado', reserved_by = ?, updated_at = ? WHERE id = ?", [interestedId, now, post.id]);
+    notification(interestedId, 'negotiation', 'Item reservado para você', `Você foi selecionado para ${post.title}.`, `/anuncios/${post.id}`);
+    persistDb();
+    return res.json({ post: publicPost(get('SELECT * FROM posts WHERE id = ?', [post.id]), req.user.id) });
+  });
+
+  app.post('/api/posts/:id/complete', authMiddleware, (req, res) => {
+    const post = get('SELECT * FROM posts WHERE id = ?', [req.params.id]);
+    const outcome = String(req.body?.outcome || '').trim();
+    if (!post) return res.status(404).json({ error: 'Post not found' });
+    if (post.author_id !== req.user.id) return res.status(403).json({ error: 'Only the owner can complete this post' });
+    if (!post.reserved_by || post.status !== 'Reservado') return res.status(400).json({ error: 'Reserve the item before completing the negotiation' });
+    if (!['Doado', 'Trocado'].includes(outcome)) return res.status(400).json({ error: 'Choose Doado or Trocado as the outcome' });
+    const negotiation = get("SELECT * FROM negotiations WHERE post_id = ? AND interested_id = ? AND status = 'reserved'", [post.id, post.reserved_by]);
+    if (!negotiation) return res.status(400).json({ error: 'Reserved negotiation not found' });
+    const now = new Date().toISOString();
+    run("UPDATE negotiations SET status = 'completed', completed_at = ?, updated_at = ? WHERE id = ?", [now, now, negotiation.id]);
+    run('UPDATE posts SET status = ?, completed_with = ?, completed_at = ?, updated_at = ? WHERE id = ?', [outcome, post.reserved_by, now, now, post.id]);
+    refreshUserMetrics(post.author_id);
+    refreshUserMetrics(post.reserved_by);
+    notification(post.reserved_by, 'negotiation', 'Negociação concluída', `A negociação de ${post.title} foi concluída. Avalie a experiência.`, `/anuncios/${post.id}`);
+    persistDb();
+    return res.json({ post: publicPost(get('SELECT * FROM posts WHERE id = ?', [post.id]), req.user.id), negotiationId: negotiation.id });
+  });
+
+  app.patch('/api/posts/:id/status', authMiddleware, (req, res) => {
+    const post = get('SELECT * FROM posts WHERE id = ?', [req.params.id]);
+    const status = String(req.body?.status || '').trim();
+    if (!post) return res.status(404).json({ error: 'Post not found' });
+    if (post.author_id !== req.user.id) return res.status(403).json({ error: 'Only the owner can change this status' });
+    if (!['Disponível', 'Encerrado'].includes(status)) return res.status(400).json({ error: 'Use the reservation or completion flow for this status' });
+    const now = new Date().toISOString();
+    run('UPDATE posts SET status = ?, reserved_by = CASE WHEN ? = ? THEN NULL ELSE reserved_by END, updated_at = ? WHERE id = ?', [status, status, 'Disponível', now, post.id]);
+    if (status === 'Disponível') run("UPDATE negotiations SET status = 'interested', updated_at = ? WHERE post_id = ? AND status = 'reserved'", [now, post.id]);
+    persistDb();
+    return res.json({ post: publicPost(get('SELECT * FROM posts WHERE id = ?', [post.id]), req.user.id) });
+  });
+
+  app.post('/api/negotiations/:id/reviews', authMiddleware, (req, res) => {
+    const negotiation = get('SELECT * FROM negotiations WHERE id = ?', [req.params.id]);
+    const rating = Number(req.body?.rating);
+    const comment = String(req.body?.comment || '').trim();
+    if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
+    if (negotiation.status !== 'completed') return res.status(400).json({ error: 'Reviews are available after completion only' });
+    if (![negotiation.owner_id, negotiation.interested_id].includes(req.user.id)) return res.status(403).json({ error: 'Only negotiation participants can review' });
+    if (!Number.isInteger(rating) || rating < 1 || rating > 5 || comment.length > 500) return res.status(400).json({ error: 'Rating must be between 1 and 5 and comment up to 500 characters' });
+    if (get('SELECT id FROM reviews WHERE negotiation_id = ? AND reviewer_id = ?', [negotiation.id, req.user.id])) return res.status(409).json({ error: 'You have already reviewed this negotiation' });
+    const revieweeId = negotiation.owner_id === req.user.id ? negotiation.interested_id : negotiation.owner_id;
+    const review = { id: uid('review'), negotiation_id: negotiation.id, reviewer_id: req.user.id, reviewee_id: revieweeId, rating, comment, created_at: new Date().toISOString() };
+    run('INSERT INTO reviews (id, negotiation_id, reviewer_id, reviewee_id, rating, comment, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', Object.values(review));
+    const aggregate = get('SELECT AVG(rating) AS average FROM reviews WHERE reviewee_id = ?', [revieweeId]);
+    run('UPDATE users SET rating = ? WHERE id = ?', [Number(aggregate?.average || 0), revieweeId]);
+    notification(revieweeId, 'review', 'Você recebeu uma avaliação', `${req.user.name} avaliou uma negociação com você.`, '/perfil');
+    persistDb();
+    return res.status(201).json({ review: { ...review, reviewerName: req.user.name } });
+  });
+
+  app.get('/api/users/:id/reviews', (req, res) => {
+    const user = get('SELECT id, name FROM users WHERE id = ?', [req.params.id]);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const reviews = all('SELECT reviews.id, reviews.rating, reviews.comment, reviews.created_at, users.name AS reviewer_name FROM reviews JOIN users ON users.id = reviews.reviewer_id WHERE reviews.reviewee_id = ? ORDER BY reviews.created_at DESC LIMIT 50', [user.id]);
+    const aggregate = get('SELECT ROUND(AVG(rating), 1) AS average, COUNT(*) AS count FROM reviews WHERE reviewee_id = ?', [user.id]);
+    return res.json({ reputation: { rating: Number(aggregate?.average || 0), count: Number(aggregate?.count || 0) }, reviews: reviews.map((item) => ({ id: item.id, rating: item.rating, comment: item.comment, createdAt: item.created_at, reviewerName: item.reviewer_name })) });
+  });
+
+  app.post('/api/reports', authMiddleware, (req, res) => {
+    const targetType = String(req.body?.targetType || '').trim();
+    const targetId = String(req.body?.targetId || '').trim();
+    const reason = String(req.body?.reason || '').trim();
+    const details = String(req.body?.details || '').trim();
+    const allowedTypes = ['post', 'comment', 'user', 'content'];
+    const allowedReasons = ['Spam', 'Informação falsa', 'Conteúdo impróprio', 'Tentativa de golpe', 'Material proibido', 'Comportamento ofensivo', 'Outro'];
+    if (!allowedTypes.includes(targetType) || !targetId || !allowedReasons.includes(reason) || details.length > 1000) return res.status(400).json({ error: 'Invalid report data' });
+    if (get('SELECT id FROM reports WHERE reporter_id = ? AND target_type = ? AND target_id = ?', [req.user.id, targetType, targetId])) return res.status(409).json({ error: 'You have already reported this content' });
+    run('INSERT INTO reports (id, reporter_id, target_type, target_id, reason, details, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)', [uid('report'), req.user.id, targetType, targetId, reason, details, 'pending', new Date().toISOString()]);
+    persistDb();
+    return res.status(201).json({ ok: true });
+  });
+
+  app.post('/api/users/:id/block', authMiddleware, (req, res) => {
+    const blockedId = req.params.id;
+    if (blockedId === req.user.id) return res.status(400).json({ error: 'You cannot block yourself' });
+    if (!get('SELECT id FROM users WHERE id = ?', [blockedId])) return res.status(404).json({ error: 'User not found' });
+    const existing = get('SELECT blocked_id FROM blocked_users WHERE blocker_id = ? AND blocked_id = ?', [req.user.id, blockedId]);
+    if (existing) run('DELETE FROM blocked_users WHERE blocker_id = ? AND blocked_id = ?', [req.user.id, blockedId]);
+    else run('INSERT INTO blocked_users (blocker_id, blocked_id, created_at) VALUES (?, ?, ?)', [req.user.id, blockedId, new Date().toISOString()]);
+    persistDb();
+    return res.json({ blocked: !existing });
   });
 
   app.get('/api/posts/:id/comments', (_req, res) => {
     const post = get('SELECT id FROM posts WHERE id = ?', [_req.params.id]);
     if (!post) return res.status(404).json({ error: 'Post not found' });
     const comments = all('SELECT comments.id, comments.text, comments.created_at, users.name, users.avatar FROM comments JOIN users ON users.id = comments.author_id WHERE post_id = ? ORDER BY comments.created_at ASC', [_req.params.id]);
-    res.json({ comments });
+    res.json({ comments: comments.map((comment) => ({ ...comment, avatar: safeAvatar(comment.avatar) })) });
   });
 
   app.post('/api/posts/:id/comments', authMiddleware, (req, res) => {
@@ -952,6 +1399,8 @@ async function start() {
     const post = get('SELECT * FROM posts WHERE id = ?', [req.body?.postId]);
     if (!post) return res.status(404).json({ error: 'Post not found' });
     if (post.author_id === req.user.id) return res.status(400).json({ error: 'You cannot contact yourself' });
+    if ((post.status || 'Disponível') !== 'Disponível') return res.status(400).json({ error: 'This item is not available for new conversations' });
+    if (usersAreBlocked(req.user.id, post.author_id)) return res.status(403).json({ error: 'A blocked user cannot start a conversation' });
 
     const rows = all('SELECT * FROM threads');
     const existing = rows.find((row) => {
@@ -962,7 +1411,8 @@ async function start() {
 
     const thread = { id: uid('thread'), post_id: post.id, participants_json: JSON.stringify([req.user.id, post.author_id]), unread_count: 0, last_message_at: new Date().toISOString() };
     run('INSERT INTO threads (id, post_id, participants_json, unread_count, last_message_at) VALUES (?, ?, ?, ?, ?)', [thread.id, thread.post_id, thread.participants_json, thread.unread_count, thread.last_message_at]);
-    run('INSERT INTO notifications (id, user_id, type, title, text, created_at) VALUES (?, ?, ?, ?, ?, ?)', [uid('notification'), post.author_id, 'message', 'Nova conversa', `${req.user.name} demonstrou interesse em "${post.title}".`, thread.last_message_at]);
+    run("INSERT INTO negotiations (id, post_id, owner_id, interested_id, thread_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'interested', ?, ?)", [uid('negotiation'), post.id, post.author_id, req.user.id, thread.id, thread.last_message_at, thread.last_message_at]);
+    notification(post.author_id, 'interest', 'Novo interessado', `${req.user.name} demonstrou interesse em "${post.title}".`, `/anuncios/${post.id}`);
     persistDb();
     return res.status(201).json({ thread: threadSummary(thread, req.user.id) });
   });
@@ -1000,6 +1450,10 @@ async function start() {
     if (!JSON.parse(thread.participants_json || '[]').includes(req.user.id)) {
       return res.status(403).json({ error: 'Thread access denied' });
     }
+    const recipientId = JSON.parse(thread.participants_json || '[]').find((id) => id !== req.user.id);
+    if (recipientId && usersAreBlocked(req.user.id, recipientId)) {
+      return res.status(403).json({ error: 'You cannot message a blocked user' });
+    }
 
     const sentAt = new Date().toISOString();
     const message = {
@@ -1017,9 +1471,8 @@ async function start() {
       [message.id, message.thread_id, message.sender_id, message.text, message.sent_at, message.status]
     );
     run('UPDATE threads SET last_message_at = ? WHERE id = ?', [sentAt, thread.id]);
-    const recipientId = JSON.parse(thread.participants_json || '[]').find((id) => id !== req.user.id);
     if (recipientId) {
-      run('INSERT INTO notifications (id, user_id, type, title, text, created_at) VALUES (?, ?, ?, ?, ?, ?)', [uid('notification'), recipientId, 'message', 'Nova mensagem', `${req.user.name} enviou uma mensagem.`, sentAt]);
+      notification(recipientId, 'message', 'Nova mensagem', `${req.user.name} enviou uma mensagem.`, `/mensagens/ana?thread=${thread.id}`);
     }
     persistDb();
 
@@ -1027,7 +1480,7 @@ async function start() {
   });
 
   app.get('/api/notifications', authMiddleware, (req, res) => {
-    const notifications = all('SELECT id, type, title, text, created_at AS createdAt, read_at AS readAt FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 50', [req.user.id]);
+    const notifications = all('SELECT id, type, title, text, link, created_at AS createdAt, read_at AS readAt FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 50', [req.user.id]);
     res.json({ notifications, unreadCount: notifications.filter((notification) => !notification.readAt).length });
   });
 
@@ -1037,16 +1490,38 @@ async function start() {
     res.json({ ok: true });
   });
 
+  app.post('/api/notifications/:id/read', authMiddleware, (req, res) => {
+    run('UPDATE notifications SET read_at = ? WHERE id = ? AND user_id = ? AND read_at IS NULL', [new Date().toISOString(), req.params.id, req.user.id]);
+    persistDb();
+    res.json({ ok: true });
+  });
+
   app.get('/api/collection-points', (_req, res) => {
     const rows = all('SELECT * FROM collection_points ORDER BY name ASC');
-    res.json({ collectionPoints: rows.map((row) => ({ id: row.id, name: row.name, categories: JSON.parse(row.categories_json || '[]'), hours: row.hours, location: row.location, status: row.status })) });
+    res.json({ collectionPoints: rows.map((row) => ({ id: row.id, name: row.name, categories: jsonArray(row.categories_json), hours: row.hours, location: row.location, status: row.status, origin: row.origin || 'ReUsa+', lastUpdated: row.last_updated || null, latitude: row.latitude, longitude: row.longitude, verified: (row.origin || '').includes('ReUsa') })) });
+  });
+
+  app.post('/api/collection-points/suggestions', authMiddleware, (req, res) => {
+    const name = String(req.body?.name || '').trim();
+    const location = String(req.body?.location || '').trim();
+    const hours = String(req.body?.hours || '').trim();
+    const categories = Array.isArray(req.body?.categories) ? req.body.categories.map((item) => String(item).trim()).filter(Boolean) : [];
+    const latitude = Number(req.body?.latitude);
+    const longitude = Number(req.body?.longitude);
+    if (!name || !location || !categories.length || name.length > 120 || location.length > 200 || hours.length > 100 || categories.length > 12 || categories.some((item) => item.length > 40)) return res.status(400).json({ error: 'Provide a name, location and accepted materials' });
+    const duplicate = get("SELECT id FROM collection_point_suggestions WHERE user_id = ? AND lower(name) = lower(?) AND lower(location) = lower(?) AND status = 'pending'", [req.user.id, name, location]);
+    if (duplicate) return res.status(409).json({ error: 'You already suggested this collection point' });
+    const suggestion = { id: uid('point-suggestion'), user_id: req.user.id, name, categories_json: JSON.stringify(categories), hours, location, latitude: Number.isFinite(latitude) ? latitude : null, longitude: Number.isFinite(longitude) ? longitude : null, status: 'pending', created_at: new Date().toISOString() };
+    run('INSERT INTO collection_point_suggestions (id, user_id, name, categories_json, hours, location, latitude, longitude, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', Object.values(suggestion));
+    persistDb();
+    return res.status(201).json({ suggestion: { ...suggestion, categories } });
   });
 
   app.get('/api/collection-points/nearby', async (req, res) => {
     const city = String(req.query.city || '').trim();
     if (!city) return res.status(400).json({ error: 'City is required' });
     const cityName = city.split(',')[0].trim();
-    const registered = all('SELECT * FROM collection_points WHERE lower(location) LIKE lower(?) ORDER BY name ASC', [`%${cityName}%`]).map((row) => ({ id: row.id, name: row.name, categories: JSON.parse(row.categories_json || '[]'), hours: row.hours, location: row.location, status: row.status, source: 'Cadastrado no Reusa+' }));
+    const registered = all('SELECT * FROM collection_points WHERE lower(location) LIKE lower(?) ORDER BY name ASC', [`%${cityName}%`]).map((row) => ({ id: row.id, name: row.name, categories: jsonArray(row.categories_json), hours: row.hours, location: row.location, status: row.status, source: row.origin || 'Cadastrado no Reusa+', origin: row.origin || 'ReUsa+', lastUpdated: row.last_updated || null, latitude: row.latitude, longitude: row.longitude, verified: (row.origin || '').includes('ReUsa') }));
     try {
       const geocodeResponse = await fetchWithTimeout(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=br&q=${encodeURIComponent(city)}`, { headers: { 'User-Agent': 'ReusaPlus/1.0 contact@reusa.local' } });
       const places = await geocodeResponse.json();
@@ -1070,16 +1545,27 @@ async function start() {
 
   app.get('/api/profile', authMiddleware, (req, res) => {
     const posts = all('SELECT * FROM posts WHERE author_id = ?', [req.user.id]);
+    const impact = impactForUser(req.user.id);
+    const reputation = get('SELECT ROUND(AVG(rating), 1) AS average, COUNT(*) AS count FROM reviews WHERE reviewee_id = ?', [req.user.id]);
+    const reviews = all('SELECT reviews.id, reviews.rating, reviews.comment, reviews.created_at, users.name AS reviewer_name FROM reviews JOIN users ON users.id = reviews.reviewer_id WHERE reviews.reviewee_id = ? ORDER BY reviews.created_at DESC LIMIT 10', [req.user.id]);
     res.json({
       user: req.user,
       stats: {
-        donations: req.user.donations ?? posts.length,
-        received: req.user.received ?? 0,
-        rating: req.user.rating ?? 0,
+        donations: impact.itemsDonated,
+        received: impact.itemsReceived,
+        rating: Number(reputation?.average || 0),
         carbonSavedPercent: req.user.carbonSavedPercent ?? 0
       },
       achievements: req.user.achievements || []
+      , impact,
+      reputation: { rating: Number(reputation?.average || 0), count: Number(reputation?.count || 0) },
+      reviews: reviews.map((item) => ({ id: item.id, rating: item.rating, comment: item.comment, createdAt: item.created_at, reviewerName: item.reviewer_name })),
+      posts: posts.map((post) => publicPost(post, req.user.id))
     });
+  });
+
+  app.get('/api/impact/community', (_req, res) => {
+    res.json({ impact: communityImpact() });
   });
 
   app.put('/api/profile', authMiddleware, (req, res) => {
@@ -1099,6 +1585,142 @@ async function start() {
 
     const updated = get('SELECT * FROM users WHERE id = ?', [req.user.id]);
     return res.json({ user: userFromRow(updated) });
+  });
+
+  app.put('/api/profile/preferences', authMiddleware, (req, res) => {
+    const preferences = Array.isArray(req.body?.preferences) ? req.body.preferences.map((item) => String(item)).filter((item) => ['Curtidas', 'Comentários', 'Interesse', 'Mensagens', 'Negociações', 'Avaliações', 'Sistema'].includes(item)) : [];
+    run('UPDATE users SET notification_preferences_json = ? WHERE id = ?', [JSON.stringify([...new Set(preferences)]), req.user.id]);
+    persistDb();
+    return res.json({ preferences: [...new Set(preferences)] });
+  });
+
+  app.put('/api/profile/password', authMiddleware, (req, res) => {
+    const currentPassword = String(req.body?.currentPassword || '');
+    const newPassword = String(req.body?.newPassword || '');
+    const user = get('SELECT password_hash FROM users WHERE id = ?', [req.user.id]);
+    if (!user || !verifyPassword(currentPassword, user.password_hash)) return res.status(400).json({ error: 'Current password is incorrect' });
+    if (newPassword.length < 8 || newPassword.length > 200) return res.status(400).json({ error: 'New password must contain between 8 and 200 characters' });
+    run('UPDATE users SET password_hash = ? WHERE id = ?', [passwordHash(newPassword), req.user.id]);
+    persistDb();
+    return res.json({ ok: true });
+  });
+
+  app.delete('/api/profile', authMiddleware, (req, res) => {
+    const confirmation = String(req.body?.confirmation || '').trim();
+    const password = String(req.body?.password || '');
+    const user = get('SELECT password_hash FROM users WHERE id = ?', [req.user.id]);
+    if (confirmation !== 'EXCLUIR' || !user || !verifyPassword(password, user.password_hash)) return res.status(400).json({ error: 'Confirm deletion with EXCLUIR and your current password' });
+    const ownedPosts = all('SELECT id FROM posts WHERE author_id = ?', [req.user.id]).map((post) => post.id);
+    ownedPosts.forEach((postId) => {
+      run('DELETE FROM favorites WHERE post_id = ?', [postId]);
+      run('DELETE FROM post_views WHERE post_id = ?', [postId]);
+      run('DELETE FROM post_likes WHERE post_id = ?', [postId]);
+      run('DELETE FROM comments WHERE post_id = ?', [postId]);
+      run('DELETE FROM reports WHERE target_type = ? AND target_id = ?', ['post', postId]);
+      run('DELETE FROM negotiations WHERE post_id = ?', [postId]);
+      run('DELETE FROM posts WHERE id = ?', [postId]);
+    });
+    run('DELETE FROM favorites WHERE user_id = ?', [req.user.id]);
+    run('DELETE FROM post_views WHERE user_id = ?', [req.user.id]);
+    run('DELETE FROM post_likes WHERE user_id = ?', [req.user.id]);
+    run('DELETE FROM comments WHERE author_id = ?', [req.user.id]);
+    run('DELETE FROM reviews WHERE reviewer_id = ? OR reviewee_id = ?', [req.user.id, req.user.id]);
+    run('DELETE FROM reports WHERE reporter_id = ?', [req.user.id]);
+    run('DELETE FROM blocked_users WHERE blocker_id = ? OR blocked_id = ?', [req.user.id, req.user.id]);
+    run('DELETE FROM notifications WHERE user_id = ?', [req.user.id]);
+    run('DELETE FROM collection_point_suggestions WHERE user_id = ?', [req.user.id]);
+    run('DELETE FROM users WHERE id = ?', [req.user.id]);
+    persistDb();
+    return res.json({ ok: true });
+  });
+
+  app.get('/api/admin/dashboard', authMiddleware, adminMiddleware, (_req, res) => {
+    const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const totalUsers = get('SELECT COUNT(*) AS count FROM users')?.count || 0;
+    const activeUsers = get('SELECT COUNT(*) AS count FROM users WHERE suspended = 0 AND last_active_at >= ?', [since])?.count || 0;
+    const totalPosts = get('SELECT COUNT(*) AS count FROM posts')?.count || 0;
+    const activePosts = get("SELECT COUNT(*) AS count FROM posts WHERE status IN ('Disponível', 'Reservado')")?.count || 0;
+    const donations = get("SELECT COUNT(*) AS count FROM posts WHERE status = 'Doado'")?.count || 0;
+    const exchanges = get("SELECT COUNT(*) AS count FROM posts WHERE status = 'Trocado'")?.count || 0;
+    const collectionPoints = get('SELECT COUNT(*) AS count FROM collection_points')?.count || 0;
+    const reports = get("SELECT COUNT(*) AS count FROM reports WHERE status = 'pending'")?.count || 0;
+    const newUsers = get('SELECT COUNT(*) AS count FROM users WHERE last_active_at >= ?', [since])?.count || 0;
+    const categories = all('SELECT category, COUNT(*) AS count FROM posts GROUP BY category ORDER BY count DESC LIMIT 8');
+    return res.json({ totals: { totalUsers, activeUsers, totalPosts, activePosts, donations, exchanges, collectionPoints, reports, newUsers }, categories, impact: communityImpact() });
+  });
+
+  app.get('/api/admin/users', authMiddleware, adminMiddleware, (req, res) => {
+    const query = String(req.query.q || '').trim();
+    const rows = query ? all('SELECT id, name, email, city, role, suspended, created_at, last_active_at FROM users WHERE name LIKE ? OR email LIKE ? ORDER BY name ASC LIMIT 100', [`%${query}%`, `%${query}%`]) : all('SELECT id, name, email, city, role, suspended, created_at, last_active_at FROM users ORDER BY name ASC LIMIT 100');
+    return res.json({ users: rows.map((row) => ({ id: row.id, name: row.name, email: row.email, city: row.city, role: row.role || 'user', suspended: Boolean(row.suspended), createdAt: row.created_at || null, lastActiveAt: row.last_active_at || null })) });
+  });
+
+  app.patch('/api/admin/users/:id/suspension', authMiddleware, adminMiddleware, (req, res) => {
+    const suspended = Boolean(req.body?.suspended);
+    if (req.params.id === req.user.id) return res.status(400).json({ error: 'You cannot suspend your own account' });
+    const user = get('SELECT id FROM users WHERE id = ?', [req.params.id]);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    run('UPDATE users SET suspended = ? WHERE id = ?', [suspended ? 1 : 0, user.id]);
+    persistDb();
+    return res.json({ suspended });
+  });
+
+  app.get('/api/admin/posts', authMiddleware, adminMiddleware, (_req, res) => {
+    const rows = all('SELECT * FROM posts ORDER BY created_at DESC LIMIT 200');
+    return res.json({ posts: rows.map((row) => publicPost(row)) });
+  });
+
+  app.delete('/api/admin/posts/:id', authMiddleware, adminMiddleware, (req, res) => {
+    const post = get('SELECT id FROM posts WHERE id = ?', [req.params.id]);
+    if (!post) return res.status(404).json({ error: 'Post not found' });
+    run('DELETE FROM favorites WHERE post_id = ?', [post.id]);
+    run('DELETE FROM post_views WHERE post_id = ?', [post.id]);
+    run('DELETE FROM post_likes WHERE post_id = ?', [post.id]);
+    run('DELETE FROM comments WHERE post_id = ?', [post.id]);
+    const negotiationIds = all('SELECT id FROM negotiations WHERE post_id = ?', [post.id]).map((item) => item.id);
+    negotiationIds.forEach((id) => run('DELETE FROM reviews WHERE negotiation_id = ?', [id]));
+    run('DELETE FROM negotiations WHERE post_id = ?', [post.id]);
+    run('DELETE FROM reports WHERE target_type = ? AND target_id = ?', ['post', post.id]);
+    run('DELETE FROM posts WHERE id = ?', [post.id]);
+    persistDb();
+    return res.json({ ok: true });
+  });
+
+  app.get('/api/admin/reports', authMiddleware, adminMiddleware, (_req, res) => {
+    const reports = all('SELECT reports.*, users.name AS reporter_name FROM reports JOIN users ON users.id = reports.reporter_id ORDER BY CASE reports.status WHEN \'pending\' THEN 0 ELSE 1 END, reports.created_at DESC LIMIT 200');
+    return res.json({ reports: reports.map((item) => ({ id: item.id, targetType: item.target_type, targetId: item.target_id, reason: item.reason, details: item.details, status: item.status, createdAt: item.created_at, reporterName: item.reporter_name })) });
+  });
+
+  app.patch('/api/admin/reports/:id', authMiddleware, adminMiddleware, (req, res) => {
+    const status = String(req.body?.status || '').trim();
+    if (!['pending', 'reviewed', 'resolved', 'dismissed'].includes(status)) return res.status(400).json({ error: 'Invalid report status' });
+    const report = get('SELECT id FROM reports WHERE id = ?', [req.params.id]);
+    if (!report) return res.status(404).json({ error: 'Report not found' });
+    run('UPDATE reports SET status = ?, reviewed_at = ?, reviewed_by = ? WHERE id = ?', [status, new Date().toISOString(), req.user.id, report.id]);
+    persistDb();
+    return res.json({ ok: true });
+  });
+
+  app.get('/api/admin/collection-points', authMiddleware, adminMiddleware, (_req, res) => {
+    const points = all('SELECT * FROM collection_points ORDER BY name ASC').map((row) => ({ id: row.id, name: row.name, categories: jsonArray(row.categories_json), hours: row.hours, location: row.location, status: row.status, origin: row.origin, lastUpdated: row.last_updated, latitude: row.latitude, longitude: row.longitude }));
+    const suggestions = all('SELECT collection_point_suggestions.*, users.name AS user_name FROM collection_point_suggestions JOIN users ON users.id = collection_point_suggestions.user_id ORDER BY collection_point_suggestions.created_at DESC').map((row) => ({ id: row.id, name: row.name, categories: jsonArray(row.categories_json), hours: row.hours, location: row.location, status: row.status, createdAt: row.created_at, userName: row.user_name, latitude: row.latitude, longitude: row.longitude }));
+    return res.json({ points, suggestions });
+  });
+
+  app.patch('/api/admin/collection-point-suggestions/:id', authMiddleware, adminMiddleware, (req, res) => {
+    const decision = String(req.body?.decision || '').trim();
+    if (!['approved', 'rejected'].includes(decision)) return res.status(400).json({ error: 'Invalid decision' });
+    const suggestion = get('SELECT * FROM collection_point_suggestions WHERE id = ?', [req.params.id]);
+    if (!suggestion || suggestion.status !== 'pending') return res.status(404).json({ error: 'Pending suggestion not found' });
+    const now = new Date().toISOString();
+    run('UPDATE collection_point_suggestions SET status = ?, reviewed_at = ?, reviewed_by = ? WHERE id = ?', [decision, now, req.user.id, suggestion.id]);
+    if (decision === 'approved') {
+      run('INSERT INTO collection_points (id, name, categories_json, hours, location, status, origin, last_updated, latitude, longitude) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', [uid('point'), suggestion.name, suggestion.categories_json, suggestion.hours || 'Horário não informado', suggestion.location, 'Aberto', 'Comunidade ReUsa+', now, suggestion.latitude, suggestion.longitude]);
+      refreshUserMetrics(suggestion.user_id);
+      notification(suggestion.user_id, 'system', 'Ponto de coleta aprovado', `Sua sugestão ${suggestion.name} agora aparece no mapa.`, '/mapa');
+    }
+    persistDb();
+    return res.json({ ok: true });
   });
 
   app.use((error, req, res, next) => {
