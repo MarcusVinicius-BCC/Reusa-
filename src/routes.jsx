@@ -72,7 +72,7 @@ function ScreenRouter({ location, navigate }) {
     case '/':
       return <Navigate to="/splash" replace />;
     case '/splash':
-      return <SplashScreen onCreateAccount={() => navigate('/criar-conta')} onLogin={() => navigate('/login')} />;
+      return <SplashScreen onCreateAccount={() => navigate('/criar-conta')} onLogin={() => navigate('/login')} onExplore={() => navigate('/feed')} onAbout={() => navigate('/sobre')} />;
     case '/onboarding':
       return <Navigate to="/login" replace />;
     case '/login':
@@ -155,20 +155,44 @@ function BottomNav({ nav, active }) {
   );
 }
 
-function SplashScreen({ onCreateAccount, onLogin }) {
+function SplashScreen({ onCreateAccount, onLogin, onExplore, onAbout }) {
   return (
-    <main className="center-stage splash-stage">
-      <div className="splash-orb" />
-      <div className="logo-badge">
-        <img src="https://lh3.googleusercontent.com/aida-public/AB6AXuBOFtyytVWbcN0yp6q-fl1hVuGZc2T-IkiFJZf1JbR8gICaEsLcjvzh0cLTnlkKeFXV0eKB8KGySBJZVI32kemRvuIBroTd7scTzBKsKAYOVCfa27zNu5caOKkTqvovxOyQ64Hoh9gB58Eu8W4bd4FZS_59Jns0yBzldcGWwM1XKO7g8GkM1st1X_H57AEQuitrAETSMgGC_lQ-c8kQ1BhbADOsMOBfKWBjs-xlaG5uL2-op8eOGdUN" alt="REUSA+" />
-      </div>
-      <h1>REUSA+</h1>
-      <p>Desapegue. Reutilize. Reconecte.</p>
-      <div className="splash-actions">
-        <button className="primary-btn full" onClick={onCreateAccount}>Criar nova conta</button>
-        <p>Já tem uma conta? <button className="text-btn" onClick={onLogin}>Entrar</button></p>
-        <small>Ao continuar, você concorda com os termos de uso da REUSA+.</small>
-      </div>
+    <main className="welcome-screen">
+      <div className="welcome-glow welcome-glow-one" />
+      <div className="welcome-glow welcome-glow-two" />
+      <header className="welcome-header">
+        <div className="welcome-brand" aria-label="ReUsa+">
+          <span className="material-symbols-outlined">recycling</span><strong>REUSA<span>+</span></strong>
+        </div>
+        <button className="welcome-about" onClick={onAbout}>Sobre</button>
+      </header>
+
+      <section className="welcome-hero">
+        <span className="welcome-eyebrow"><span className="material-symbols-outlined">eco</span> Comunidade circular</span>
+        <h1>O que você não usa pode ganhar um <em>novo começo.</em></h1>
+        <p>Doe, troque e descubra objetos que ainda têm muito a oferecer — perto de você.</p>
+      </section>
+
+      <section className="welcome-showcase" aria-label="Como o ReUsa+ conecta pessoas">
+        <div className="showcase-item showcase-item-top"><span className="material-symbols-outlined">chair</span><div><strong>Uma cadeira</strong><small>pronta para recomeçar</small></div></div>
+        <div className="showcase-cycle"><span className="material-symbols-outlined">sync</span></div>
+        <div className="showcase-item showcase-item-bottom"><span className="material-symbols-outlined">volunteer_activism</span><div><strong>Um novo lar</strong><small>na sua comunidade</small></div></div>
+        <div className="showcase-leaf leaf-one">✦</div><div className="showcase-leaf leaf-two">✦</div>
+      </section>
+
+      <section className="welcome-steps" aria-label="Como funciona">
+        <div><span className="material-symbols-outlined">add_box</span><p><strong>Publique</strong> o que não usa</p></div>
+        <div><span className="material-symbols-outlined">forum</span><p><strong>Converse</strong> com interessados</p></div>
+        <div><span className="material-symbols-outlined">handshake</span><p><strong>Transforme</strong> o descarte</p></div>
+      </section>
+
+      <section className="welcome-actions">
+        <button className="primary-btn full welcome-main-action" onClick={onCreateAccount}>Criar minha conta <span className="material-symbols-outlined">arrow_forward</span></button>
+        <button className="welcome-explore" onClick={onExplore}><span className="material-symbols-outlined">travel_explore</span> Explorar anúncios sem entrar</button>
+        <p>Já faz parte da comunidade? <button className="text-btn" onClick={onLogin}>Fazer login</button></p>
+      </section>
+
+      <footer className="welcome-footer"><span className="material-symbols-outlined">verified_user</span> Seu endereço nunca é exibido publicamente.</footer>
     </main>
   );
 }
