@@ -5,7 +5,7 @@ export const fallbackPosts = [
       id: 'user-ana',
       name: 'Ana Costa',
       city: 'Santarém - PA',
-      avatar: 'https://lh3.googleusercontent.com/aida-public/AB6AXuAsueseVHwikfjZUPneZMx0rqtlGEAvV11CkF3ZlPKviIATzLTOhR-p7j1TYIeuMpJlGbMLawmQBHL60XAkrmqGp5wt-6D68qh_PsiHSJ2uhVyXDqdisWv0hZfQa58Vsnhew_Uvhh1Zqhvu6ZkmmlXBd9A2k_o_9WllEYGBTuKxQXdlrXCtW-yj3DPzIeS3OFZUVpbfTsEnzDWcO-IU5Ej2wAfYjCRbwv5EdJ3FDoH7F0kTWGkvJnB'
+      avatar: ''
     },
     title: 'Notebook antigo para reaproveitamento',
     description: 'Notebook antigo que não utilizo mais. A tela funciona perfeitamente, mas o teclado precisa de reparos. Ideal para retirada de peças ou conserto simples.',

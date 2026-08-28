@@ -553,7 +553,7 @@ function MessagesScreen({ onOpenThread }) {
         <div className="thread-list">
           {(visibleThreads.length ? visibleThreads : threads.length ? [] : [{ title: 'Ana Costa', subtitle: 'Olá! Tenho interesse nesse aparelho...', time: '14:20', unreadCount: 2 }]).map((thread) => (
             <button key={thread.id || thread.title} className="thread-card" onClick={() => onOpenThread(thread.id)}>
-              <div className="thread-avatar"><span>{(thread.title || 'A').slice(0, 1)}</span></div>
+              <div className="thread-avatar" aria-label={`Perfil de ${thread.title || 'usuário'}`}><span className="material-symbols-outlined">person</span></div>
               <div className="thread-content">
                 <div><strong>{thread.title}</strong><span>{thread.time}</span></div>
                 <p>{thread.subtitle}</p>
@@ -601,7 +601,7 @@ function ChatScreen({ onBack }) {
   return (
     <div className="chat-screen">
       <header className="topbar compact-topbar"><button className="back-btn" onClick={onBack}><span className="material-symbols-outlined">arrow_back_ios_new</span></button><h1>Conversa Direta</h1></header>
-      <div className="chat-banner"><img src="https://lh3.googleusercontent.com/aida-public/AB6AXuD2Yt8UCZV3PjzQhY0IRhfZ8fhxt2-1023KsI5RudFqBRuj0uDTidKC4KXxG5DYeOdqYiOqUmHKuUGbX2_anxp7v2g9mToB86gBq7mYJxPrM2LEK_lqRLFUtFYHjCVtuqXVRrIOHS3yA17Jo2hhK8GIQmWQwn9WkNa8UG_sR8ze_ul0Fx-BOmMkY91YhBEmlOHyYP9A6yhty_lqfM8vJ_t__plfmQMSWD9jVzzkhl9ECYLeJ9Nar7YJ" alt="Item" /><div><strong>{thread?.title || 'Conversa'}</strong><span>Negocie com segurança e combine a retirada</span></div></div>
+      <div className="chat-banner"><span className="chat-person-avatar material-symbols-outlined" aria-label={`Perfil de ${thread?.title || 'Ana Costa'}`}>person</span><div><strong>{thread?.title || 'Ana Costa'}</strong><span>Negocie com segurança e combine a retirada</span></div></div>
       <main className="chat-body">{messages.map((message) => { const mine = message.sender_id === session?.id; return <div key={message.id} className={mine ? 'bubble mine' : 'bubble'}><p>{message.text}</p><span>{new Date(message.sent_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span></div>; })}</main>
       <footer className="chat-compose"><textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="Digite sua mensagem..." rows={1} /><button className="send-btn" onClick={send}><span className="material-symbols-outlined">send</span></button></footer>
     </div>

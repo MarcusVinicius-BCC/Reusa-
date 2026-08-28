@@ -616,6 +616,7 @@ function seedDatabase() {
 
   run(`UPDATE users SET rating = 0 WHERE donations = 0 AND received = 0 AND carbon_saved_percent = 0 AND achievements_json = '["Novo membro"]'`);
   run(`UPDATE users SET avatar = '' WHERE avatar LIKE '%ui-avatars.com%'`);
+  run(`UPDATE users SET avatar = '' WHERE id = 'user-ana'`);
   run('UPDATE users SET created_at = COALESCE(created_at, ?)', [new Date().toISOString()]);
 
   const adminEmail = String(process.env.ADMIN_EMAIL || 'mariana@reusa.com').trim().toLowerCase();
@@ -650,7 +651,7 @@ function seedDatabase() {
       password: '12345678',
       city: 'Santarém - PA',
       interests: ['Eletrônicos'],
-      avatar: 'https://lh3.googleusercontent.com/aida-public/AB6AXuAsueseVHwikfjZUPneZMx0rqtlGEAvV11CkF3ZlPKviIATzLTOhR-p7j1TYIeuMpJlGbMLawmQBHL60XAkrmqGp5wt-6D68qh_PsiHSJ2uhVyXDqdisWv0hZfQa58Vsnhew_Uvhh1Zqhvu6ZkmmlXBd9A2k_o_9WllEYGBTuKxQXdlrXCtW-yj3DPzIeS3OFZUVpbfTsEnzDWcO-IU5Ej2wAfYjCRbwv5EdJ3FDoH7F0kTWGkvJnB'
+      avatar: ''
     },
     {
       id: 'user-carlos',
