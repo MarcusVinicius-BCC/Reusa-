@@ -10,12 +10,15 @@ const app = express();
 const PORT = process.env.PORT || 3000;
 const hasConfiguredJwtSecret = Boolean(process.env.JWT_SECRET);
 const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('hex');
+const GOOGLE_CLIENT_ID = String(process.env.GOOGLE_CLIENT_ID || '').trim();
+const GOOGLE_CLIENT_SECRET = String(process.env.GOOGLE_CLIENT_SECRET || '').trim();
+const GOOGLE_REDIRECT_URI = String(process.env.GOOGLE_REDIRECT_URI || '').trim();
+const APP_BASE_URL = String(process.env.APP_BASE_URL || '').trim().replace(/\/$/, '');
 const ROOT = __dirname;
 // Railway exposes the path of an attached Volume through this variable.
 // Without a Volume, development continues to use the local data folder.
 const DATA_DIR = process.env.DATA_DIR || process.env.RAILWAY_VOLUME_MOUNT_PATH || path.join(ROOT, 'data');
 const DB_FILE = path.join(DATA_DIR, 'reusa.sqlite');
-const PUBLIC_DIR = path.join(ROOT, 'public');
 const DIST_DIR = path.join(ROOT, 'dist');
 const UPLOAD_DIR = path.join(DATA_DIR, 'uploads');
 const IMAGE_EXTENSIONS = new Map([
@@ -26,37 +29,22 @@ const IMAGE_EXTENSIONS = new Map([
   ['image/avif', '.avif']
 ]);
 
-const SCREEN_ROUTES = {
-  SCREEN_2: '/criar-conta',
-  SCREEN_4: '/login',
-  SCREEN_5: '/configuracoes',
-  SCREEN_6: '/mensagens/ana',
-  SCREEN_7: '/mensagens',
-  SCREEN_9: '/nova-publicacao',
-  SCREEN_11: '/perfil',
-  SCREEN_13: '/mapa',
-  SCREEN_15: '/feed',
-  SCREEN_17: '/splash'
-};
-
-const ROUTE_FILES = {
-  '/splash': 'splash_screen/code.html',
-  '/login': 'login/code.html',
-  '/criar-conta': 'criar_conta/code.html',
-  '/feed': 'feed_inicial_interligado/code.html',
-  '/feed-base': 'feed_inicial/code.html',
-  '/mensagens': 'mensagens/code.html',
-  '/mensagens/ana': 'conversa_com_ana/code.html',
-  '/nova-publicacao': 'nova_publica_o/code.html',
-  '/perfil': 'meu_perfil_interligado/code.html',
-  '/perfil-base-1': 'meu_perfil_1/code.html',
-  '/perfil-base-2': 'meu_perfil_2/code.html',
-  '/mapa': 'pontos_de_coleta_interligado/code.html',
-  '/mapa-base': 'pontos_de_coleta/code.html',
-  '/configuracoes': 'configura_es/code.html'
-};
-
 let db;
+const externalCache = new Map();
+
+function cachedExternalValue(key) {
+  const entry = externalCache.get(key);
+  if (!entry || entry.expiresAt <= Date.now()) {
+    externalCache.delete(key);
+    return null;
+  }
+  return entry.value;
+}
+
+function cacheExternalValue(key, value, ttlMs) {
+  externalCache.set(key, { value, expiresAt: Date.now() + ttlMs });
+  return value;
+}
 
 app.disable('x-powered-by');
 if (process.env.RAILWAY_ENVIRONMENT_NAME) {
@@ -112,6 +100,37 @@ function uid(prefix) {
   return `${prefix}-${crypto.randomUUID()}`;
 }
 
+function googleOauthEnabled() {
+  return Boolean(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET);
+}
+
+function appOrigin(req) {
+  if (APP_BASE_URL) {
+    try {
+      return new URL(APP_BASE_URL).origin;
+    } catch {
+      // The environment value is validated when an OAuth request is made.
+    }
+  }
+  return `${req.protocol}://${req.get('host')}`;
+}
+
+function googleRedirectUri(req) {
+  if (GOOGLE_REDIRECT_URI) return GOOGLE_REDIRECT_URI;
+  return `${appOrigin(req)}/api/auth/google/callback`;
+}
+
+function safeReturnTo(value) {
+  const candidate = String(value || '/login').trim();
+  return candidate.startsWith('/') && !candidate.startsWith('//') && !candidate.includes('\\') ? candidate : '/login';
+}
+
+function googleCallbackUrl(req, returnTo, params = {}) {
+  const target = new URL(safeReturnTo(returnTo), appOrigin(req));
+  target.hash = new URLSearchParams(params).toString();
+  return target.toString();
+}
+
 function createRateLimiter({ windowMs, maxRequests }) {
   const attempts = new Map();
 
@@ -148,6 +167,72 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
   } finally {
     clearTimeout(timeout);
   }
+}
+
+async function googleProfileFromCode(req, code) {
+  const tokenPayload = new URLSearchParams({
+    code,
+    client_id: GOOGLE_CLIENT_ID,
+    client_secret: GOOGLE_CLIENT_SECRET,
+    redirect_uri: googleRedirectUri(req),
+    grant_type: 'authorization_code'
+  });
+  const tokenResponse = await fetchWithTimeout('https://oauth2.googleapis.com/token', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+    body: tokenPayload.toString()
+  });
+  const tokens = await tokenResponse.json();
+  if (!tokens.access_token) throw new Error('Google did not return an access token');
+
+  const profileResponse = await fetchWithTimeout('https://openidconnect.googleapis.com/v1/userinfo', {
+    headers: { Authorization: `Bearer ${tokens.access_token}` }
+  });
+  const profile = await profileResponse.json();
+  const emailVerified = profile.email_verified === true || profile.email_verified === 'true';
+  if (!profile.sub || !profile.email || !emailVerified) {
+    throw new Error('Google account does not provide a verified email address');
+  }
+  return {
+    subject: String(profile.sub),
+    email: String(profile.email).trim().toLowerCase(),
+    name: String(profile.name || profile.given_name || profile.email.split('@')[0]).trim().slice(0, 80),
+    avatar: safeImageUrl(profile.picture, '')
+  };
+}
+
+function userForGoogleProfile(profile) {
+  const linkedIdentity = get('SELECT user_id FROM auth_identities WHERE provider = ? AND provider_subject = ? LIMIT 1', ['google', profile.subject]);
+  let user = linkedIdentity ? get('SELECT * FROM users WHERE id = ?', [linkedIdentity.user_id]) : null;
+
+  if (!user) {
+    user = get('SELECT * FROM users WHERE lower(email) = lower(?) LIMIT 1', [profile.email]);
+    if (user) {
+      const otherGoogleIdentity = get('SELECT provider_subject FROM auth_identities WHERE provider = ? AND user_id = ? LIMIT 1', ['google', user.id]);
+      if (otherGoogleIdentity && otherGoogleIdentity.provider_subject !== profile.subject) {
+        throw new Error('This ReUsa+ account is already linked to another Google account');
+      }
+    } else {
+      const userId = uid('user');
+      run(
+        `INSERT INTO users (id, name, email, password_hash, city, cep, address, interests_json, avatar, rating, donations, received, carbon_saved_percent, achievements_json, created_at, last_active_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [userId, profile.name, profile.email, passwordHash(crypto.randomBytes(32).toString('hex')), 'Não informado', '', '', '[]', profile.avatar, 0, 0, 0, 0, '["Novo membro"]', new Date().toISOString(), new Date().toISOString()]
+      );
+      user = get('SELECT * FROM users WHERE id = ?', [userId]);
+    }
+
+    run(
+      'INSERT INTO auth_identities (provider, provider_subject, user_id, email_at_linked, created_at) VALUES (?, ?, ?, ?, ?)',
+      ['google', profile.subject, user.id, profile.email, new Date().toISOString()]
+    );
+  }
+
+  if (!user.avatar && profile.avatar) {
+    run('UPDATE users SET avatar = ? WHERE id = ?', [profile.avatar, user.id]);
+    user = get('SELECT * FROM users WHERE id = ?', [user.id]);
+  }
+  return user;
 }
 
 function loadDbBytes() {
@@ -227,8 +312,12 @@ function userFromRow(row) {
     name: row.name,
     email: row.email,
     city: row.city,
+    neighborhood: row.neighborhood || '',
     cep: row.cep || '',
     address: row.address || '',
+    accountType: row.account_type || 'person',
+    businessName: row.business_name || '',
+    cnpj: row.cnpj || '',
     interests: jsonArray(row.interests_json),
     avatar: safeAvatar(row.avatar),
     rating: row.rating,
@@ -266,7 +355,7 @@ function notification(userId, type, title, text, link = '') {
 }
 
 function publicPost(row, viewerId = null) {
-  const author = get('SELECT id, name, city, avatar FROM users WHERE id = ?', [row.author_id]);
+  const author = get('SELECT id, name, city, neighborhood, account_type, business_name, avatar FROM users WHERE id = ?', [row.author_id]);
   const interestCount = get("SELECT COUNT(*) AS count FROM negotiations WHERE post_id = ? AND status IN ('interested', 'reserved', 'completed')", [row.id])?.count || 0;
   const saved = viewerId ? Boolean(get('SELECT post_id FROM favorites WHERE user_id = ? AND post_id = ?', [viewerId, row.id])) : false;
   const liked = viewerId ? Boolean(get('SELECT post_id FROM post_likes WHERE user_id = ? AND post_id = ?', [viewerId, row.id])) : false;
@@ -274,7 +363,7 @@ function publicPost(row, viewerId = null) {
   return {
     id: row.id,
     authorId: row.author_id,
-    author: author ? { id: author.id, name: author.name, city: author.city, avatar: safeAvatar(author.avatar) } : null,
+    author: author ? { id: author.id, name: author.name, city: author.city, neighborhood: author.neighborhood || '', accountType: author.account_type || 'person', businessName: author.business_name || '', avatar: safeAvatar(author.avatar) } : null,
     title: row.title,
     description: row.description,
     category: row.category,
@@ -356,8 +445,12 @@ function seedDatabase() {
       email TEXT NOT NULL UNIQUE,
       password_hash TEXT NOT NULL,
       city TEXT NOT NULL,
+      neighborhood TEXT NOT NULL DEFAULT '',
       cep TEXT NOT NULL DEFAULT '',
       address TEXT NOT NULL DEFAULT '',
+      account_type TEXT NOT NULL DEFAULT 'person',
+      business_name TEXT NOT NULL DEFAULT '',
+      cnpj TEXT NOT NULL DEFAULT '',
       interests_json TEXT NOT NULL DEFAULT '[]',
       avatar TEXT NOT NULL,
       rating REAL NOT NULL DEFAULT 4.8,
@@ -373,7 +466,7 @@ function seedDatabase() {
   `);
 
   const userColumns = new Set(all('PRAGMA table_info(users)').map((column) => column.name));
-  ['cep', 'address'].forEach((column) => {
+  ['neighborhood', 'cep', 'address', 'account_type', 'business_name', 'cnpj'].forEach((column) => {
     if (!userColumns.has(column)) {
       run(`ALTER TABLE users ADD COLUMN ${column} TEXT NOT NULL DEFAULT ''`);
     }
@@ -490,6 +583,19 @@ function seedDatabase() {
       PRIMARY KEY (user_id, post_id),
       FOREIGN KEY(user_id) REFERENCES users(id),
       FOREIGN KEY(post_id) REFERENCES posts(id)
+    );
+  `);
+
+  run(`
+    CREATE TABLE IF NOT EXISTS auth_identities (
+      provider TEXT NOT NULL,
+      provider_subject TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      email_at_linked TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      PRIMARY KEY (provider, provider_subject),
+      UNIQUE (provider, user_id),
+      FOREIGN KEY(user_id) REFERENCES users(id)
     );
   `);
 
@@ -835,6 +941,23 @@ function approximateLocation(value) {
   return parts.length > 1 ? parts.slice(-2).join(', ') : parts[0] || '';
 }
 
+function validCnpj(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (!/^\d{14}$/.test(digits) || /^(\d)\1{13}$/.test(digits)) return false;
+  const digitAt = (length) => {
+    let sum = 0;
+    let weight = length - 7;
+    for (let index = 0; index < length; index += 1) {
+      sum += Number(digits[index]) * weight;
+      weight -= 1;
+      if (weight < 2) weight = 9;
+    }
+    const remainder = sum % 11;
+    return remainder < 2 ? 0 : 11 - remainder;
+  };
+  return digitAt(12) === Number(digits[12]) && digitAt(13) === Number(digits[13]);
+}
+
 function usersAreBlocked(firstUserId, secondUserId) {
   return Boolean(get(
     'SELECT blocker_id FROM blocked_users WHERE (blocker_id = ? AND blocked_id = ?) OR (blocker_id = ? AND blocked_id = ?)',
@@ -886,29 +1009,6 @@ function communityImpact() {
   return { itemsReused: completed, divertedFromDisposal: completed, exchanges, beneficiaries, estimated: true };
 }
 
-function routeForPath(pathname) {
-  return ROUTE_FILES[pathname] || null;
-}
-
-function renderScreenFile(routePath) {
-  const filePath = routeForPath(routePath);
-  if (!filePath) {
-    return null;
-  }
-
-  const absolutePath = path.join(ROOT, filePath);
-  let html = fs.readFileSync(absolutePath, 'utf8');
-
-  html = html.replace(/\{\{DATA:SCREEN:SCREEN_(\d+)\}\}/g, (_, screenNumber) => SCREEN_ROUTES[`SCREEN_${screenNumber}`] || '/feed');
-  html = html.replace(/SCREEN_(\d+)\.html/g, (_, screenNumber) => SCREEN_ROUTES[`SCREEN_${screenNumber}`] || '/feed');
-
-  if (html.includes('</body>')) {
-    html = html.replace(/<\/body>/i, `<script>window.__REUSA_ROUTE__=${JSON.stringify(routePath)};window.__REUSA_ROUTES__=${JSON.stringify(SCREEN_ROUTES)};window.__REUSA_API__='/api';</script><script src="/assets/app.js" defer></script></body>`);
-  }
-
-  return html;
-}
-
 function buildExists() {
   return fs.existsSync(path.join(DIST_DIR, 'index.html'));
 }
@@ -919,7 +1019,6 @@ async function start() {
   }
 
   ensureDir(DATA_DIR);
-  ensureDir(PUBLIC_DIR);
   ensureDir(UPLOAD_DIR);
 
   const SQL = await initSqlJs({
@@ -950,34 +1049,120 @@ async function start() {
   });
 
   const authRateLimit = createRateLimiter({ windowMs: 15 * 60 * 1000, maxRequests: 30 });
+  const publicLookupRateLimit = createRateLimiter({ windowMs: 15 * 60 * 1000, maxRequests: 60 });
 
   app.use(express.json({ limit: '100kb' }));
   app.use(express.urlencoded({ extended: true }));
-  app.use('/assets', express.static(PUBLIC_DIR));
   app.use('/uploads', express.static(UPLOAD_DIR));
 
-  if (buildExists()) {
-    app.use(express.static(DIST_DIR));
-  }
-
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
+
+  app.get('/api/businesses/cnpj/:cnpj', publicLookupRateLimit, async (req, res) => {
+    const cnpj = String(req.params.cnpj || '').replace(/\D/g, '');
+    if (!validCnpj(cnpj)) return res.status(400).json({ error: 'Invalid CNPJ' });
+
+    const cacheKey = `cnpj:${cnpj}`;
+    const cached = cachedExternalValue(cacheKey);
+    if (cached) return res.json({ business: cached, cached: true });
+
+    try {
+      const response = await fetchWithTimeout(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`, { headers: { 'User-Agent': 'ReusaPlus/1.0' } });
+      if (response.status === 404) return res.status(404).json({ error: 'CNPJ not found' });
+      if (!response.ok) throw new Error(`BrasilAPI responded with ${response.status}`);
+      const result = await response.json();
+      const business = {
+        cnpj,
+        legalName: String(result.razao_social || '').trim(),
+        tradeName: String(result.nome_fantasia || '').trim(),
+        cep: String(result.cep || '').replace(/\D/g, ''),
+        address: [result.logradouro, result.numero, result.complemento].map((item) => String(item || '').trim()).filter(Boolean).join(', '),
+        neighborhood: String(result.bairro || '').trim(),
+        city: [result.municipio, result.uf].map((item) => String(item || '').trim()).filter(Boolean).join(', '),
+        status: String(result.descricao_situacao_cadastral || '').trim()
+      };
+      return res.json({ business: cacheExternalValue(cacheKey, business, 24 * 60 * 60 * 1000), cached: false });
+    } catch (error) {
+      console.warn('CNPJ lookup failed:', error.message);
+      return res.status(503).json({ error: 'Business lookup is temporarily unavailable' });
+    }
+  });
 
   app.get('/api/auth/me', authMiddleware, (req, res) => {
     res.json({ user: req.user });
   });
 
+  app.get('/api/auth/google', (req, res) => {
+    const returnTo = safeReturnTo(req.query.return_to);
+    if (!googleOauthEnabled()) {
+      return res.redirect(googleCallbackUrl(req, returnTo, { auth_error: 'google_not_configured' }));
+    }
+
+    const state = jwt.sign({ purpose: 'google-oauth', returnTo }, JWT_SECRET, { expiresIn: '10m' });
+    const authorizationUrl = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+    authorizationUrl.search = new URLSearchParams({
+      client_id: GOOGLE_CLIENT_ID,
+      redirect_uri: googleRedirectUri(req),
+      response_type: 'code',
+      scope: 'openid email profile',
+      state,
+      prompt: 'select_account'
+    }).toString();
+    return res.redirect(authorizationUrl.toString());
+  });
+
+  app.get('/api/auth/google/callback', async (req, res) => {
+    let returnTo = '/login';
+    try {
+      const state = String(req.query.state || '');
+      const payload = jwt.verify(state, JWT_SECRET);
+      if (payload.purpose !== 'google-oauth') throw new Error('Invalid OAuth state');
+      returnTo = safeReturnTo(payload.returnTo);
+
+      if (req.query.error) {
+        return res.redirect(googleCallbackUrl(req, returnTo, { auth_error: 'google_cancelled' }));
+      }
+
+      const code = String(req.query.code || '');
+      if (!code) throw new Error('Google did not return an authorization code');
+      const profile = await googleProfileFromCode(req, code);
+      const user = userForGoogleProfile(profile);
+      if (user.suspended) {
+        return res.redirect(googleCallbackUrl(req, returnTo, { auth_error: 'account_suspended' }));
+      }
+
+      run('UPDATE users SET last_active_at = ? WHERE id = ?', [new Date().toISOString(), user.id]);
+      persistDb();
+      return res.redirect(googleCallbackUrl(req, returnTo, { reusa_token: createToken(user.id) }));
+    } catch (error) {
+      console.error('Google OAuth failed:', error.message);
+      return res.redirect(googleCallbackUrl(req, returnTo, { auth_error: 'google_login_failed' }));
+    }
+  });
+
   app.post('/api/auth/register', authRateLimit, (req, res) => {
-    const { name, email, password, city, cep = '', address = '', interests = [] } = req.body || {};
+    const { name, email, password, city, neighborhood = '', cep = '', address = '', interests = [], accountType = 'person', businessName = '', cnpj = '' } = req.body || {};
     const normalizedName = String(name || '').trim();
     const normalizedEmail = String(email || '').trim().toLowerCase();
     const normalizedPassword = String(password || '');
     const normalizedCity = String(city || '').trim();
+    const normalizedNeighborhood = String(neighborhood || '').trim();
+    const normalizedAccountType = String(accountType || 'person').trim();
+    const normalizedBusinessName = String(businessName || '').trim();
+    const normalizedCnpj = String(cnpj || '').replace(/\D/g, '');
 
     if (!normalizedName || !normalizedEmail || !normalizedPassword || !normalizedCity) {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    if (normalizedName.length > 80 || normalizedCity.length > 100 || String(cep).length > 16 || String(address).length > 200) {
+    if (!['person', 'business'].includes(normalizedAccountType)) {
+      return res.status(400).json({ error: 'Invalid account type' });
+    }
+
+    if (normalizedAccountType === 'business' && (!normalizedBusinessName || !validCnpj(normalizedCnpj))) {
+      return res.status(400).json({ error: 'Business accounts require a legal name and valid CNPJ' });
+    }
+
+    if (normalizedName.length > 80 || normalizedCity.length > 100 || normalizedNeighborhood.length > 100 || String(cep).length > 16 || String(address).length > 200 || normalizedBusinessName.length > 120) {
       return res.status(400).json({ error: 'One or more fields exceed the allowed length' });
     }
 
@@ -1000,8 +1185,12 @@ async function start() {
       email: normalizedEmail,
       passwordHash: passwordHash(normalizedPassword),
       city: normalizedCity,
+      neighborhood: normalizedNeighborhood,
       cep: String(cep).trim(),
       address: String(address).trim(),
+      accountType: normalizedAccountType,
+      businessName: normalizedBusinessName,
+      cnpj: normalizedCnpj,
       interests: Array.isArray(interests) ? interests : [interests].filter(Boolean),
       avatar: '',
       rating: 0,
@@ -1012,16 +1201,20 @@ async function start() {
     };
 
     run(
-      `INSERT INTO users (id, name, email, password_hash, city, cep, address, interests_json, avatar, rating, donations, received, carbon_saved_percent, achievements_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO users (id, name, email, password_hash, city, neighborhood, cep, address, account_type, business_name, cnpj, interests_json, avatar, rating, donations, received, carbon_saved_percent, achievements_json)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         user.id,
         user.name,
         user.email,
         user.passwordHash,
         user.city,
+        user.neighborhood,
         user.cep,
         user.address,
+        user.accountType,
+        user.businessName,
+        user.cnpj,
         JSON.stringify(user.interests),
         user.avatar,
         user.rating,
@@ -1356,11 +1549,15 @@ async function start() {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
+    if (!req.file && !String(req.body?.imageUrl || '').trim()) {
+      return res.status(400).json({ error: 'An image is required for every post' });
+    }
+
     if (normalizedTitle.length > 140 || normalizedDescription.length > 3000 || normalizedCategory.length > 60) {
       return res.status(400).json({ error: 'One or more fields exceed the allowed length' });
     }
 
-    const imageUrl = req.file ? `/uploads/${req.file.filename}` : safeImageUrl(req.body.imageUrl, 'https://images.unsplash.com/photo-1517336714731-489689fd1ca8?auto=format&fit=crop&w=1200&q=80');
+    const imageUrl = req.file ? `/uploads/${req.file.filename}` : safeImageUrl(req.body.imageUrl, '');
     const createdAt = new Date().toISOString();
     const post = {
       id: uid('post'),
@@ -1522,11 +1719,14 @@ async function start() {
     const city = String(req.query.city || '').trim();
     if (!city) return res.status(400).json({ error: 'City is required' });
     const cityName = city.split(',')[0].trim();
+    const cacheKey = `collection-points:${city.toLocaleLowerCase('pt-BR')}`;
+    const cached = cachedExternalValue(cacheKey);
+    if (cached) return res.json({ ...cached, cached: true });
     const registered = all('SELECT * FROM collection_points WHERE lower(location) LIKE lower(?) ORDER BY name ASC', [`%${cityName}%`]).map((row) => ({ id: row.id, name: row.name, categories: jsonArray(row.categories_json), hours: row.hours, location: row.location, status: row.status, source: row.origin || 'Cadastrado no Reusa+', origin: row.origin || 'ReUsa+', lastUpdated: row.last_updated || null, latitude: row.latitude, longitude: row.longitude, verified: (row.origin || '').includes('ReUsa') }));
     try {
       const geocodeResponse = await fetchWithTimeout(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=br&q=${encodeURIComponent(city)}`, { headers: { 'User-Agent': 'ReusaPlus/1.0 contact@reusa.local' } });
       const places = await geocodeResponse.json();
-      if (!places.length) return res.json({ city, source: 'Cadastrado no Reusa+', collectionPoints: registered });
+      if (!places.length) return res.json(cacheExternalValue(cacheKey, { city, source: 'Cadastrado no Reusa+', collectionPoints: registered }, 30 * 60 * 1000));
       const latitude = Number(places[0].lat);
       const longitude = Number(places[0].lon);
       const query = `[out:json][timeout:10];(nwr["amenity"~"recycling|waste_transfer_station",i](around:15000,${latitude},${longitude});nwr["shop"="second_hand"](around:15000,${latitude},${longitude}););out center tags;`;
@@ -1538,9 +1738,9 @@ async function start() {
         const pointLongitude = element.lon || element.center?.lon;
         return { id: `osm-${element.type}-${element.id}`, name: tags.name || 'Ponto de reciclagem', categories: [tags.recycling_type || (tags.shop === 'second_hand' ? 'Reutilização' : 'Reciclagem')], hours: tags.opening_hours || 'Horário não informado', location: [tags['addr:street'], tags['addr:housenumber'], tags['addr:city'] || cityName].filter(Boolean).join(', '), status: 'Encontrado no mapa', latitude: pointLatitude, longitude: pointLongitude, source: 'OpenStreetMap' };
       }).filter((point) => Number.isFinite(point.latitude) && Number.isFinite(point.longitude));
-      res.json({ city, center: [latitude, longitude], source: publicPoints.length ? 'OpenStreetMap' : 'Cadastrado no Reusa+', collectionPoints: [...publicPoints, ...registered] });
+      res.json(cacheExternalValue(cacheKey, { city, center: [latitude, longitude], source: publicPoints.length ? 'OpenStreetMap' : 'Cadastrado no Reusa+', collectionPoints: [...publicPoints, ...registered] }, 30 * 60 * 1000));
     } catch {
-      res.json({ city, source: 'Cadastrado no Reusa+', collectionPoints: registered });
+      res.json(cacheExternalValue(cacheKey, { city, source: 'Cadastrado no Reusa+', collectionPoints: registered }, 5 * 60 * 1000));
     }
   });
 
@@ -1570,18 +1770,20 @@ async function start() {
   });
 
   app.put('/api/profile', authMiddleware, (req, res) => {
-    const { name, city, cep, address, interests } = req.body || {};
+    const { name, city, neighborhood, cep, address, interests, businessName } = req.body || {};
     const nextName = typeof name === 'string' ? name.trim() || req.user.name : req.user.name;
     const nextCity = typeof city === 'string' ? city.trim() || req.user.city : req.user.city;
+    const nextNeighborhood = typeof neighborhood === 'string' ? neighborhood.trim() : req.user.neighborhood || '';
     const nextCep = typeof cep === 'string' ? cep.trim() : req.user.cep || '';
     const nextAddress = typeof address === 'string' ? address.trim() : req.user.address || '';
     const nextInterests = Array.isArray(interests) ? interests.map((item) => String(item).trim()).filter(Boolean) : req.user.interests;
+    const nextBusinessName = typeof businessName === 'string' ? businessName.trim() : req.user.businessName || '';
 
-    if (nextName.length > 80 || nextCity.length > 100 || nextCep.length > 16 || nextAddress.length > 200 || nextInterests.length > 20 || nextInterests.some((item) => item.length > 40)) {
+    if (nextName.length > 80 || nextCity.length > 100 || nextNeighborhood.length > 100 || nextCep.length > 16 || nextAddress.length > 200 || nextBusinessName.length > 120 || nextInterests.length > 20 || nextInterests.some((item) => item.length > 40)) {
       return res.status(400).json({ error: 'One or more fields exceed the allowed length' });
     }
 
-    run('UPDATE users SET name = ?, city = ?, cep = ?, address = ?, interests_json = ? WHERE id = ?', [nextName, nextCity, nextCep, nextAddress, JSON.stringify(nextInterests), req.user.id]);
+    run('UPDATE users SET name = ?, city = ?, neighborhood = ?, cep = ?, address = ?, business_name = ?, interests_json = ? WHERE id = ?', [nextName, nextCity, nextNeighborhood, nextCep, nextAddress, nextBusinessName, JSON.stringify(nextInterests), req.user.id]);
     persistDb();
 
     const updated = get('SELECT * FROM users WHERE id = ?', [req.user.id]);
@@ -1746,17 +1948,7 @@ async function start() {
 
   if (buildExists()) {
     app.use(express.static(DIST_DIR));
-    app.get(/^\/(?!api|uploads|assets).*/, (_req, res) => res.sendFile(path.join(DIST_DIR, 'index.html')));
-  } else {
-    Object.keys(ROUTE_FILES).forEach((routePath) => {
-      app.get(routePath, (_req, res) => {
-        const html = renderScreenFile(routePath);
-        if (!html) {
-          return res.status(404).send('Screen not found');
-        }
-        res.type('html').send(html);
-      });
-    });
+    app.get(/^\/(?!api|uploads).*/, (_req, res) => res.sendFile(path.join(DIST_DIR, 'index.html')));
   }
 
   app.listen(PORT, () => {

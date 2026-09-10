@@ -101,6 +101,26 @@ test('registration validates data and persists a new account', async () => {
   assert.equal(login.response.status, 200);
 });
 
+test('business registration stores public neighborhood without exposing protected address', async () => {
+  const email = `empresa-${Date.now()}@example.test`;
+  const registration = await request('/api/auth/register', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Responsável', email, password: 'senha-segura-123', city: 'Sao Paulo, SP', neighborhood: 'Pinheiros', address: 'Rua Protegida, 100', accountType: 'business', businessName: 'Circular Ltda', cnpj: '11.444.777/0001-61' })
+  });
+  assert.equal(registration.response.status, 201);
+  assert.equal(registration.payload.user.accountType, 'business');
+  assert.equal(registration.payload.user.cnpj, '11444777000161');
+
+  const profile = await request('/api/profile', { headers: { Authorization: `Bearer ${registration.payload.token}` } });
+  assert.equal(profile.payload.user.neighborhood, 'Pinheiros');
+  assert.equal(profile.payload.user.address, 'Rua Protegida, 100');
+});
+
+test('CNPJ lookup rejects malformed identifiers before contacting the external service', async () => {
+  const lookup = await request('/api/businesses/cnpj/00000000000000');
+  assert.equal(lookup.response.status, 400);
+});
+
 test('favorites, negotiation status and reviews persist with permission checks', async () => {
   const suffix = Date.now();
   const ownerEmail = `owner-${suffix}@example.test`;
@@ -115,7 +135,7 @@ test('favorites, negotiation status and reviews persist with permission checks',
 
   const created = await request('/api/posts', {
     method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerToken}` },
-    body: JSON.stringify({ title: 'Mesa circular', description: 'Mesa em bom estado para doação.', category: 'Móveis', condition: 'Bom estado', goal: 'Doação', location: 'Centro, Sao Paulo, SP' })
+    body: JSON.stringify({ title: 'Mesa circular', description: 'Mesa em bom estado para doação.', category: 'Móveis', condition: 'Bom estado', goal: 'Doação', location: 'Centro, Sao Paulo, SP', imageUrl: 'https://images.example.test/mesa.jpg' })
   });
   assert.equal(created.response.status, 201);
   const postId = created.payload.post.id;

@@ -44,6 +44,7 @@ export const api = {
   login: (body) => request('/auth/login', { method: 'POST', body: JSON.stringify(body) }),
   register: (body) => request('/auth/register', { method: 'POST', body: JSON.stringify(body) }),
   me: () => request('/auth/me'),
+  businessByCnpj: (cnpj) => request(`/businesses/cnpj/${encodeURIComponent(String(cnpj || '').replace(/\D/g, ''))}`),
   feed: () => request('/feed'),
   inspirations: () => request('/inspirations'),
   createInspiration: (body) => request('/inspirations', { method: 'POST', body: JSON.stringify(body) }),

@@ -1,6 +1,6 @@
 import { create } from 'zustand';
-import { api, clearToken, getToken, setToken } from './api';
-import { fallbackPosts } from './data';
+import { api, clearToken, getToken, setToken } from '../services/api';
+import { fallbackPosts } from '../data/fallback-posts';
 
 const initialFormState = {
   interests: []

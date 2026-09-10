@@ -14,6 +14,15 @@ Aplicacao web para reutilizacao e doacao de itens. O backend Express serve a API
    O app detecta o caminho do Volume e guarda nele o banco SQLite e os uploads, preservando-os entre deploys.
 5. Em **Networking**, gere um dominio publico. O app deve responder em `https://seu-dominio/api/health` com `{ "ok": true }`.
 
+## Login com Google
+
+O ReUsa+ suporta login e criação de conta com Google. Crie, no Google Cloud, uma credencial OAuth 2.0 do tipo **Aplicação da Web** e cadastre exatamente a URL de retorno:
+
+- Local: `http://localhost:3000/api/auth/google/callback`
+- Produção: `https://seu-dominio/api/auth/google/callback`
+
+Configure na Railway as variáveis `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` e `APP_BASE_URL`. As contas do Google são vinculadas ao banco persistente da aplicação pelo identificador único da conta Google, permitindo o acesso da mesma pessoa em qualquer dispositivo.
+
 ## Desenvolvimento local
 
 ```bash

@@ -1,10 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
-import { api } from './api';
-import { useAppStore } from './store';
-import { fallbackPosts } from './data';
+import { api, clearToken, setToken } from './services/api';
+import { useAppStore } from './state/store';
+import { fallbackPosts } from './data/fallback-posts';
 import { CircleMarker, MapContainer, TileLayer, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
+import feedLogo from './assets/reusa-logo.png';
 
 const navRoutes = {
   home: '/feed',
@@ -201,6 +202,36 @@ function LoginScreen({ onGoToRegister, onSuccess }) {
   const login = useAppStore((state) => state.login);
   const [formState, setFormState] = useState({ email: '', password: '' });
 
+  useEffect(() => {
+    const fragment = new URLSearchParams(window.location.hash.replace(/^#/, ''));
+    const token = fragment.get('reusa_token');
+    const error = fragment.get('auth_error');
+    if (!token && !error) return;
+
+    window.history.replaceState({}, '', `${window.location.pathname}${window.location.search}`);
+    if (error) {
+      const messages = {
+        google_not_configured: 'O login com Google ainda não foi configurado.',
+        google_cancelled: 'O login com Google foi cancelado.',
+        account_suspended: 'Esta conta está suspensa.',
+        google_login_failed: 'Não foi possível entrar com o Google. Tente novamente.'
+      };
+      alert(messages[error] || 'Não foi possível concluir o login com Google.');
+      return;
+    }
+
+    setToken(token);
+    api.me()
+      .then(({ user }) => {
+        useAppStore.setState({ session: user });
+        onSuccess();
+      })
+      .catch(() => {
+        clearToken();
+        alert('Não foi possível concluir o login com Google. Tente novamente.');
+      });
+  }, [onSuccess]);
+
   async function submit(event) {
     event.preventDefault();
     try {
@@ -212,9 +243,10 @@ function LoginScreen({ onGoToRegister, onSuccess }) {
   }
 
   return (
-    <div className="auth-layout">
-      <div className="auth-card">
-        <div className="auth-logo"><img src="https://lh3.googleusercontent.com/aida-public/AB6AXuBOFtyytVWbcN0yp6q-fl1hVuGZc2T-IkiFJZf1JbR8gICaEsLcjvzh0cLTnlkKeFXV0eKB8KGySBJZVI32kemRvuIBroTd7scTzBKsKAYOVCfa27zNu5caOKkTqvovxOyQ64Hoh9gB58Eu8W4bd4FZS_59Jns0yBzldcGWwM1XKO7g8GkM1st1X_H57AEQuitrAETSMgGC_lQ-c8kQ1BhbADOsMOBfKWBjs-xlaG5uL2-op8eOGdUN" alt="REUSA+" /></div>
+    <div className="auth-layout login-layout">
+      <div className="login-orb login-orb-one" /><div className="login-orb login-orb-two" />
+      <div className="auth-card login-card">
+        <div className="auth-logo"><img src={feedLogo} alt="REUSA+" /></div>
         <h2>Bem-vindo de volta!</h2>
         <p>Pronto para causar impacto hoje?</p>
         <form onSubmit={submit} className="auth-form">
@@ -222,6 +254,7 @@ function LoginScreen({ onGoToRegister, onSuccess }) {
           <Field label="Senha" icon="lock" type="password" value={formState.password} onChange={(value) => setFormState((prev) => ({ ...prev, password: value }))} placeholder="••••••••" />
           <button type="submit" className="primary-btn full">Entrar <span className="material-symbols-outlined">arrow_forward</span></button>
         </form>
+        <GoogleSignInButton />
         <div className="auth-footer">Não tem uma conta? <button className="text-btn" onClick={onGoToRegister}>Cadastre-se</button></div>
       </div>
     </div>
@@ -230,9 +263,10 @@ function LoginScreen({ onGoToRegister, onSuccess }) {
 
 function RegisterScreen({ onGoToLogin, onSuccess }) {
   const register = useAppStore((state) => state.register);
-  const [formState, setFormState] = useState({ name: '', email: '', password: '', cep: '', address: '', city: '', interests: [] });
+  const [formState, setFormState] = useState({ name: '', email: '', password: '', cep: '', address: '', city: '', neighborhood: '', accountType: 'person', businessName: '', cnpj: '', interests: [] });
   const [cepBusy, setCepBusy] = useState(false);
-  const interests = ['Eletrônicos', 'Roupas', 'Móveis', 'Livros', 'Outros'];
+  const [cnpjBusy, setCnpjBusy] = useState(false);
+  const [cnpjNotice, setCnpjNotice] = useState('');
 
   async function submit(event) {
     event.preventDefault();
@@ -262,111 +296,92 @@ function RegisterScreen({ onGoToLogin, onSuccess }) {
   }
 
   return (
-    <div className="auth-layout">
-      <div className="auth-card large">
-        <h2>Crie sua conta</h2>
-        <p>Junte-se à maior comunidade de economia circular.</p>
-        <form onSubmit={submit} className="auth-form">
+    <div className="auth-layout register-layout">
+      <div className="register-orb register-orb-one" /><div className="register-orb register-orb-two" />
+      <div className="auth-card large register-card">
+        <header className="register-header">
+          <div className="register-brand" aria-label="ReUsa+"><img src={feedLogo} alt="ReUsa+" /></div>
+          <span className="register-step"><i /> Novo por aqui</span>
+          <h2>Faça o descarte<br /><em>virar recomeço.</em></h2>
+          <p>Uma comunidade local para doar, trocar e reutilizar com propósito.</p>
+        </header>
+        <form onSubmit={submit} className="auth-form register-form">
           <Field label="Nome completo" icon="person" value={formState.name} onChange={(value) => setFormState((prev) => ({ ...prev, name: value }))} placeholder="Como devemos chamar você?" />
           <Field label="E-mail" icon="mail" value={formState.email} onChange={(value) => setFormState((prev) => ({ ...prev, email: value }))} placeholder="seu@email.com.br" />
           <Field label="Senha" icon="lock" type="password" value={formState.password} onChange={(value) => setFormState((prev) => ({ ...prev, password: value }))} placeholder="Mínimo 8 caracteres" />
           <Field label="CEP" icon="markunread_mailbox" value={formState.cep} onChange={lookupCep} placeholder="00000-000" />
           {formState.address ? <div className="address-preview"><span className="material-symbols-outlined">location_on</span><span>{formState.address} · {formState.city}</span>{cepBusy ? <span>Consultando...</span> : null}</div> : null}
           <Field label="Cidade" icon="location_on" value={formState.city} onChange={(value) => setFormState((prev) => ({ ...prev, city: value }))} placeholder="Ex: São Paulo, SP" />
-          <div className="chip-box">
-            <label>O que você mais se interessa em reutilizar?</label>
-            <div className="chip-row">
-              {interests.map((interest) => {
-                const selected = formState.interests.includes(interest);
-                return (
-                  <button
-                    key={interest}
-                    type="button"
-                    className={selected ? 'chip chip-active' : 'chip'}
-                    onClick={() => setFormState((prev) => ({
-                      ...prev,
-                      interests: prev.interests.includes(interest)
-                        ? prev.interests.filter((item) => item !== interest)
-                        : [...prev.interests, interest]
-                    }))}
-                  >
-                    {interest}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-          <button type="submit" className="primary-btn full">Criar Conta <span className="material-symbols-outlined">arrow_forward</span></button>
+          <Field label="Bairro público" icon="location_city" value={formState.neighborhood} onChange={(value) => setFormState((prev) => ({ ...prev, neighborhood: value }))} placeholder="Ex: Vila Madalena" />
+          <div className="chip-box"><label>Tipo de conta</label><div className="chip-row"><button type="button" className={formState.accountType === 'person' ? 'chip chip-active' : 'chip'} onClick={() => setFormState((prev) => ({ ...prev, accountType: 'person' }))}>Pessoa</button><button type="button" className={formState.accountType === 'business' ? 'chip chip-active' : 'chip'} onClick={() => setFormState((prev) => ({ ...prev, accountType: 'business' }))}>Empresa</button></div></div>
+          {formState.accountType === 'business' ? <><Field label="Razão social" icon="business" value={formState.businessName} onChange={(value) => setFormState((prev) => ({ ...prev, businessName: value }))} placeholder="Nome da empresa" /><Field label={cnpjBusy ? 'Consultando CNPJ...' : 'CNPJ'} icon="badge" value={formState.cnpj} onChange={lookupCnpj} placeholder="00.000.000/0001-00" />{cnpjNotice ? <div className="cnpj-lookup"><span className="material-symbols-outlined">{cnpjNotice.startsWith('Dados') ? 'verified' : 'info'}</span>{cnpjNotice}</div> : null}</> : null}
+          <button type="submit" className="primary-btn full register-submit">Criar minha conta <span className="material-symbols-outlined">arrow_forward</span></button>
         </form>
-        <div className="auth-footer">Já tem uma conta? <button className="text-btn" onClick={onGoToLogin}>Entre</button></div>
+        <div className="register-footer"><span>ou entre em segundos</span><GoogleSignInButton iconOnly /><p>Já faz parte? <button className="text-btn" onClick={onGoToLogin}>Fazer login</button></p></div>
       </div>
     </div>
   );
 }
 
+function GoogleSignInButton({ label = 'Continuar com Google', iconOnly = false }) {
+  const [busy, setBusy] = useState(false);
+
+  function start() {
+    setBusy(true);
+    window.location.assign('/api/auth/google?return_to=/login');
+  }
+
+  return <div className={iconOnly ? 'google-auth google-auth-icon-only' : 'google-auth'}>{iconOnly ? null : <span>ou</span>}<button type="button" className={iconOnly ? 'google-auth-btn google-auth-icon' : 'google-auth-btn'} onClick={start} disabled={busy} aria-label={busy ? 'Abrindo Google' : label} title={label}><b aria-hidden="true">G</b>{iconOnly ? null : busy ? 'Abrindo Google...' : label}</button></div>;
+}
+
 function FeedScreen({ onNavigate }) {
   const posts = useAppStore((state) => state.posts);
-  const session = useAppStore((state) => state.session);
   const search = useAppStore((state) => state.search);
   const setSearch = useAppStore((state) => state.setSearch);
   const loadFeed = useAppStore((state) => state.loadFeed);
   const [category, setCategory] = useState('Todos');
-  const [notificationCount, setNotificationCount] = useState(0);
-  const [filters, setFilters] = useState({ goal: '', condition: '', city: '', status: '', date: '' });
-  const [sortBy, setSortBy] = useState('recent');
-  const [showFilters, setShowFilters] = useState(false);
+  const [categoriesOpen, setCategoriesOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [headerHidden, setHeaderHidden] = useState(false);
   const filteredPosts = useMemo(() => {
     const query = search.trim().toLowerCase();
     return posts.filter((post) => {
       const matchesCategory = category === 'Todos' || post.category.toLowerCase() === category.toLowerCase();
       const matchesSearch = !query || [post.title, post.description, post.category, post.author?.name].some((value) => String(value || '').toLowerCase().includes(query));
-      const matchesGoal = !filters.goal || post.goal === filters.goal;
-      const matchesCondition = !filters.condition || post.condition === filters.condition;
-      const matchesCity = !filters.city || String(post.location || post.author?.city || '').toLowerCase().includes(filters.city.toLowerCase());
-      const matchesStatus = !filters.status || post.status === filters.status;
-      const matchesDate = !filters.date || String(post.createdAt || '').slice(0, 10) >= filters.date;
-      return matchesCategory && matchesSearch && matchesGoal && matchesCondition && matchesCity && matchesStatus && matchesDate;
-    }).sort((first, second) => {
-      if (sortBy === 'oldest') return new Date(first.createdAt) - new Date(second.createdAt);
-      if (sortBy === 'liked') return Number(second.likes || 0) - Number(first.likes || 0);
-      if (sortBy === 'nearby') {
-        const city = String(session?.city || '').toLowerCase();
-        return Number(String(second.location || second.author?.city || '').toLowerCase().includes(city)) - Number(String(first.location || first.author?.city || '').toLowerCase().includes(city));
-      }
-      return new Date(second.createdAt) - new Date(first.createdAt);
+      return matchesCategory && matchesSearch;
     });
-  }, [posts, search, category, filters, sortBy, session?.city]);
+  }, [posts, search, category]);
 
   useEffect(() => {
     loadFeed().catch(() => {});
-    api.notifications().then((result) => setNotificationCount(result.unreadCount || 0)).catch(() => {});
   }, [loadFeed]);
+
+  useEffect(() => {
+    let previousScroll = window.scrollY;
+    const onScroll = () => {
+      const currentScroll = window.scrollY;
+      const scrollingDown = currentScroll > previousScroll;
+      setHeaderHidden(scrollingDown && currentScroll > 80 && !searchOpen);
+      previousScroll = currentScroll;
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => window.removeEventListener('scroll', onScroll);
+  }, [searchOpen]);
+
+  function toggleCategories() {
+    setHeaderHidden(false);
+    setCategoriesOpen((open) => !open);
+  }
 
   return (
     <Shell nav={navRoutes} active="/feed">
-      <header className="topbar">
-        <div className="brand"><img src="https://lh3.googleusercontent.com/aida-public/AB6AXuBOFtyytVWbcN0yp6q-fl1hVuGZc2T-IkiFJZf1JbR8gICaEsLcjvzh0cLTnlkKeFXV0eKB8KGySBJZVI32kemRvuIBroTd7scTzBKsKAYOVCfa27zNu5caOKkTqvovxOyQ64Hoh9gB58Eu8W4bd4FZS_59Jns0yBzldcGWwM1XKO7g8GkM1st1X_H57AEQuitrAETSMgGC_lQ-c8kQ1BhbADOsMOBfKWBjs-xlaG5uL2-op8eOGdUN" alt="REUSA+" /><span>REUSA+</span></div>
-        <label className="searchbar"><span className="material-symbols-outlined">search</span><input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search" /></label>
-        <div className="topbar-actions"><button className="icon-btn notification-btn" onClick={() => { api.readNotifications().catch(() => {}); setNotificationCount(0); onNavigate('/notificacoes'); }} aria-label="Notificações"><span className="material-symbols-outlined">notifications</span>{notificationCount ? <b>{notificationCount}</b> : null}</button><button className="avatar-btn" onClick={() => onNavigate('/perfil')} aria-label="Abrir perfil"><span className="material-symbols-outlined">person</span></button></div>
+      <header className={headerHidden ? 'topbar feed-topbar feed-topbar-hidden' : 'topbar feed-topbar'}>
+        <div className="brand"><img className="feed-logo" src={feedLogo} alt="REUSA+" /><span>REUSA+</span></div>
+        {searchOpen ? <label className="searchbar feed-search-expanded"><span className="material-symbols-outlined">search</span><input value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') setSearchOpen(false); }} placeholder="Buscar anúncios" autoFocus /><button type="button" className={categoriesOpen ? 'category-trigger category-trigger-active' : 'category-trigger'} onClick={toggleCategories} aria-expanded={categoriesOpen} aria-label="Escolher categoria"><span className="material-symbols-outlined">category</span></button><button type="button" className="feed-search-close" onClick={() => setSearchOpen(false)} aria-label="Fechar busca"><span className="material-symbols-outlined">close</span></button></label> : <div className="feed-search-tools"><button type="button" className="icon-btn feed-search-trigger" onClick={() => setSearchOpen(true)} aria-label="Abrir busca"><span className="material-symbols-outlined">search</span></button><button type="button" className={categoriesOpen ? 'category-trigger category-trigger-active' : 'category-trigger'} onClick={toggleCategories} aria-expanded={categoriesOpen} aria-label="Escolher categoria"><span className="material-symbols-outlined">category</span></button></div>}
+        <div className="topbar-actions"><button className="avatar-btn" onClick={() => onNavigate('/perfil')} aria-label="Abrir perfil"><span className="material-symbols-outlined">person</span></button></div>
       </header>
+      <div className="feed-category-popover">{categoriesOpen ? <CategoryBar selected={category} onChange={(value) => { setCategory(value); setCategoriesOpen(false); }} /> : null}</div>
       <main className="feed-page">
-        <CategoryBar selected={category} onChange={setCategory} />
-        <section className="feed-filter-bar" aria-label="Filtros de anúncios">
-          <button type="button" className={showFilters ? 'filter-toggle filter-toggle-active' : 'filter-toggle'} onClick={() => setShowFilters((value) => !value)}><span className="material-symbols-outlined">tune</span>Filtros</button>
-          <label><span>Ordenar</span><select value={sortBy} onChange={(event) => setSortBy(event.target.value)}><option value="recent">Mais recentes</option><option value="oldest">Mais antigos</option><option value="liked">Mais curtidos</option><option value="nearby">Próximos de mim</option></select></label>
-        </section>
-        {showFilters ? <section className="advanced-filters">
-          <label><span>Tipo</span><select value={filters.goal} onChange={(event) => setFilters((current) => ({ ...current, goal: event.target.value }))}><option value="">Todos</option><option value="Doação">Doação</option><option value="Troca">Troca</option></select></label>
-          <label><span>Estado</span><select value={filters.condition} onChange={(event) => setFilters((current) => ({ ...current, condition: event.target.value }))}><option value="">Todos</option><option value="Novo">Novo</option><option value="Bom estado">Bom estado</option><option value="Marcas de uso">Marcas de uso</option><option value="Para conserto">Para conserto</option></select></label>
-          <label><span>Cidade</span><input value={filters.city} onChange={(event) => setFilters((current) => ({ ...current, city: event.target.value }))} placeholder={session?.city || 'Qualquer cidade'} /></label>
-          <label><span>Status</span><select value={filters.status} onChange={(event) => setFilters((current) => ({ ...current, status: event.target.value }))}><option value="">Todos</option><option value="Disponível">Disponível</option><option value="Reservado">Reservado</option><option value="Doado">Doado</option><option value="Trocado">Trocado</option><option value="Encerrado">Encerrado</option></select></label>
-          <label><span>Publicado após</span><input type="date" value={filters.date} onChange={(event) => setFilters((current) => ({ ...current, date: event.target.value }))} /></label>
-          <button type="button" className="text-btn" onClick={() => setFilters({ goal: '', condition: '', city: '', status: '', date: '' })}>Limpar filtros</button>
-        </section> : null}
-        <div className="community-actions">
-          <button className="community-action community-action-ai" onClick={() => onNavigate('/ana-ia')}><span className="material-symbols-outlined">auto_awesome</span><span><strong>Peça uma ideia à Ana IA</strong><small>Descubra o que criar com seus materiais</small></span><span className="material-symbols-outlined">arrow_forward</span></button>
-          <button className="community-action" onClick={() => onNavigate('/inspiracoes')}><span className="material-symbols-outlined">storefront</span><span><strong>Feito com reaproveitamento</strong><small>Conheça produtos da comunidade</small></span><span className="material-symbols-outlined">arrow_forward</span></button>
-        </div>
         <div className="feed-list">
           {filteredPosts.length ? filteredPosts.map((post) => <FeedCard key={post.id} post={post} onOpenChat={async () => { try { const thread = await useAppStore.getState().createThread(post.id); onNavigate(`/mensagens/ana?thread=${thread.id}`); } catch (error) { alert(error.message); } }} />) : <div className="empty-state"><span className="material-symbols-outlined">search_off</span><h2>Nada encontrado</h2><p>Tente outra busca ou categoria.</p></div>}
         </div>
@@ -448,7 +463,7 @@ function AiIdeasScreen({ onBack }) {
 
 function CategoryBar({ selected, onChange }) {
   const items = ['Todos', 'Eletrônicos', 'Roupas', 'Móveis', 'Livros', 'Plástico'];
-  return <div className="category-scroll">{items.map((item) => <button key={item} onClick={() => onChange(item)} className={selected === item ? 'pill pill-active' : 'pill'}>{item}</button>)}</div>;
+  return <section className="category-panel feed-category-panel" aria-label="Categorias de anúncios">{items.map((item) => <button key={item} onClick={() => onChange(item)} className={selected === item ? 'pill pill-active' : 'pill'}>{item}</button>)}</section>;
 }
 
 function FeedCard({ post, onOpenChat }) {
@@ -472,6 +487,31 @@ function FeedCard({ post, onOpenChat }) {
       setLikes(result.likes);
     } catch (error) {
       alert(error.message);
+    }
+  }
+
+  async function lookupCnpj(value) {
+    const cnpj = value.replace(/\D/g, '').slice(0, 14);
+    setFormState((prev) => ({ ...prev, cnpj }));
+    setCnpjNotice('');
+    if (cnpj.length !== 14) return;
+    setCnpjBusy(true);
+    try {
+      const { business } = await api.businessByCnpj(cnpj);
+      setFormState((prev) => ({
+        ...prev,
+        cnpj,
+        businessName: business.legalName || business.tradeName || prev.businessName,
+        cep: business.cep || prev.cep,
+        address: business.address || prev.address,
+        neighborhood: business.neighborhood || prev.neighborhood,
+        city: business.city || prev.city
+      }));
+      setCnpjNotice(business.status ? `Dados preenchidos · ${business.status}` : 'Dados da empresa preenchidos.');
+    } catch (error) {
+      setCnpjNotice(error.message === 'CNPJ not found' ? 'CNPJ não encontrado. Preencha os dados manualmente.' : 'Não foi possível consultar agora. Você pode preencher manualmente.');
+    } finally {
+      setCnpjBusy(false);
     }
   }
 
@@ -547,9 +587,9 @@ function MessagesScreen({ onOpenThread }) {
 
   return (
     <Shell nav={navRoutes} active="/mensagens">
-      <header className="topbar compact-topbar"><h1>Mensagens</h1><button className="icon-btn"><span className="material-symbols-outlined">search</span></button></header>
-      <main className="page padded-top">
-        <label className="search-shell"><span className="material-symbols-outlined">search</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Pesquisar conversas..." /></label>
+      <header className="topbar compact-topbar messages-topbar"><h1>Mensagens</h1><button className="icon-btn" aria-label="Pesquisar conversas"><span className="material-symbols-outlined">search</span></button></header>
+      <main className="page messages-page">
+        <label className="search-shell messages-search"><span className="material-symbols-outlined">search</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Pesquisar conversas..." /></label>
         <div className="thread-list">
           {(visibleThreads.length ? visibleThreads : threads.length ? [] : [{ title: 'Ana Costa', subtitle: 'Olá! Tenho interesse nesse aparelho...', time: '14:20', unreadCount: 2 }]).map((thread) => (
             <button key={thread.id || thread.title} className="thread-card" onClick={() => onOpenThread(thread.id)}>
@@ -600,7 +640,7 @@ function ChatScreen({ onBack }) {
 
   return (
     <div className="chat-screen">
-      <header className="topbar compact-topbar"><button className="back-btn" onClick={onBack}><span className="material-symbols-outlined">arrow_back_ios_new</span></button><h1>Conversa Direta</h1></header>
+      <header className="topbar compact-topbar chat-topbar"><button className="back-btn" onClick={onBack} aria-label="Voltar para mensagens"><span className="material-symbols-outlined">arrow_back_ios_new</span></button><h1>Conversa Direta</h1></header>
       <div className="chat-banner"><span className="chat-person-avatar material-symbols-outlined" aria-label={`Perfil de ${thread?.title || 'Ana Costa'}`}>person</span><div><strong>{thread?.title || 'Ana Costa'}</strong><span>Negocie com segurança e combine a retirada</span></div></div>
       <main className="chat-body">{messages.map((message) => { const mine = message.sender_id === session?.id; return <div key={message.id} className={mine ? 'bubble mine' : 'bubble'}><p>{message.text}</p><span>{new Date(message.sent_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span></div>; })}</main>
       <footer className="chat-compose"><textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="Digite sua mensagem..." rows={1} /><button className="send-btn" onClick={send}><span className="material-symbols-outlined">send</span></button></footer>
@@ -620,6 +660,7 @@ function CreatePostScreen({ onBack, onSuccess }) {
     ['eletronicos', 'devices', 'Eletrônicos'],
     ['roupas', 'checkroom', 'Roupas'],
     ['livros', 'menu_book', 'Livros'],
+    ['plastico', 'recycling', 'Plástico'],
     ['outros', 'category', 'Outros']
   ];
 
@@ -636,6 +677,10 @@ function CreatePostScreen({ onBack, onSuccess }) {
   async function submit(event) {
     event.preventDefault();
     if (!postForm.title?.trim() || !postForm.description?.trim()) return;
+    if (!image) {
+      alert('Adicione uma foto do item para publicar o anúncio.');
+      return;
+    }
     const customCategory = String(postForm.customCategory || '').trim();
     const category = postForm.category === 'outros' ? customCategory : (postForm.category || 'moveis');
     if (!category) {
@@ -898,8 +943,9 @@ function ProfileScreen({ onGoToFeed, onSettings, onSaved, onMyPosts, onAdmin }) 
       <main className="page profile-page">
         <section className="profile-header">
           <div className="avatar-wrap">{user.avatar ? <img src={user.avatar} alt={user.name} /> : <span className="avatar-placeholder material-symbols-outlined" aria-label={`Perfil de ${user.name}`}>person</span>}<span className="verified material-symbols-outlined">verified</span></div>
-          <h1>{user.name}</h1>
-          <div className="subtle-row"><span className="material-symbols-outlined">location_on</span><span>{user.city}</span></div>
+          <h1>{user.accountType === 'business' && user.businessName ? user.businessName : user.name}</h1>
+          {user.accountType === 'business' ? <span className="eyebrow">Empresa parceira</span> : null}
+          <div className="subtle-row"><span className="material-symbols-outlined">location_on</span><span>{[user.neighborhood, user.city].filter(Boolean).join(' · ')}</span></div>
         </section>
         <section className="stats-row">
           <Stat value={stats.donations} label="Doações" tone="primary" />
@@ -1073,12 +1119,12 @@ function SettingsScreen({ onBack, onLogout, onAbout }) {
   const profile = useAppStore((state) => state.profile);
   const updateProfile = useAppStore((state) => state.updateProfile);
   const logout = useAppStore((state) => state.logout);
-  const [form, setForm] = useState({ name: profile?.user?.name || '', city: profile?.user?.city || '', cep: profile?.user?.cep || '', address: profile?.user?.address || '' });
+  const [form, setForm] = useState({ name: profile?.user?.name || '', city: profile?.user?.city || '', neighborhood: profile?.user?.neighborhood || '', cep: profile?.user?.cep || '', address: profile?.user?.address || '', businessName: profile?.user?.businessName || '' });
   const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '' });
   const [preferences, setPreferences] = useState(profile?.user?.notificationPreferences || ['Curtidas', 'Comentários', 'Interesse', 'Mensagens', 'Negociações', 'Avaliações', 'Sistema']);
 
   useEffect(() => {
-    if (profile?.user) setForm({ name: profile.user.name || '', city: profile.user.city || '', cep: profile.user.cep || '', address: profile.user.address || '' });
+    if (profile?.user) setForm({ name: profile.user.name || '', city: profile.user.city || '', neighborhood: profile.user.neighborhood || '', cep: profile.user.cep || '', address: profile.user.address || '', businessName: profile.user.businessName || '' });
   }, [profile]);
 
   async function save(event) {
@@ -1119,8 +1165,10 @@ function SettingsScreen({ onBack, onLogout, onAbout }) {
           <form className="auth-form" onSubmit={save}>
             <Field label="Nome" icon="person" value={form.name} onChange={(value) => setForm((current) => ({ ...current, name: value }))} />
             <Field label="Cidade" icon="location_on" value={form.city} onChange={(value) => setForm((current) => ({ ...current, city: value }))} />
+            <Field label="Bairro público" icon="location_city" value={form.neighborhood} onChange={(value) => setForm((current) => ({ ...current, neighborhood: value }))} />
             <Field label="CEP" icon="markunread_mailbox" value={form.cep} onChange={(value) => setForm((current) => ({ ...current, cep: value }))} />
             <Field label="Endereço" icon="home" value={form.address} onChange={(value) => setForm((current) => ({ ...current, address: value }))} />
+            {profile?.user?.accountType === 'business' ? <Field label="Razão social" icon="business" value={form.businessName} onChange={(value) => setForm((current) => ({ ...current, businessName: value }))} /> : null}
             <button className="primary-btn full">Salvar alterações</button>
           </form>
           <section className="settings-section"><h3>Privacidade e conta</h3><p>Seu endereço completo nunca é exibido publicamente. Os anúncios mostram apenas a localização aproximada.</p><form className="auth-form" onSubmit={changePassword}><Field label="Senha atual" icon="lock" type="password" value={passwordForm.currentPassword} onChange={(value) => setPasswordForm((current) => ({ ...current, currentPassword: value }))} /><Field label="Nova senha" icon="password" type="password" value={passwordForm.newPassword} onChange={(value) => setPasswordForm((current) => ({ ...current, newPassword: value }))} placeholder="Pelo menos 8 caracteres" /><button className="secondary-btn">Alterar senha</button></form></section>
