@@ -73,7 +73,7 @@ function ScreenRouter({ location, navigate }) {
     case '/':
       return <Navigate to="/splash" replace />;
     case '/splash':
-      return <SplashScreen onCreateAccount={() => navigate('/criar-conta')} onLogin={() => navigate('/login')} onExplore={() => navigate('/feed')} onAbout={() => navigate('/sobre')} />;
+      return <LandingScreen onCreateAccount={() => navigate('/criar-conta')} onLogin={() => navigate('/login')} onExplore={() => navigate('/feed')} onAbout={() => navigate('/sobre')} />;
     case '/onboarding':
       return <Navigate to="/login" replace />;
     case '/login':
@@ -153,6 +153,44 @@ function BottomNav({ nav, active }) {
         );
       })}
     </nav>
+  );
+}
+
+function LandingScreen({ onCreateAccount, onLogin, onExplore, onAbout }) {
+  const [featuredPosts, setFeaturedPosts] = useState([]);
+  const [postsLoading, setPostsLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    api.feed()
+      .then((result) => {
+        if (active) setFeaturedPosts((result.posts || []).filter((post) => post.status === 'Disponível').slice(0, 2));
+      })
+      .catch(() => { if (active) setFeaturedPosts([]); })
+      .finally(() => { if (active) setPostsLoading(false); });
+    return () => { active = false; };
+  }, []);
+
+  return (
+    <main className="landing-screen">
+      <header className="landing-header">
+        <button className="landing-brand" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })} aria-label="REUSA+, início"><img src={feedLogo} alt="REUSA+" /></button>
+        <nav className="landing-nav" aria-label="Navegação principal"><a href="#como-funciona">Como funciona</a><a href="#categorias">Categorias</a><a href="#impacto">Impacto circular</a><button onClick={onAbout}>Sobre nós</button></nav>
+        <div className="landing-account-actions"><button className="landing-login" onClick={onLogin}>Fazer login</button><button className="landing-start" onClick={onCreateAccount}>Começar agora</button></div>
+      </header>
+      <section className="landing-hero" id="como-funciona">
+        <div className="landing-copy"><img className="landing-hero-logo" src={feedLogo} alt="REUSA+" /><h1>Você desapega. Uma nova história começa.</h1><p>Na REUSA+, o que você não usa ganha um novo destino e novas possibilidades.</p></div>
+        <div className="landing-flow" id="categorias" aria-label="Exemplo de um item ganhando novo ciclo">
+          <article className="listing-card listing-card-one"><div className="listing-photo chair-photo"><span>Doação</span></div><div className="listing-content"><small><i />Disponível agora</small><h2>Cadeira Escandinava</h2><p>Madeira nobre · Pinheiros, SP</p><footer>Por Mariana R. <b>Grátis</b></footer></div></article>
+          {postsLoading ? <div className="landing-listings-loading"><span className="material-symbols-outlined">progress_activity</span>Carregando anúncios...</div> : featuredPosts.length ? <div className="landing-listings">{featuredPosts.map((post, index) => <React.Fragment key={post.id}><article className={`listing-card ${index === 0 ? 'listing-card-one' : 'listing-card-two'}`}><div className="listing-photo"><img src={post.imageUrl} alt={post.title} /><span>{post.goal || 'Anúncio'}</span></div><div className="listing-content"><small><i />Disponível agora</small><h2>{post.title}</h2><p>{post.category} · {post.location}</p><footer>Por {post.author?.name || 'Membro da comunidade'} <b>{post.goal || 'Grátis'}</b></footer></div></article>{index === 0 && featuredPosts.length > 1 ? <div className="landing-cycle"><span className="material-symbols-outlined">sync</span></div> : null}</React.Fragment>)}</div> : <div className="landing-listings-empty"><span className="material-symbols-outlined">inventory_2</span><strong>A comunidade ainda não publicou anúncios.</strong><small>Seja a primeira pessoa a dar um novo ciclo a um item.</small></div>}
+          <div className="landing-cycle landing-cycle-legacy"><span className="material-symbols-outlined">sync</span></div>
+          <article className="listing-card listing-card-two"><div className="listing-photo plant-photo"><span>Recebido</span></div><div className="listing-content"><small><i />Novo lar encontrado</small><h2>Monstera com Cachepot</h2><p>Planta viva · Vila Mariana, SP</p><footer>Adotado por Lucas T. <b>Com carinho</b></footer></div></article>
+          <div className="landing-steps"><div><span className="material-symbols-outlined">add_box</span><strong>Publique</strong><small>o que não usa</small></div><div><span className="material-symbols-outlined">forum</span><strong>Converse</strong><small>com interessados</small></div><div><span className="material-symbols-outlined">group</span><strong>Transforme</strong><small>o descarte</small></div></div>
+          <div className="landing-conversion"><button onClick={onCreateAccount}>Criar minha conta <span className="material-symbols-outlined">arrow_forward</span></button><button onClick={onExplore}><span className="material-symbols-outlined">search</span>Explorar anúncios sem entrar</button></div>
+        </div>
+      </section>
+      <footer className="landing-footer"><p>© 2025 REUSA+. Economia sustentável feita por pessoas.</p><div><a href="#termos">Termos de uso</a><a href="#privacidade">Política de privacidade</a><a href="#ajuda">Central de ajuda</a></div></footer>
+    </main>
   );
 }
 
