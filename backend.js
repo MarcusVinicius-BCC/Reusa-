@@ -1140,7 +1140,21 @@ function refreshUserMetrics(userId) {
   return impact;
 }
 
-function communityImpact() {
+async function communityImpact() {
+  if (postgresEnabled()) {
+    const [completed, exchanges, beneficiaries] = await Promise.all([
+      postgres.one("SELECT COUNT(*)::int AS count FROM negotiations WHERE status = 'completed'"),
+      postgres.one("SELECT COUNT(*)::int AS count FROM negotiations JOIN posts ON posts.id = negotiations.post_id WHERE negotiations.status = 'completed' AND posts.goal = 'Troca'"),
+      postgres.one("SELECT COUNT(DISTINCT interested_id)::int AS count FROM negotiations WHERE status = 'completed'")
+    ]);
+    return {
+      itemsReused: Number(completed?.count || 0),
+      divertedFromDisposal: Number(completed?.count || 0),
+      exchanges: Number(exchanges?.count || 0),
+      beneficiaries: Number(beneficiaries?.count || 0),
+      estimated: true
+    };
+  }
   const completed = get("SELECT COUNT(*) AS count FROM negotiations WHERE status = 'completed'")?.count || 0;
   const exchanges = get("SELECT COUNT(*) AS count FROM negotiations JOIN posts ON posts.id = negotiations.post_id WHERE negotiations.status = 'completed' AND posts.goal = 'Troca'")?.count || 0;
   const beneficiaries = get("SELECT COUNT(DISTINCT interested_id) AS count FROM negotiations WHERE status = 'completed'")?.count || 0;
@@ -2062,7 +2076,7 @@ async function start() {
 
   app.get('/api/impact/community', async (_req, res) => {
     const distributedImpact = await distributedServiceValue(IMPACT_SERVICE_URL, '/impact');
-    res.json({ impact: distributedImpact || communityImpact() });
+    res.json({ impact: distributedImpact || await communityImpact() });
   });
 
   app.put('/api/profile', authMiddleware, (req, res) => {
@@ -2133,7 +2147,7 @@ async function start() {
     return res.json({ ok: true });
   });
 
-  app.get('/api/admin/dashboard', authMiddleware, adminMiddleware, (_req, res) => {
+  app.get('/api/admin/dashboard', authMiddleware, adminMiddleware, async (_req, res) => {
     const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
     const totalUsers = get('SELECT COUNT(*) AS count FROM users')?.count || 0;
     const activeUsers = get('SELECT COUNT(*) AS count FROM users WHERE suspended = 0 AND last_active_at >= ?', [since])?.count || 0;
@@ -2145,7 +2159,7 @@ async function start() {
     const reports = get("SELECT COUNT(*) AS count FROM reports WHERE status = 'pending'")?.count || 0;
     const newUsers = get('SELECT COUNT(*) AS count FROM users WHERE last_active_at >= ?', [since])?.count || 0;
     const categories = all('SELECT category, COUNT(*) AS count FROM posts GROUP BY category ORDER BY count DESC LIMIT 8');
-    return res.json({ totals: { totalUsers, activeUsers, totalPosts, activePosts, donations, exchanges, collectionPoints, reports, newUsers }, categories, impact: communityImpact() });
+    return res.json({ totals: { totalUsers, activeUsers, totalPosts, activePosts, donations, exchanges, collectionPoints, reports, newUsers }, categories, impact: await communityImpact() });
   });
 
   app.get('/api/admin/users', authMiddleware, adminMiddleware, (req, res) => {
