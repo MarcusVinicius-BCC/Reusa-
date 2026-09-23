@@ -3,11 +3,26 @@ import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { api, clearToken, setToken } from './services/api';
 import { useAppStore } from './state/store';
 import { fallbackPosts } from './data/fallback-posts';
-import { CircleMarker, MapContainer, TileLayer, useMap } from 'react-leaflet';
-import 'leaflet/dist/leaflet.css';
 import feedLogo from './assets/reusa-logo.png';
 
 const BRAZIL_TIME_ZONE = 'America/Sao_Paulo';
+const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+let googleMapsLoader;
+
+function loadGoogleMaps() {
+  if (window.google?.maps) return Promise.resolve(window.google.maps);
+  if (!GOOGLE_MAPS_API_KEY) return Promise.reject(new Error('A chave do Google Maps não foi configurada.'));
+  if (googleMapsLoader) return googleMapsLoader;
+  googleMapsLoader = new Promise((resolve, reject) => {
+    const script = document.createElement('script');
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(GOOGLE_MAPS_API_KEY)}&v=weekly&language=pt-BR&region=BR`;
+    script.async = true;
+    script.onload = () => window.google?.maps ? resolve(window.google.maps) : reject(new Error('Não foi possível carregar o Google Maps.'));
+    script.onerror = () => reject(new Error('Não foi possível carregar o Google Maps. Verifique as restrições da chave.'));
+    document.head.appendChild(script);
+  });
+  return googleMapsLoader;
+}
 const validDate = (value) => {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date;
@@ -1139,15 +1154,7 @@ function MapScreen({ onSuggest }) {
   return (
     <Shell nav={navRoutes} active="/mapa">
       <main className="map-page">
-        <MapContainer center={mapCenter} zoom={12} scrollWheelZoom className="live-map">
-          <TileLayer
-            attribution='&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors'
-            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-          />
-          <MapViewport position={mapCenter} />
-          {visiblePoints.map((point) => <CircleMarker key={point.id} center={[point.latitude, point.longitude]} pathOptions={{ color: '#006d3d', fillColor: '#00d67d', fillOpacity: 0.9 }} radius={10} eventHandlers={{ click: () => setSelectedPoint(point) }} />)}
-          {userLocation ? <><CircleMarker center={userLocation} pathOptions={{ color: '#2459d6', fillColor: '#77a0ff', fillOpacity: 0.9 }} radius={8} /><RecenterMap position={userLocation} /></> : null}
-        </MapContainer>
+        <ModernCollectionMap center={mapCenter} points={visiblePoints} userLocation={userLocation} onSelectPoint={setSelectedPoint} />
         <form className="map-search" onSubmit={searchPlace}><span className="material-symbols-outlined">search</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar cidade ou endereço" /><button disabled={searchBusy} aria-label="Buscar local"><span className="material-symbols-outlined">arrow_forward</span></button></form>
         <div className="map-chips">
           {['Todos', 'Eletrônicos', 'Pilhas', 'Óleo', 'Cooperativas'].map((item) => <button key={item} className={category === item ? 'pill pill-active' : 'pill'} onClick={() => setCategory(item)}>{item}</button>)}
@@ -1177,17 +1184,8 @@ function MapScreen({ onSuggest }) {
   );
 }
 
-function RecenterMap({ position }) {
-  const map = useMap();
-  useEffect(() => {
-    map.flyTo(position, 14);
-  }, [map, position]);
-  return null;
-}
-
-
 function SuggestCollectionPointScreen({ onBack }) {
-  const [form, setForm] = useState({ name: '', location: '', hours: '', categories: '' });
+  const [form, setForm] = useState({ name: '', street: '', number: '', neighborhood: '', city: '', state: '', postalCode: '', hours: '', categories: '' });
   const [busy, setBusy] = useState(false);
   async function submit(event) {
     event.preventDefault();
@@ -1198,15 +1196,56 @@ function SuggestCollectionPointScreen({ onBack }) {
       onBack();
     } catch (error) { alert(error.message); } finally { setBusy(false); }
   }
-  return <div className="subpage"><header className="topbar compact-topbar"><button className="back-btn" onClick={onBack}><span className="material-symbols-outlined">arrow_back_ios_new</span></button><h1>Sugerir ponto</h1><span /></header><main className="page suggestion-page"><section className="composer-card"><span className="eyebrow">Mapa colaborativo</span><h2>Conhece um ponto de coleta?</h2><p>Envie as informações. A equipe ReUsa+ verifica antes de publicar no mapa.</p><form className="composer-form" onSubmit={submit}><Field label="Nome do local" icon="location_city" value={form.name} onChange={(value) => setForm((current) => ({ ...current, name: value }))} placeholder="Ex: Cooperativa do bairro" /><Field label="Endereço ou cidade" icon="location_on" value={form.location} onChange={(value) => setForm((current) => ({ ...current, location: value }))} placeholder="Ex: Bairro Centro, Santarém - PA" /><Field label="Materiais aceitos" icon="recycling" value={form.categories} onChange={(value) => setForm((current) => ({ ...current, categories: value }))} placeholder="Ex: papel, plástico, eletrônicos" /><Field label="Horário (opcional)" icon="schedule" value={form.hours} onChange={(value) => setForm((current) => ({ ...current, hours: value }))} placeholder="Ex: segunda a sexta, 8h às 17h" /><button className="primary-btn full" disabled={busy}>{busy ? 'Enviando...' : 'Enviar sugestão'}<span className="material-symbols-outlined">send</span></button></form></section></main></div>;
+  return <div className="subpage"><header className="topbar compact-topbar"><button className="back-btn" onClick={onBack}><span className="material-symbols-outlined">arrow_back_ios_new</span></button><h1>Sugerir ponto</h1><span /></header><main className="page suggestion-page"><section className="composer-card"><span className="eyebrow">Mapa colaborativo</span><h2>Conhece um ponto de coleta?</h2><p>Informe um endereço público. Buscamos as coordenadas automaticamente e a equipe verifica antes de publicar.</p><form className="composer-form" onSubmit={submit}><Field label="Nome do local" icon="location_city" value={form.name} onChange={(value) => setForm((current) => ({ ...current, name: value }))} placeholder="Ex: Cooperativa do bairro" /><div className="point-address-grid"><Field label="Rua" icon="signpost" value={form.street} onChange={(value) => setForm((current) => ({ ...current, street: value }))} placeholder="Ex: Rua dos Tapajós" /><Field label="Número" icon="pin" value={form.number} onChange={(value) => setForm((current) => ({ ...current, number: value }))} placeholder="Ex: 150" /><Field label="Bairro" icon="location_city" value={form.neighborhood} onChange={(value) => setForm((current) => ({ ...current, neighborhood: value }))} placeholder="Ex: Centro" /><Field label="Cidade" icon="location_on" value={form.city} onChange={(value) => setForm((current) => ({ ...current, city: value }))} placeholder="Ex: Santarém" /><Field label="Estado" icon="map" value={form.state} onChange={(value) => setForm((current) => ({ ...current, state: value }))} placeholder="Ex: PA" /><Field label="CEP (opcional)" icon="markunread_mailbox" value={form.postalCode} onChange={(value) => setForm((current) => ({ ...current, postalCode: value }))} placeholder="00000-000" /></div><Field label="Materiais aceitos" icon="recycling" value={form.categories} onChange={(value) => setForm((current) => ({ ...current, categories: value }))} placeholder="Ex: papel, plástico, eletrônicos" /><Field label="Horário (opcional)" icon="schedule" value={form.hours} onChange={(value) => setForm((current) => ({ ...current, hours: value }))} placeholder="Ex: segunda a sexta, 8h às 17h" /><button className="primary-btn full" disabled={busy}>{busy ? 'Buscando localização...' : 'Enviar sugestão'}<span className="material-symbols-outlined">send</span></button></form></section></main></div>;
 }
 
-function MapViewport({ position }) {
-  const map = useMap();
+function ModernCollectionMap({ center, points, userLocation, onSelectPoint }) {
+  const containerRef = useRef(null);
+  const mapRef = useRef(null);
+  const markersRef = useRef([]);
+  const [mapError, setMapError] = useState('');
+  const [mapReady, setMapReady] = useState(false);
+
   useEffect(() => {
-    map.flyTo(position, 12);
-  }, [map, position]);
-  return null;
+    let active = true;
+    loadGoogleMaps().then((maps) => {
+      if (!active || !containerRef.current) return;
+      mapRef.current = new maps.Map(containerRef.current, {
+        center: { lat: center[0], lng: center[1] }, zoom: 12,
+        mapTypeControl: false, streetViewControl: false, fullscreenControl: true,
+        zoomControl: true, clickableIcons: false
+      });
+      setMapReady(true);
+    }).catch((error) => { if (active) setMapError(error.message); });
+    return () => {
+      active = false;
+      markersRef.current.forEach((marker) => marker.setMap(null));
+      markersRef.current = [];
+      mapRef.current = null;
+      setMapReady(false);
+    };
+  }, []);
+
+  useEffect(() => {
+    mapRef.current?.panTo({ lat: center[0], lng: center[1] });
+  }, [center]);
+
+  useEffect(() => {
+    if (!mapRef.current || !window.google?.maps) return undefined;
+    markersRef.current.forEach((marker) => marker.setMap(null));
+    const pointMarkers = points.map((point) => {
+      const marker = new window.google.maps.Marker({ map: mapRef.current, position: { lat: Number(point.latitude), lng: Number(point.longitude) }, title: point.name, icon: { path: window.google.maps.SymbolPath.CIRCLE, fillColor: '#008b50', fillOpacity: 1, strokeColor: '#ffffff', strokeWeight: 3, scale: 11 } });
+      marker.addListener('click', () => onSelectPoint(point));
+      return marker;
+    });
+    if (userLocation) {
+      pointMarkers.push(new window.google.maps.Marker({ map: mapRef.current, position: { lat: userLocation[0], lng: userLocation[1] }, title: 'Sua localização', icon: { path: window.google.maps.SymbolPath.CIRCLE, fillColor: '#2864dc', fillOpacity: 1, strokeColor: '#ffffff', strokeWeight: 3, scale: 8 } }));
+    }
+    markersRef.current = pointMarkers;
+    return () => pointMarkers.forEach((marker) => marker.setMap(null));
+  }, [points, userLocation, onSelectPoint, mapReady]);
+
+  return <div className="live-map google-map"><div ref={containerRef} className="google-map-canvas" />{mapError ? <div className="map-load-error"><span className="material-symbols-outlined">map</span><strong>Mapa indisponível</strong><p>{mapError}</p></div> : null}</div>;
 }
 
 function SettingsScreen({ onBack, onLogout }) {
@@ -1325,20 +1364,30 @@ function AdminScreen({ onBack }) {
   async function createCollectionPoint() {
     const name = window.prompt('Nome do ponto de coleta:');
     if (!name) return;
-    const location = window.prompt('Localização pública (cidade/bairro):');
-    if (!location) return;
+    const street = window.prompt('Rua (opcional):') || '';
+    const number = window.prompt('Número (opcional):') || '';
+    const neighborhood = window.prompt('Bairro (opcional):') || '';
+    const city = window.prompt('Cidade:');
+    if (!city) return;
+    const state = window.prompt('Estado / UF (opcional):') || '';
+    const postalCode = window.prompt('CEP (opcional):') || '';
     const categories = window.prompt('Materiais aceitos, separados por vírgula:', 'Eletrônicos, Plástico') || '';
     const hours = window.prompt('Horário de funcionamento:', '08:00 - 17:00') || '';
-    try { await api.createAdminCollectionPoint({ name, location, categories: categories.split(',').map((item) => item.trim()).filter(Boolean), hours }); await load(); } catch (error) { alert(error.message); }
+    try { await api.createAdminCollectionPoint({ name, street, number, neighborhood, city, state, postalCode, categories: categories.split(',').map((item) => item.trim()).filter(Boolean), hours }); await load(); } catch (error) { alert(error.message); }
   }
   async function editCollectionPoint(point) {
     const name = window.prompt('Nome do ponto de coleta:', point.name);
     if (!name) return;
-    const location = window.prompt('Localização pública:', point.location);
-    if (!location) return;
+    const street = window.prompt('Rua (opcional):') || '';
+    const number = window.prompt('Número (opcional):') || '';
+    const neighborhood = window.prompt('Bairro (opcional):') || '';
+    const city = window.prompt('Cidade:', point.location);
+    if (!city) return;
+    const state = window.prompt('Estado / UF (opcional):') || '';
+    const postalCode = window.prompt('CEP (opcional):') || '';
     const categories = window.prompt('Materiais aceitos, separados por vírgula:', point.categories.join(', ')) || '';
     const hours = window.prompt('Horário de funcionamento:', point.hours) || '';
-    try { await api.updateAdminCollectionPoint(point.id, { name, location, categories: categories.split(',').map((item) => item.trim()).filter(Boolean), hours }); await load(); } catch (error) { alert(error.message); }
+    try { await api.updateAdminCollectionPoint(point.id, { name, street, number, neighborhood, city, state, postalCode, categories: categories.split(',').map((item) => item.trim()).filter(Boolean), hours }); await load(); } catch (error) { alert(error.message); }
   }
   async function removeCollectionPoint(point) {
     if (!window.confirm(`Excluir o ponto "${point.name}"?`)) return;

@@ -9,6 +9,7 @@ const { EventPublisher } = require('./distributed/event-publisher');
 const { PostgresRepository, postgresEnabled, postgresConnectionString } = require('./storage/postgres-repository');
 const { registerPostgresRoutes } = require('./storage/postgres-api');
 const { isLikelyResidentialAddress } = require('./storage/location-validation');
+const { buildCollectionPointAddress, geocodeCollectionPoint } = require('./storage/collection-point-geocoding');
 const { applyMigrations } = require('./scripts/run-postgres-migrations');
 const { createObjectStorage } = require('./distributed/object-storage');
 const { connectRedis } = require('./distributed/redis-client');
@@ -71,7 +72,7 @@ app.use((_req, res, next) => {
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Permissions-Policy', 'geolocation=(self)');
-  res.setHeader('Content-Security-Policy', "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https://viacep.com.br https://nominatim.openstreetmap.org");
+  res.setHeader('Content-Security-Policy', "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self' https://maps.googleapis.com; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https://viacep.com.br https://nominatim.openstreetmap.org https://maps.googleapis.com https://*.googleapis.com");
   next();
 });
 
@@ -2067,14 +2068,18 @@ async function start() {
 
   app.post('/api/collection-points/suggestions', authMiddleware, async (req, res, next) => {
     const name = String(req.body?.name || '').trim();
-    const location = String(req.body?.location || '').trim();
+    const address = buildCollectionPointAddress(req.body);
+    const location = address.location;
     const hours = String(req.body?.hours || '').trim();
     const categories = Array.isArray(req.body?.categories) ? req.body.categories.map((item) => String(item).trim()).filter(Boolean) : [];
-    const latitude = Number(req.body?.latitude);
-    const longitude = Number(req.body?.longitude);
+    const submittedLatitude = Number(req.body?.latitude);
+    const submittedLongitude = Number(req.body?.longitude);
     if (!name || !location || !categories.length || name.length > 120 || location.length > 200 || hours.length > 100 || categories.length > 12 || categories.some((item) => item.length > 40)) return res.status(400).json({ error: 'Provide a name, location and accepted materials' });
     try {
-      const suggestion = { id: uid('point-suggestion'), user_id: req.user.id, name, categories_json: JSON.stringify(categories), hours, location, latitude: Number.isFinite(latitude) ? latitude : null, longitude: Number.isFinite(longitude) ? longitude : null, status: 'pending', created_at: new Date().toISOString() };
+      const geocoded = Number.isFinite(submittedLatitude) && Number.isFinite(submittedLongitude)
+        ? { latitude: submittedLatitude, longitude: submittedLongitude }
+        : await geocodeCollectionPoint(address);
+      const suggestion = { id: uid('point-suggestion'), user_id: req.user.id, name, categories_json: JSON.stringify(categories), hours, location, latitude: geocoded?.latitude ?? null, longitude: geocoded?.longitude ?? null, status: 'pending', created_at: new Date().toISOString() };
       if (postgresEnabled()) {
         const duplicate = await postgres.one("SELECT id FROM collection_point_suggestions WHERE user_id = $1 AND lower(name) = lower($2) AND lower(location) = lower($3) AND status = 'pending'", [req.user.id, name, location]);
         if (duplicate) return res.status(409).json({ error: 'You already suggested this collection point' });
@@ -2299,16 +2304,22 @@ async function start() {
     return res.json({ points, suggestions });
   });
 
-  app.post('/api/admin/collection-points', authMiddleware, adminMiddleware, (req, res) => {
+  app.post('/api/admin/collection-points', authMiddleware, adminMiddleware, async (req, res, next) => {
     const name = String(req.body?.name || '').trim();
-    const location = String(req.body?.location || '').trim();
+    const address = buildCollectionPointAddress(req.body);
+    const location = address.location;
     const hours = String(req.body?.hours || 'Horário não informado').trim();
     const categories = Array.isArray(req.body?.categories) ? req.body.categories.map((item) => String(item).trim()).filter(Boolean).slice(0, 30) : [];
     if (!name || !location || name.length > 160 || location.length > 240 || hours.length > 160) return res.status(400).json({ error: 'Name and location are required' });
-    const point = { id: uid('point'), name, categories_json: JSON.stringify(categories), hours, location, status: String(req.body?.status || 'Aberto').trim(), origin: String(req.body?.origin || 'ReUsa+').trim(), last_updated: new Date().toISOString(), latitude: Number.isFinite(Number(req.body?.latitude)) ? Number(req.body.latitude) : null, longitude: Number.isFinite(Number(req.body?.longitude)) ? Number(req.body.longitude) : null };
-    run('INSERT INTO collection_points (id, name, categories_json, hours, location, status, origin, last_updated, latitude, longitude) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', Object.values(point));
-    persistDb();
-    return res.status(201).json({ point: { ...point, categories } });
+    try {
+      const geocoded = await geocodeCollectionPoint(address);
+      const point = { id: uid('point'), name, categories_json: JSON.stringify(categories), hours, location, status: String(req.body?.status || 'Aberto').trim(), origin: String(req.body?.origin || 'ReUsa+').trim(), last_updated: new Date().toISOString(), latitude: Number.isFinite(Number(req.body?.latitude)) ? Number(req.body.latitude) : geocoded?.latitude ?? null, longitude: Number.isFinite(Number(req.body?.longitude)) ? Number(req.body.longitude) : geocoded?.longitude ?? null };
+      run('INSERT INTO collection_points (id, name, categories_json, hours, location, status, origin, last_updated, latitude, longitude) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', Object.values(point));
+      persistDb();
+      return res.status(201).json({ point: { ...point, categories } });
+    } catch (error) {
+      next(error);
+    }
   });
 
   app.patch('/api/admin/collection-points/:id', authMiddleware, adminMiddleware, (req, res) => {

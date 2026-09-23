@@ -1,6 +1,7 @@
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const { isLikelyResidentialAddress } = require('./location-validation');
+const { buildCollectionPointAddress, geocodeCollectionPoint } = require('./collection-point-geocoding');
 
 function id(prefix) {
   return `${prefix}-${crypto.randomUUID()}`;
@@ -549,13 +550,14 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
   app.post('/api/collection-points/suggestions', authenticate, async (req, res, next) => {
     try {
       const name = String(req.body?.name || '').trim();
-      const location = String(req.body?.location || '').trim();
+      const address = buildCollectionPointAddress(req.body);
+      const location = address.location;
       const hours = String(req.body?.hours || '').trim();
       const categories = Array.isArray(req.body?.categories)
         ? req.body.categories.map(String).map((item) => item.trim()).filter(Boolean)
         : [];
-      const latitude = Number(req.body?.latitude);
-      const longitude = Number(req.body?.longitude);
+      const submittedLatitude = Number(req.body?.latitude);
+      const submittedLongitude = Number(req.body?.longitude);
 
       if (
         !name ||
@@ -576,6 +578,9 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       );
       if (duplicate) return res.status(409).json({ error: 'You already suggested this collection point' });
 
+      const geocoded = Number.isFinite(submittedLatitude) && Number.isFinite(submittedLongitude)
+        ? { latitude: submittedLatitude, longitude: submittedLongitude }
+        : await geocodeCollectionPoint(address);
       const suggestion = {
         id: id('point-suggestion'),
         userId: req.user.id,
@@ -583,8 +588,8 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
         categoriesJson: JSON.stringify(categories),
         hours,
         location,
-        latitude: Number.isFinite(latitude) ? latitude : null,
-        longitude: Number.isFinite(longitude) ? longitude : null
+        latitude: geocoded?.latitude ?? null,
+        longitude: geocoded?.longitude ?? null
       };
       const created = await db.one(
         `INSERT INTO collection_point_suggestions
@@ -687,11 +692,13 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       if (!await requireAdmin(req, res)) return;
       const body = req.body || {};
       const name = String(body.name || '').trim();
-      const location = String(body.location || '').trim();
+      const address = buildCollectionPointAddress(body);
+      const location = address.location;
       const hours = String(body.hours || 'Horário não informado').trim();
       const categories = Array.isArray(body.categories) ? body.categories.map(String).map((item) => item.trim()).filter(Boolean).slice(0, 30) : [];
       if (!name || !location || name.length > 160 || location.length > 240 || hours.length > 160) return res.status(400).json({ error: 'Name and location are required' });
-      const point = await db.one('INSERT INTO collection_points(id,name,categories_json,hours,location,status,origin,last_updated,latitude,longitude) VALUES($1,$2,$3,$4,$5,$6,$7,now(),$8,$9) RETURNING *', [id('point'), name, JSON.stringify(categories), hours, location, String(body.status || 'Aberto').trim(), String(body.origin || 'ReUsa+').trim(), body.latitude ?? null, body.longitude ?? null]);
+      const geocoded = await geocodeCollectionPoint(address);
+      const point = await db.one('INSERT INTO collection_points(id,name,categories_json,hours,location,status,origin,last_updated,latitude,longitude) VALUES($1,$2,$3,$4,$5,$6,$7,now(),$8,$9) RETURNING *', [id('point'), name, JSON.stringify(categories), hours, location, String(body.status || 'Aberto').trim(), String(body.origin || 'ReUsa+').trim(), body.latitude ?? geocoded?.latitude ?? null, body.longitude ?? geocoded?.longitude ?? null]);
       return res.status(201).json({ point: { id: point.id, name: point.name, categories: json(point.categories_json), hours: point.hours, location: point.location, status: point.status, origin: point.origin, lastUpdated: point.last_updated, latitude: point.latitude, longitude: point.longitude } });
     } catch (error) { return next(error); }
   });
@@ -702,11 +709,13 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       if (!current) return res.status(404).json({ error: 'Collection point not found' });
       const body = req.body || {};
       const name = String(body.name ?? current.name).trim();
-      const location = String(body.location ?? current.location).trim();
+      const address = buildCollectionPointAddress({ ...body, location: body.location ?? current.location });
+      const location = address.location;
       const hours = String(body.hours ?? current.hours).trim();
       const categories = Array.isArray(body.categories) ? body.categories.map(String).map((item) => item.trim()).filter(Boolean).slice(0, 30) : json(current.categories_json);
       if (!name || !location || name.length > 160 || location.length > 240 || hours.length > 160) return res.status(400).json({ error: 'Name and location are required' });
-      const point = await db.one('UPDATE collection_points SET name=$1,categories_json=$2,hours=$3,location=$4,status=$5,origin=$6,last_updated=now(),latitude=$7,longitude=$8 WHERE id=$9 RETURNING *', [name, JSON.stringify(categories), hours, location, String(body.status ?? current.status).trim(), String(body.origin ?? current.origin).trim(), body.latitude ?? current.latitude, body.longitude ?? current.longitude, current.id]);
+      const geocoded = await geocodeCollectionPoint(address);
+      const point = await db.one('UPDATE collection_points SET name=$1,categories_json=$2,hours=$3,location=$4,status=$5,origin=$6,last_updated=now(),latitude=$7,longitude=$8 WHERE id=$9 RETURNING *', [name, JSON.stringify(categories), hours, location, String(body.status ?? current.status).trim(), String(body.origin ?? current.origin).trim(), body.latitude ?? geocoded?.latitude ?? current.latitude, body.longitude ?? geocoded?.longitude ?? current.longitude, current.id]);
       return res.json({ point: { id: point.id, name: point.name, categories: json(point.categories_json), hours: point.hours, location: point.location, status: point.status, origin: point.origin, lastUpdated: point.last_updated, latitude: point.latitude, longitude: point.longitude } });
     } catch (error) { return next(error); }
   };
