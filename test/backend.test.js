@@ -184,3 +184,20 @@ test('favorites, negotiation status and reviews persist with permission checks',
   assert.equal(reviews.payload.reputation.count, 1);
   assert.equal(reviews.payload.reputation.rating, 5);
 });
+
+test('public listing location rejects exact residential addresses', async () => {
+  const email = `location-${Date.now()}@example.test`;
+  const registration = await request('/api/auth/register', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Teste Privacidade', email, password: 'senha-segura-123', city: 'Sao Paulo, SP' })
+  });
+  assert.equal(registration.response.status, 201);
+
+  const rejected = await request('/api/posts', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${registration.payload.token}` },
+    body: JSON.stringify({ title: 'Item protegido', description: 'Descrição válida.', category: 'Outros', location: 'Rua das Flores, 123', imageUrl: 'https://images.example.test/item.jpg' })
+  });
+  assert.equal(rejected.response.status, 400);
+  assert.match(rejected.payload.error, /exact address/i);
+});

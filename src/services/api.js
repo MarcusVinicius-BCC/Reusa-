@@ -98,5 +98,8 @@ export const api = {
   adminReports: () => request('/admin/reports'),
   updateReport: (id, status) => request(`/admin/reports/${id}`, { method: 'PATCH', body: JSON.stringify({ status }) }),
   adminCollectionPoints: () => request('/admin/collection-points'),
+  createAdminCollectionPoint: (body) => request('/admin/collection-points', { method: 'POST', body: JSON.stringify(body) }),
+  updateAdminCollectionPoint: (id, body) => request(`/admin/collection-points/${id}`, { method: 'PATCH', body: JSON.stringify(body) }),
+  removeAdminCollectionPoint: (id) => request(`/admin/collection-points/${id}`, { method: 'DELETE' }),
   reviewPointSuggestion: (id, decision) => request(`/admin/collection-point-suggestions/${id}`, { method: 'PATCH', body: JSON.stringify({ decision }) })
 };

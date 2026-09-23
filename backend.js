@@ -8,6 +8,7 @@ const initSqlJs = require('sql.js');
 const { EventPublisher } = require('./distributed/event-publisher');
 const { PostgresRepository, postgresEnabled, postgresConnectionString } = require('./storage/postgres-repository');
 const { registerPostgresRoutes } = require('./storage/postgres-api');
+const { isLikelyResidentialAddress } = require('./storage/location-validation');
 const { applyMigrations } = require('./scripts/run-postgres-migrations');
 const { createObjectStorage } = require('./distributed/object-storage');
 const { connectRedis } = require('./distributed/redis-client');
@@ -1675,6 +1676,7 @@ async function start() {
     const location = typeof req.body?.location === 'string' ? req.body.location.trim() : post.location;
     if (!title || !description || !category) return res.status(400).json({ error: 'Title, description and category are required' });
     if (title.length > 140 || description.length > 3000 || category.length > 60 || condition.length > 60 || goal.length > 40 || location.length > 160) return res.status(400).json({ error: 'One or more fields exceed the allowed length' });
+    if (isLikelyResidentialAddress(location)) return res.status(400).json({ error: 'Location must be a city or neighborhood, not an exact address' });
     const imageUrl = req.file ? (req.file.location || `/uploads/${req.file.filename}`) : post.image_url;
     const updatedAt = new Date().toISOString();
     run('UPDATE posts SET title = ?, description = ?, category = ?, condition = ?, goal = ?, location = ?, image_url = ?, updated_at = ? WHERE id = ?', [title, description, category, condition, goal, location, imageUrl, updatedAt, post.id]);
@@ -1878,6 +1880,9 @@ async function start() {
       chip_icon: chipIcon || (goal === 'Troca' ? 'swap_horiz' : 'volunteer_activism'),
       chip_label: chipLabel || goal || 'Disponível'
     };
+    if (isLikelyResidentialAddress(post.location)) {
+      return res.status(400).json({ error: 'Location must be a city or neighborhood, not an exact address' });
+    }
 
     run(
       `INSERT INTO posts (id, author_id, title, description, category, condition, goal, image_url, likes, comments, location, created_at, chip_icon, chip_label)
@@ -2230,6 +2235,41 @@ async function start() {
     const points = all('SELECT * FROM collection_points ORDER BY name ASC').map((row) => ({ id: row.id, name: row.name, categories: jsonArray(row.categories_json), hours: row.hours, location: row.location, status: row.status, origin: row.origin, lastUpdated: row.last_updated, latitude: row.latitude, longitude: row.longitude }));
     const suggestions = all('SELECT collection_point_suggestions.*, users.name AS user_name FROM collection_point_suggestions JOIN users ON users.id = collection_point_suggestions.user_id ORDER BY collection_point_suggestions.created_at DESC').map((row) => ({ id: row.id, name: row.name, categories: jsonArray(row.categories_json), hours: row.hours, location: row.location, status: row.status, createdAt: row.created_at, userName: row.user_name, latitude: row.latitude, longitude: row.longitude }));
     return res.json({ points, suggestions });
+  });
+
+  app.post('/api/admin/collection-points', authMiddleware, adminMiddleware, (req, res) => {
+    const name = String(req.body?.name || '').trim();
+    const location = String(req.body?.location || '').trim();
+    const hours = String(req.body?.hours || 'Horário não informado').trim();
+    const categories = Array.isArray(req.body?.categories) ? req.body.categories.map((item) => String(item).trim()).filter(Boolean).slice(0, 30) : [];
+    if (!name || !location || name.length > 160 || location.length > 240 || hours.length > 160) return res.status(400).json({ error: 'Name and location are required' });
+    const point = { id: uid('point'), name, categories_json: JSON.stringify(categories), hours, location, status: String(req.body?.status || 'Aberto').trim(), origin: String(req.body?.origin || 'ReUsa+').trim(), last_updated: new Date().toISOString(), latitude: Number.isFinite(Number(req.body?.latitude)) ? Number(req.body.latitude) : null, longitude: Number.isFinite(Number(req.body?.longitude)) ? Number(req.body.longitude) : null };
+    run('INSERT INTO collection_points (id, name, categories_json, hours, location, status, origin, last_updated, latitude, longitude) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', Object.values(point));
+    persistDb();
+    return res.status(201).json({ point: { ...point, categories } });
+  });
+
+  app.patch('/api/admin/collection-points/:id', authMiddleware, adminMiddleware, (req, res) => {
+    const current = get('SELECT * FROM collection_points WHERE id = ?', [req.params.id]);
+    if (!current) return res.status(404).json({ error: 'Collection point not found' });
+    const name = String(req.body?.name ?? current.name).trim();
+    const location = String(req.body?.location ?? current.location).trim();
+    const hours = String(req.body?.hours ?? current.hours).trim();
+    const categories = Array.isArray(req.body?.categories) ? req.body.categories.map((item) => String(item).trim()).filter(Boolean).slice(0, 30) : jsonArray(current.categories_json);
+    if (!name || !location || name.length > 160 || location.length > 240 || hours.length > 160) return res.status(400).json({ error: 'Name and location are required' });
+    const latitude = req.body?.latitude === undefined ? current.latitude : Number.isFinite(Number(req.body.latitude)) ? Number(req.body.latitude) : null;
+    const longitude = req.body?.longitude === undefined ? current.longitude : Number.isFinite(Number(req.body.longitude)) ? Number(req.body.longitude) : null;
+    const updatedAt = new Date().toISOString();
+    run('UPDATE collection_points SET name = ?, categories_json = ?, hours = ?, location = ?, status = ?, origin = ?, last_updated = ?, latitude = ?, longitude = ? WHERE id = ?', [name, JSON.stringify(categories), hours, location, String(req.body?.status ?? current.status).trim(), String(req.body?.origin ?? current.origin).trim(), updatedAt, latitude, longitude, current.id]);
+    persistDb();
+    return res.json({ point: { id: current.id, name, categories, hours, location, status: String(req.body?.status ?? current.status).trim(), origin: String(req.body?.origin ?? current.origin).trim(), lastUpdated: updatedAt, latitude, longitude } });
+  });
+
+  app.delete('/api/admin/collection-points/:id', authMiddleware, adminMiddleware, (req, res) => {
+    const result = run('DELETE FROM collection_points WHERE id = ?', [req.params.id]);
+    if (!result.changes) return res.status(404).json({ error: 'Collection point not found' });
+    persistDb();
+    return res.json({ ok: true });
   });
 
   app.patch('/api/admin/collection-point-suggestions/:id', authMiddleware, adminMiddleware, (req, res) => {

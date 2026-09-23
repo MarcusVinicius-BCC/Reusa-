@@ -1,5 +1,6 @@
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
+const { isLikelyResidentialAddress } = require('./location-validation');
 
 function id(prefix) {
   return `${prefix}-${crypto.randomUUID()}`;
@@ -155,8 +156,75 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       const imageUrl = req.file ? (req.file.location || `/uploads/${req.file.filename}`) : String(body.imageUrl || '').trim();
       if (!String(body.title || '').trim() || !String(body.description || '').trim() || !String(body.category || '').trim() || !imageUrl) return res.status(400).json({ error: 'Missing required fields' });
       const post = { id: id('post'), author_id: req.user.id, title: String(body.title).trim(), description: String(body.description).trim(), category: String(body.category).trim(), condition: String(body.condition || 'Bom estado'), goal: String(body.goal || 'Doação'), image_url: imageUrl, location: String(body.location || req.user.city), created_at: new Date().toISOString(), chip_icon: String(body.chipIcon || 'volunteer_activism'), chip_label: String(body.chipLabel || body.goal || 'Doação') };
+      if (isLikelyResidentialAddress(post.location)) return res.status(400).json({ error: 'Location must be a city or neighborhood, not an exact address' });
       const created = await db.transaction(async (client) => { await client.query('INSERT INTO posts(id,author_id,title,description,category,condition,goal,image_url,location,created_at,chip_icon,chip_label) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)', Object.values(post)); await client.query('INSERT INTO threads(id,post_id,participants_json,last_message_at) VALUES($1,$2,$3,$4)', [id('thread'), post.id, JSON.stringify([req.user.id]), post.created_at]); return client.query('SELECT * FROM posts WHERE id=$1', [post.id]).then((r) => r.rows[0]); });
       return res.status(201).json({ post: await postView(db, created, req.user.id) });
+    } catch (error) { return next(error); }
+  });
+  app.delete('/api/posts/:id', authenticate, async (req, res, next) => {
+    try {
+      const post = await db.one('SELECT id,author_id FROM posts WHERE id=$1', [req.params.id]);
+      if (!post) return res.status(404).json({ error: 'Post not found' });
+      if (post.author_id !== req.user.id) return res.status(403).json({ error: 'You can only delete your own posts' });
+      await db.transaction(async (client) => {
+        // Most relations cascade from posts, but reports do not have a foreign key.
+        await client.query('DELETE FROM reports WHERE target_type=$1 AND target_id=$2', ['post', post.id]);
+        await client.query('DELETE FROM posts WHERE id=$1', [post.id]);
+      });
+      return res.json({ ok: true });
+    } catch (error) { return next(error); }
+  });
+  app.put('/api/posts/:id', authenticate, upload.single('image'), async (req, res, next) => {
+    try {
+      const post = await db.one('SELECT * FROM posts WHERE id=$1', [req.params.id]);
+      if (!post) return res.status(404).json({ error: 'Post not found' });
+      if (post.author_id !== req.user.id) return res.status(403).json({ error: 'You can only edit your own posts' });
+      if (['Doado', 'Trocado', 'Encerrado'].includes(post.status)) return res.status(400).json({ error: 'Completed posts cannot be edited' });
+      const value = (key, fallback) => typeof req.body?.[key] === 'string' ? req.body[key].trim() : fallback;
+      const title = value('title', post.title);
+      const description = value('description', post.description);
+      const category = value('category', post.category);
+      const condition = value('condition', post.condition);
+      const goal = value('goal', post.goal);
+      const location = value('location', post.location);
+      if (!title || !description || !category) return res.status(400).json({ error: 'Title, description and category are required' });
+      if (title.length > 140 || description.length > 3000 || category.length > 60 || condition.length > 60 || goal.length > 40 || location.length > 160) return res.status(400).json({ error: 'One or more fields exceed the allowed length' });
+      if (isLikelyResidentialAddress(location)) return res.status(400).json({ error: 'Location must be a city or neighborhood, not an exact address' });
+      const imageUrl = req.file ? (req.file.location || `/uploads/${req.file.filename}`) : post.image_url;
+      const updated = await db.one('UPDATE posts SET title=$1,description=$2,category=$3,condition=$4,goal=$5,location=$6,image_url=$7,updated_at=now() WHERE id=$8 RETURNING *', [title, description, category, condition, goal, location, imageUrl, post.id]);
+      return res.json({ post: await postView(db, updated, req.user.id) });
+    } catch (error) { return next(error); }
+  });
+  app.get('/api/posts/:id/interested', authenticate, async (req, res, next) => {
+    try {
+      const post = await db.one('SELECT id,author_id FROM posts WHERE id=$1', [req.params.id]);
+      if (!post) return res.status(404).json({ error: 'Post not found' });
+      if (post.author_id !== req.user.id) return res.status(403).json({ error: 'Only the owner can view interested users' });
+      const rows = await db.many('SELECT n.id,n.status,n.created_at,n.thread_id,u.id AS user_id,u.name,u.city,u.avatar FROM negotiations n JOIN users u ON u.id=n.interested_id WHERE n.post_id=$1 ORDER BY n.created_at DESC', [post.id]);
+      return res.json({ negotiations: rows.map((row) => ({ id: row.id, status: row.status, createdAt: row.created_at, threadId: row.thread_id, user: { id: row.user_id, name: row.name, city: row.city, avatar: row.avatar || '' } })) });
+    } catch (error) { return next(error); }
+  });
+  app.get('/api/posts/:id/negotiation', authenticate, async (req, res, next) => {
+    try {
+      const post = await db.one('SELECT id FROM posts WHERE id=$1', [req.params.id]);
+      if (!post) return res.status(404).json({ error: 'Post not found' });
+      const negotiation = await db.one('SELECT id,status,owner_id,interested_id,completed_at FROM negotiations WHERE post_id=$1 AND (owner_id=$2 OR interested_id=$2) ORDER BY updated_at DESC LIMIT 1', [post.id, req.user.id]);
+      return res.json({ negotiation: negotiation ? { id: negotiation.id, status: negotiation.status, ownerId: negotiation.owner_id, interestedId: negotiation.interested_id, completedAt: negotiation.completed_at } : null });
+    } catch (error) { return next(error); }
+  });
+  app.patch('/api/posts/:id/status', authenticate, async (req, res, next) => {
+    try {
+      const status = String(req.body?.status || '').trim();
+      const post = await db.one('SELECT * FROM posts WHERE id=$1', [req.params.id]);
+      if (!post) return res.status(404).json({ error: 'Post not found' });
+      if (post.author_id !== req.user.id) return res.status(403).json({ error: 'Only the owner can change this status' });
+      if (!['Disponível', 'Encerrado'].includes(status)) return res.status(400).json({ error: 'Use the reservation or completion flow for this status' });
+      const updated = await db.transaction(async (client) => {
+        const row = await client.query('UPDATE posts SET status=$1,reserved_by=CASE WHEN $1=$2 THEN NULL ELSE reserved_by END,updated_at=now() WHERE id=$3 RETURNING *', [status, 'Disponível', post.id]);
+        if (status === 'Disponível') await client.query("UPDATE negotiations SET status='interested',updated_at=now() WHERE post_id=$1 AND status='reserved'", [post.id]);
+        return row.rows[0];
+      });
+      return res.json({ post: await postView(db, updated, req.user.id) });
     } catch (error) { return next(error); }
   });
   app.post('/api/posts/:id/reserve', authenticate, async (req, res, next) => {
@@ -475,6 +543,84 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       const suspended = Boolean(req.body?.suspended);
       await db.query('UPDATE users SET suspended=$1 WHERE id=$2', [suspended, req.params.id]);
       return res.json({ suspended });
+    } catch (error) { return next(error); }
+  });
+  const requireAdmin = async (req, res) => {
+    const admin = await db.one('SELECT role FROM users WHERE id=$1', [req.user.id]);
+    if (admin?.role !== 'admin') {
+      res.status(403).json({ error: 'Administrator access required' });
+      return false;
+    }
+    return true;
+  };
+  app.get('/api/admin/collection-points', authenticate, async (req, res, next) => {
+    try {
+      if (!await requireAdmin(req, res)) return;
+      const points = await db.many('SELECT * FROM collection_points ORDER BY name ASC');
+      const suggestions = await db.many('SELECT s.*,u.name AS user_name FROM collection_point_suggestions s JOIN users u ON u.id=s.user_id ORDER BY s.created_at DESC');
+      return res.json({
+        points: points.map((row) => ({ id: row.id, name: row.name, categories: json(row.categories_json), hours: row.hours, location: row.location, status: row.status, origin: row.origin, lastUpdated: row.last_updated, latitude: row.latitude, longitude: row.longitude })),
+        suggestions: suggestions.map((row) => ({ id: row.id, name: row.name, categories: json(row.categories_json), hours: row.hours, location: row.location, status: row.status, createdAt: row.created_at, userName: row.user_name, latitude: row.latitude, longitude: row.longitude }))
+      });
+    } catch (error) { return next(error); }
+  });
+  app.post('/api/admin/collection-points', authenticate, async (req, res, next) => {
+    try {
+      if (!await requireAdmin(req, res)) return;
+      const body = req.body || {};
+      const name = String(body.name || '').trim();
+      const location = String(body.location || '').trim();
+      const hours = String(body.hours || 'Horário não informado').trim();
+      const categories = Array.isArray(body.categories) ? body.categories.map(String).map((item) => item.trim()).filter(Boolean).slice(0, 30) : [];
+      if (!name || !location || name.length > 160 || location.length > 240 || hours.length > 160) return res.status(400).json({ error: 'Name and location are required' });
+      const point = await db.one('INSERT INTO collection_points(id,name,categories_json,hours,location,status,origin,last_updated,latitude,longitude) VALUES($1,$2,$3,$4,$5,$6,$7,now(),$8,$9) RETURNING *', [id('point'), name, JSON.stringify(categories), hours, location, String(body.status || 'Aberto').trim(), String(body.origin || 'ReUsa+').trim(), body.latitude ?? null, body.longitude ?? null]);
+      return res.status(201).json({ point: { id: point.id, name: point.name, categories: json(point.categories_json), hours: point.hours, location: point.location, status: point.status, origin: point.origin, lastUpdated: point.last_updated, latitude: point.latitude, longitude: point.longitude } });
+    } catch (error) { return next(error); }
+  });
+  const updateCollectionPoint = async (req, res, next) => {
+    try {
+      if (!await requireAdmin(req, res)) return;
+      const current = await db.one('SELECT * FROM collection_points WHERE id=$1', [req.params.id]);
+      if (!current) return res.status(404).json({ error: 'Collection point not found' });
+      const body = req.body || {};
+      const name = String(body.name ?? current.name).trim();
+      const location = String(body.location ?? current.location).trim();
+      const hours = String(body.hours ?? current.hours).trim();
+      const categories = Array.isArray(body.categories) ? body.categories.map(String).map((item) => item.trim()).filter(Boolean).slice(0, 30) : json(current.categories_json);
+      if (!name || !location || name.length > 160 || location.length > 240 || hours.length > 160) return res.status(400).json({ error: 'Name and location are required' });
+      const point = await db.one('UPDATE collection_points SET name=$1,categories_json=$2,hours=$3,location=$4,status=$5,origin=$6,last_updated=now(),latitude=$7,longitude=$8 WHERE id=$9 RETURNING *', [name, JSON.stringify(categories), hours, location, String(body.status ?? current.status).trim(), String(body.origin ?? current.origin).trim(), body.latitude ?? current.latitude, body.longitude ?? current.longitude, current.id]);
+      return res.json({ point: { id: point.id, name: point.name, categories: json(point.categories_json), hours: point.hours, location: point.location, status: point.status, origin: point.origin, lastUpdated: point.last_updated, latitude: point.latitude, longitude: point.longitude } });
+    } catch (error) { return next(error); }
+  };
+  app.put('/api/admin/collection-points/:id', authenticate, updateCollectionPoint);
+  app.patch('/api/admin/collection-points/:id', authenticate, updateCollectionPoint);
+  app.delete('/api/admin/collection-points/:id', authenticate, async (req, res, next) => {
+    try {
+      if (!await requireAdmin(req, res)) return;
+      const result = await db.query('DELETE FROM collection_points WHERE id=$1', [req.params.id]);
+      if (!result.rowCount) return res.status(404).json({ error: 'Collection point not found' });
+      return res.json({ ok: true });
+    } catch (error) { return next(error); }
+  });
+  app.patch('/api/admin/collection-point-suggestions/:id', authenticate, async (req, res, next) => {
+    try {
+      if (!await requireAdmin(req, res)) return;
+      const decision = String(req.body?.decision || '').trim();
+      if (!['approved', 'rejected'].includes(decision)) return res.status(400).json({ error: 'Invalid decision' });
+      const suggestion = await db.one('SELECT * FROM collection_point_suggestions WHERE id=$1', [req.params.id]);
+      if (!suggestion || suggestion.status !== 'pending') return res.status(404).json({ error: 'Pending suggestion not found' });
+      const result = await db.transaction(async (client) => {
+        let point = null;
+        if (decision === 'approved') {
+          point = (await client.query('SELECT * FROM collection_points WHERE lower(name)=lower($1) AND lower(location)=lower($2) LIMIT 1', [suggestion.name, suggestion.location])).rows[0];
+          if (!point) {
+            point = (await client.query('INSERT INTO collection_points(id,name,categories_json,hours,location,status,origin,last_updated,latitude,longitude) VALUES($1,$2,$3,$4,$5,$6,$7,now(),$8,$9) RETURNING *', [id('point'), suggestion.name, suggestion.categories_json, suggestion.hours || 'Horário não informado', suggestion.location, 'Aberto', 'Comunidade ReUsa+', suggestion.latitude, suggestion.longitude])).rows[0];
+          }
+        }
+        await client.query('UPDATE collection_point_suggestions SET status=$1,reviewed_at=now(),reviewed_by=$2 WHERE id=$3', [decision, req.user.id, suggestion.id]);
+        return point;
+      });
+      return res.json({ ok: true, point: result ? { id: result.id, name: result.name, categories: json(result.categories_json), hours: result.hours, location: result.location, status: result.status, origin: result.origin, lastUpdated: result.last_updated, latitude: result.latitude, longitude: result.longitude } : null });
     } catch (error) { return next(error); }
   });
 
