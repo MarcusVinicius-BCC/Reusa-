@@ -15,6 +15,10 @@ CREATE TABLE IF NOT EXISTS notification_service_notifications (
 );
 CREATE INDEX IF NOT EXISTS notification_service_notifications_user_idx
   ON notification_service_notifications(user_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS notification_service_migrations (
+  name TEXT PRIMARY KEY,
+  applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS impact_service_processed_events (
   event_id TEXT PRIMARY KEY,
   processed_at TIMESTAMPTZ NOT NULL DEFAULT now()

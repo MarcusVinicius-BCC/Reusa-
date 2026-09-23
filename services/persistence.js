@@ -24,6 +24,10 @@ CREATE TABLE IF NOT EXISTS notification_service_notifications (
 );
 CREATE INDEX IF NOT EXISTS notification_service_notifications_user_idx
   ON notification_service_notifications(user_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS notification_service_migrations (
+  name TEXT PRIMARY KEY,
+  applied_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS impact_service_processed_events (
   event_id TEXT PRIMARY KEY,
   processed_at TIMESTAMPTZ NOT NULL DEFAULT now()
@@ -99,11 +103,22 @@ class NotificationStore {
     if (this.postgres) {
       this.pool = new Pool({ connectionString: postgresConnectionString(), max: Number(process.env.POSTGRES_POOL_SIZE || 10), idleTimeoutMillis: 30_000 });
       await this.pool.query(POSTGRES_SCHEMA);
+      const migration = await this.pool.query("INSERT INTO notification_service_migrations(name) VALUES('mark-legacy-notifications-read-v1') ON CONFLICT (name) DO NOTHING RETURNING name");
+      if (migration.rowCount) {
+        const result = await this.pool.query('UPDATE notification_service_notifications SET read_at=COALESCE(read_at, now()) WHERE read_at IS NULL');
+        console.log(`[notifications] marked ${result.rowCount} legacy notifications as read`);
+      }
     } else {
       this.store = await new SqliteStore(this.options).open();
       this.store.db.run('CREATE TABLE IF NOT EXISTS processed_events(event_id TEXT PRIMARY KEY,processed_at TEXT NOT NULL)');
       this.store.db.run('CREATE TABLE IF NOT EXISTS notifications(id TEXT PRIMARY KEY,user_id TEXT NOT NULL,type TEXT NOT NULL,title TEXT NOT NULL,text TEXT NOT NULL,link TEXT NOT NULL,created_at TEXT NOT NULL,read_at TEXT,correlation_id TEXT NOT NULL)');
       this.store.db.run('CREATE INDEX IF NOT EXISTS notification_user ON notifications(user_id,created_at DESC)');
+      this.store.db.run('CREATE TABLE IF NOT EXISTS notification_migrations(name TEXT PRIMARY KEY,applied_at TEXT NOT NULL)');
+      const migration = sqliteRows(this.store.db, "INSERT OR IGNORE INTO notification_migrations(name,applied_at) VALUES(?,?) RETURNING name", ['mark-legacy-notifications-read-v1', new Date().toISOString()]);
+      if (migration.length) {
+        this.store.db.run('UPDATE notifications SET read_at=COALESCE(read_at,?) WHERE read_at IS NULL', [new Date().toISOString()]);
+        console.log('[notifications] marked legacy notifications as read');
+      }
       this.store.save();
     }
     return this;
