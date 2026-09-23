@@ -2008,12 +2008,18 @@ async function start() {
     res.json({ ok: true });
   });
 
-  app.get('/api/collection-points', (_req, res) => {
-    const rows = all('SELECT * FROM collection_points ORDER BY name ASC');
-    res.json({ collectionPoints: rows.map((row) => ({ id: row.id, name: row.name, categories: jsonArray(row.categories_json), hours: row.hours, location: row.location, status: row.status, origin: row.origin || 'ReUsa+', lastUpdated: row.last_updated || null, latitude: row.latitude, longitude: row.longitude, verified: (row.origin || '').includes('ReUsa') })) });
+  app.get('/api/collection-points', async (_req, res, next) => {
+    try {
+      const rows = postgresEnabled()
+        ? await postgres.many('SELECT * FROM collection_points ORDER BY name ASC')
+        : all('SELECT * FROM collection_points ORDER BY name ASC');
+      res.json({ collectionPoints: rows.map((row) => ({ id: row.id, name: row.name, categories: jsonArray(row.categories_json), hours: row.hours, location: row.location, status: row.status, origin: row.origin || 'ReUsa+', lastUpdated: row.last_updated || null, latitude: row.latitude, longitude: row.longitude, verified: (row.origin || '').includes('ReUsa') })) });
+    } catch (error) {
+      next(error);
+    }
   });
 
-  app.post('/api/collection-points/suggestions', authMiddleware, (req, res) => {
+  app.post('/api/collection-points/suggestions', authMiddleware, async (req, res, next) => {
     const name = String(req.body?.name || '').trim();
     const location = String(req.body?.location || '').trim();
     const hours = String(req.body?.hours || '').trim();
@@ -2021,12 +2027,22 @@ async function start() {
     const latitude = Number(req.body?.latitude);
     const longitude = Number(req.body?.longitude);
     if (!name || !location || !categories.length || name.length > 120 || location.length > 200 || hours.length > 100 || categories.length > 12 || categories.some((item) => item.length > 40)) return res.status(400).json({ error: 'Provide a name, location and accepted materials' });
-    const duplicate = get("SELECT id FROM collection_point_suggestions WHERE user_id = ? AND lower(name) = lower(?) AND lower(location) = lower(?) AND status = 'pending'", [req.user.id, name, location]);
-    if (duplicate) return res.status(409).json({ error: 'You already suggested this collection point' });
-    const suggestion = { id: uid('point-suggestion'), user_id: req.user.id, name, categories_json: JSON.stringify(categories), hours, location, latitude: Number.isFinite(latitude) ? latitude : null, longitude: Number.isFinite(longitude) ? longitude : null, status: 'pending', created_at: new Date().toISOString() };
-    run('INSERT INTO collection_point_suggestions (id, user_id, name, categories_json, hours, location, latitude, longitude, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', Object.values(suggestion));
-    persistDb();
-    return res.status(201).json({ suggestion: { ...suggestion, categories } });
+    try {
+      const suggestion = { id: uid('point-suggestion'), user_id: req.user.id, name, categories_json: JSON.stringify(categories), hours, location, latitude: Number.isFinite(latitude) ? latitude : null, longitude: Number.isFinite(longitude) ? longitude : null, status: 'pending', created_at: new Date().toISOString() };
+      if (postgresEnabled()) {
+        const duplicate = await postgres.one("SELECT id FROM collection_point_suggestions WHERE user_id = $1 AND lower(name) = lower($2) AND lower(location) = lower($3) AND status = 'pending'", [req.user.id, name, location]);
+        if (duplicate) return res.status(409).json({ error: 'You already suggested this collection point' });
+        const created = await postgres.one('INSERT INTO collection_point_suggestions (id, user_id, name, categories_json, hours, location, latitude, longitude, status, created_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING *', Object.values(suggestion));
+        return res.status(201).json({ suggestion: { ...created, userId: created.user_id, categories: jsonArray(created.categories_json), createdAt: created.created_at } });
+      }
+      const duplicate = get("SELECT id FROM collection_point_suggestions WHERE user_id = ? AND lower(name) = lower(?) AND lower(location) = lower(?) AND status = 'pending'", [req.user.id, name, location]);
+      if (duplicate) return res.status(409).json({ error: 'You already suggested this collection point' });
+      run('INSERT INTO collection_point_suggestions (id, user_id, name, categories_json, hours, location, latitude, longitude, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', Object.values(suggestion));
+      persistDb();
+      return res.status(201).json({ suggestion: { ...suggestion, categories } });
+    } catch (error) {
+      next(error);
+    }
   });
 
   app.get('/api/collection-points/nearby', async (req, res) => {

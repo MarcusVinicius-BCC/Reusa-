@@ -545,6 +545,81 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       return res.json({ suspended });
     } catch (error) { return next(error); }
   });
+
+  app.post('/api/collection-points/suggestions', authenticate, async (req, res, next) => {
+    try {
+      const name = String(req.body?.name || '').trim();
+      const location = String(req.body?.location || '').trim();
+      const hours = String(req.body?.hours || '').trim();
+      const categories = Array.isArray(req.body?.categories)
+        ? req.body.categories.map(String).map((item) => item.trim()).filter(Boolean)
+        : [];
+      const latitude = Number(req.body?.latitude);
+      const longitude = Number(req.body?.longitude);
+
+      if (
+        !name ||
+        !location ||
+        !categories.length ||
+        name.length > 120 ||
+        location.length > 200 ||
+        hours.length > 100 ||
+        categories.length > 12 ||
+        categories.some((item) => item.length > 40)
+      ) {
+        return res.status(400).json({ error: 'Provide a name, location and accepted materials' });
+      }
+
+      const duplicate = await db.one(
+        "SELECT id FROM collection_point_suggestions WHERE user_id=$1 AND lower(name)=lower($2) AND lower(location)=lower($3) AND status='pending'",
+        [req.user.id, name, location]
+      );
+      if (duplicate) return res.status(409).json({ error: 'You already suggested this collection point' });
+
+      const suggestion = {
+        id: id('point-suggestion'),
+        userId: req.user.id,
+        name,
+        categoriesJson: JSON.stringify(categories),
+        hours,
+        location,
+        latitude: Number.isFinite(latitude) ? latitude : null,
+        longitude: Number.isFinite(longitude) ? longitude : null
+      };
+      const created = await db.one(
+        `INSERT INTO collection_point_suggestions
+          (id,user_id,name,categories_json,hours,location,latitude,longitude,status,created_at)
+         VALUES($1,$2,$3,$4,$5,$6,$7,$8,'pending',now())
+         RETURNING *`,
+        [
+          suggestion.id,
+          suggestion.userId,
+          suggestion.name,
+          suggestion.categoriesJson,
+          suggestion.hours,
+          suggestion.location,
+          suggestion.latitude,
+          suggestion.longitude
+        ]
+      );
+
+      return res.status(201).json({
+        suggestion: {
+          id: created.id,
+          userId: created.user_id,
+          name: created.name,
+          categories: json(created.categories_json),
+          hours: created.hours,
+          location: created.location,
+          latitude: created.latitude,
+          longitude: created.longitude,
+          status: created.status,
+          createdAt: created.created_at
+        }
+      });
+    } catch (error) { return next(error); }
+  });
+
   const requireAdmin = async (req, res) => {
     const admin = await db.one('SELECT role FROM users WHERE id=$1', [req.user.id]);
     if (admin?.role !== 'admin') {
