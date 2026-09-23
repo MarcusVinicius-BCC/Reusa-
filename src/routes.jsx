@@ -1179,7 +1179,9 @@ function MapScreen({ onSuggest }) {
 
 function RecenterMap({ position }) {
   const map = useMap();
-  useEffect(() => map.flyTo(position, 14), [map, position]);
+  useEffect(() => {
+    map.flyTo(position, 14);
+  }, [map, position]);
   return null;
 }
 
@@ -1201,7 +1203,9 @@ function SuggestCollectionPointScreen({ onBack }) {
 
 function MapViewport({ position }) {
   const map = useMap();
-  useEffect(() => map.flyTo(position, 12), [map, position]);
+  useEffect(() => {
+    map.flyTo(position, 12);
+  }, [map, position]);
   return null;
 }
 
