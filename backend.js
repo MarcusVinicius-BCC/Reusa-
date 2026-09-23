@@ -1242,6 +1242,17 @@ async function start() {
     }
   });
 
+  if (postgresEnabled()) {
+    registerPostgresRoutes(app, {
+      db: postgres,
+      jwtSecret: JWT_SECRET,
+      createToken,
+      uid,
+      publisher: { flush: flushPendingEvents },
+      upload
+    });
+  }
+
   const authRateLimit = createRateLimiter({ windowMs: 15 * 60 * 1000, maxRequests: 30 });
   const publicLookupRateLimit = createRateLimiter({ windowMs: 15 * 60 * 1000, maxRequests: 60 });
 
@@ -1253,15 +1264,6 @@ async function start() {
     res.setHeader('X-Correlation-Id', req.correlationId);
     next();
   });
-  if (postgresEnabled()) {
-    registerPostgresRoutes(app, {
-      db: postgres,
-      jwtSecret: JWT_SECRET,
-      createToken,
-      uid,
-      publisher: { flush: flushPendingEvents }
-    });
-  }
   app.use('/uploads', express.static(UPLOAD_DIR));
 
   app.get('/api/health/live', (_req, res) => res.json({ ok: true, status: 'live' }));

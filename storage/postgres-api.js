@@ -61,7 +61,7 @@ function verifyPassword(password, stored) {
   return expected.length === actual.length && crypto.timingSafeEqual(actual, expected);
 }
 
-function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publisher }) {
+function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publisher, upload }) {
   const authenticate = async (req, res, next) => {
     const token = String(req.headers.authorization || '').replace(/^Bearer\s+/, '');
     if (!token) return res.status(401).json({ error: 'Authentication required' });
@@ -149,11 +149,12 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       return res.json(result);
     } catch (error) { return next(error); }
   });
-  app.post('/api/posts', authenticate, async (req, res, next) => {
+  app.post('/api/posts', authenticate, upload.single('image'), async (req, res, next) => {
     try {
       const body = req.body || {};
-      if (!String(body.title || '').trim() || !String(body.description || '').trim() || !String(body.category || '').trim() || !String(body.imageUrl || '').trim()) return res.status(400).json({ error: 'Missing required fields' });
-      const post = { id: id('post'), author_id: req.user.id, title: String(body.title).trim(), description: String(body.description).trim(), category: String(body.category).trim(), condition: String(body.condition || 'Bom estado'), goal: String(body.goal || 'Doação'), image_url: String(body.imageUrl).trim(), location: String(body.location || req.user.city), created_at: new Date().toISOString(), chip_icon: String(body.chipIcon || 'volunteer_activism'), chip_label: String(body.chipLabel || body.goal || 'Doação') };
+      const imageUrl = req.file ? (req.file.location || `/uploads/${req.file.filename}`) : String(body.imageUrl || '').trim();
+      if (!String(body.title || '').trim() || !String(body.description || '').trim() || !String(body.category || '').trim() || !imageUrl) return res.status(400).json({ error: 'Missing required fields' });
+      const post = { id: id('post'), author_id: req.user.id, title: String(body.title).trim(), description: String(body.description).trim(), category: String(body.category).trim(), condition: String(body.condition || 'Bom estado'), goal: String(body.goal || 'Doação'), image_url: imageUrl, location: String(body.location || req.user.city), created_at: new Date().toISOString(), chip_icon: String(body.chipIcon || 'volunteer_activism'), chip_label: String(body.chipLabel || body.goal || 'Doação') };
       const created = await db.transaction(async (client) => { await client.query('INSERT INTO posts(id,author_id,title,description,category,condition,goal,image_url,location,created_at,chip_icon,chip_label) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)', Object.values(post)); await client.query('INSERT INTO threads(id,post_id,participants_json,last_message_at) VALUES($1,$2,$3,$4)', [id('thread'), post.id, JSON.stringify([req.user.id]), post.created_at]); return client.query('SELECT * FROM posts WHERE id=$1', [post.id]).then((r) => r.rows[0]); });
       return res.status(201).json({ post: await postView(db, created, req.user.id) });
     } catch (error) { return next(error); }
