@@ -8,8 +8,18 @@ import 'leaflet/dist/leaflet.css';
 import feedLogo from './assets/reusa-logo.png';
 
 const BRAZIL_TIME_ZONE = 'America/Sao_Paulo';
-const formatBrazilTime = (value) => new Intl.DateTimeFormat('pt-BR', { timeZone: BRAZIL_TIME_ZONE, hour: '2-digit', minute: '2-digit' }).format(new Date(value));
-const formatBrazilDate = (value) => new Intl.DateTimeFormat('pt-BR', { timeZone: BRAZIL_TIME_ZONE, day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date(value));
+const validDate = (value) => {
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? null : date;
+};
+const formatBrazilTime = (value) => {
+  const date = validDate(value);
+  return date ? new Intl.DateTimeFormat('pt-BR', { timeZone: BRAZIL_TIME_ZONE, hour: '2-digit', minute: '2-digit' }).format(date) : '--:--';
+};
+const formatBrazilDate = (value) => {
+  const date = validDate(value);
+  return date ? new Intl.DateTimeFormat('pt-BR', { timeZone: BRAZIL_TIME_ZONE, day: '2-digit', month: '2-digit', year: 'numeric' }).format(date) : '--/--/----';
+};
 
 const navRoutes = {
   home: '/feed',
