@@ -285,6 +285,14 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       return res.json({ user: userView(profile), stats: { donations: Number(profile.donations || 0), received: Number(profile.received || 0), rating: Number(reputation?.rating || 0), carbonSavedPercent: Number(profile.carbon_saved_percent || 0) }, achievements: json(profile.achievements_json), reputation, reviews: [], posts: await Promise.all(posts.map((row) => postView(db, row, req.user.id))) });
     } catch (error) { return next(error); }
   });
+  app.post('/api/profile/avatar', authenticate, upload.single('avatar'), async (req, res, next) => {
+    try {
+      if (!req.file) return res.status(400).json({ error: 'Choose an image for your profile' });
+      const avatar = req.file.location || `/uploads/${req.file.filename}`;
+      const row = await db.one('UPDATE users SET avatar=$1 WHERE id=$2 RETURNING *', [avatar, req.user.id]);
+      return res.json({ user: userView(row) });
+    } catch (error) { return next(error); }
+  });
 
   app.put('/api/profile', authenticate, async (req, res, next) => {
     try {

@@ -50,6 +50,11 @@ export const api = {
   createInspiration: (body) => request('/inspirations', { method: 'POST', body: JSON.stringify(body) }),
   aiIdeas: (body) => request('/ai/ideas', { method: 'POST', body: JSON.stringify(typeof body === 'string' ? { prompt: body } : body) }),
   profile: () => request('/profile'),
+  updateAvatar: (file) => {
+    const body = new FormData();
+    body.append('avatar', file);
+    return request('/profile/avatar', { method: 'POST', body });
+  },
   updateProfile: (body) => request('/profile', { method: 'PUT', body: JSON.stringify(body) }),
   posts: () => request('/posts'),
   createPost: (body) => request('/posts', { method: 'POST', body: body instanceof FormData ? body : JSON.stringify(body) }),

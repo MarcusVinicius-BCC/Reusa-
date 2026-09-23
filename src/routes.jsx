@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { api, clearToken, setToken } from './services/api';
 import { useAppStore } from './state/store';
@@ -1010,6 +1010,9 @@ function ProfileScreen({ onGoToFeed, onSettings, onSaved, onMyPosts, onAdmin }) 
   const impact = data?.impact || { itemsReused: 0, divertedFromDisposal: 0, beneficiaries: 0, exchanges: 0, publications: 0, estimated: true };
   const reputation = data?.reputation || { rating: 0, count: 0 };
   const [communityImpact, setCommunityImpact] = useState(null);
+  const updateAvatar = useAppStore((state) => state.updateAvatar);
+  const avatarInput = useRef(null);
+  const [avatarBusy, setAvatarBusy] = useState(false);
 
   useEffect(() => {
     loadProfile().catch(() => {});
@@ -1017,11 +1020,26 @@ function ProfileScreen({ onGoToFeed, onSettings, onSaved, onMyPosts, onAdmin }) 
 
   useEffect(() => { api.communityImpact().then((result) => setCommunityImpact(result.impact)).catch(() => {}); }, []);
 
+  async function changeAvatar(event) {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+    setAvatarBusy(true);
+    try {
+      await updateAvatar(file);
+    } catch (error) {
+      alert(error.message);
+    } finally {
+      setAvatarBusy(false);
+    }
+  }
+
   return (
     <Shell nav={navRoutes} active="/perfil">
       <main className="page profile-page">
         <section className="profile-hero">
-          <div className="avatar-wrap">{user.avatar ? <img src={user.avatar} alt={user.name} /> : <span className="avatar-placeholder material-symbols-outlined" aria-label={`Perfil de ${user.name}`}>person</span>}<span className="verified material-symbols-outlined">verified</span></div>
+          <button className="avatar-wrap avatar-upload-button" type="button" onClick={() => avatarInput.current?.click()} aria-label="Alterar foto de perfil" title="Alterar foto de perfil" disabled={avatarBusy}>{user.avatar ? <img src={user.avatar} alt={user.name} /> : <span className="avatar-placeholder material-symbols-outlined" aria-label={`Perfil de ${user.name}`}>person</span>}<span className="avatar-upload-icon material-symbols-outlined">{avatarBusy ? 'progress_activity' : 'photo_camera'}</span><span className="verified material-symbols-outlined">verified</span></button>
+          <input ref={avatarInput} className="visually-hidden" type="file" accept="image/jpeg,image/png,image/gif,image/webp,image/avif" onChange={changeAvatar} />
           <div className="profile-identity"><div className="profile-name-row"><h1>{user.accountType === 'business' && user.businessName ? user.businessName : user.name}</h1>{user.accountType === 'business' ? <span className="eyebrow">Empresa parceira</span> : null}</div><div className="subtle-row"><span className="material-symbols-outlined">location_on</span><span>{[user.neighborhood, user.city].filter(Boolean).join(' · ')}</span></div></div>
           <div className="profile-quick-actions"><button className="profile-icon-action" onClick={onSettings} aria-label="Configurações" title="Configurações"><span className="material-symbols-outlined">settings</span></button>{user.role === 'admin' ? <button className="profile-icon-action" onClick={onAdmin} aria-label="Administração" title="Administração"><span className="material-symbols-outlined">admin_panel_settings</span></button> : null}</div>
         </section>

@@ -96,6 +96,15 @@ export const useAppStore = create((set, get) => ({
     set({ profile: result });
     return result;
   },
+  updateAvatar: async (file) => {
+    const result = await api.updateAvatar(file);
+    set((state) => ({
+      session: state.session ? { ...state.session, avatar: result.user.avatar } : state.session,
+      profile: state.profile ? { ...state.profile, user: { ...state.profile.user, avatar: result.user.avatar } } : state.profile,
+      posts: state.posts.map((post) => post.authorId === state.session?.id ? { ...post, author: { ...post.author, avatar: result.user.avatar } } : post)
+    }));
+    return result.user;
+  },
   loadFavorites: async () => {
     const result = await api.favorites();
     set({ favorites: result.posts || [] });

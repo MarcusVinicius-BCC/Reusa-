@@ -2082,6 +2082,15 @@ async function start() {
     res.json({ impact: distributedImpact || await communityImpact() });
   });
 
+  app.post('/api/profile/avatar', authMiddleware, upload.single('avatar'), (req, res) => {
+    if (!req.file) return res.status(400).json({ error: 'Choose an image for your profile' });
+    const avatar = req.file.location || `/uploads/${req.file.filename}`;
+    run('UPDATE users SET avatar = ? WHERE id = ?', [avatar, req.user.id]);
+    persistDb();
+    const updated = get('SELECT * FROM users WHERE id = ?', [req.user.id]);
+    return res.json({ user: userFromRow(updated) });
+  });
+
   app.put('/api/profile', authMiddleware, (req, res) => {
     const { name, city, neighborhood, cep, address, interests, businessName } = req.body || {};
     const nextName = typeof name === 'string' ? name.trim() || req.user.name : req.user.name;
