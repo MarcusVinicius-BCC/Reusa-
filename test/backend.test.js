@@ -22,7 +22,9 @@ function availablePort() {
 }
 
 async function waitForServer() {
-  const deadline = Date.now() + 10_000;
+  // SQL.js can take longer to initialize on a machine concurrently running
+  // the Docker-based distributed environment.
+  const deadline = Date.now() + 20_000;
   while (Date.now() < deadline) {
     try {
       const response = await fetch(`${baseUrl}/api/health`);
@@ -165,6 +167,12 @@ test('favorites, negotiation status and reviews persist with permission checks',
   const completed = await request(`/api/posts/${postId}/complete`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerToken}` }, body: JSON.stringify({ outcome: 'Doado' }) });
   assert.equal(completed.response.status, 200);
   assert.equal(completed.payload.post.status, 'Doado');
+
+  const distributed = await request('/api/distributed/status');
+  assert.equal(distributed.response.status, 200);
+  assert.equal(distributed.payload.delivery, 'at-least-once');
+  // Sem AMQP_URL no teste, a outbox preserva o evento para entrega posterior.
+  assert.equal(distributed.payload.pendingEvents, 3);
 
   const negotiation = await request(`/api/posts/${postId}/negotiation`, { headers: { Authorization: `Bearer ${interestedToken}` } });
   assert.equal(negotiation.response.status, 200);

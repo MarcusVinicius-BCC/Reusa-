@@ -111,7 +111,7 @@ function ScreenRouter({ location, navigate }) {
     case '/sobre':
       return <AboutScreen onBack={() => navigate('/splash')} />;
     case '/configuracoes':
-      return <SettingsScreen onBack={() => navigate('/perfil')} onLogout={() => navigate('/login')} onAbout={() => navigate('/sobre')} />;
+      return <SettingsScreen onBack={() => navigate('/perfil')} onLogout={() => navigate('/login')} />;
     default:
       return <Navigate to="/feed" replace />;
   }
@@ -175,7 +175,6 @@ function LandingScreen({ onCreateAccount, onLogin, onExplore, onAbout }) {
     <main className="landing-screen">
       <header className="landing-header">
         <button className="landing-brand" onClick={() => window.scrollTo({ top: 0, behavior: 'smooth' })} aria-label="REUSA+, início"><img src={feedLogo} alt="REUSA+" /></button>
-        <nav className="landing-nav" aria-label="Navegação principal"><a href="#como-funciona">Como funciona</a><a href="#categorias">Categorias</a><a href="#impacto">Impacto circular</a><button onClick={onAbout}>Sobre nós</button></nav>
         <div className="landing-account-actions"><button className="landing-login" onClick={onLogin}>Fazer login</button><button className="landing-start" onClick={onCreateAccount}>Começar agora</button></div>
       </header>
       <section className="landing-hero" id="como-funciona">
@@ -200,8 +199,8 @@ function SplashScreen({ onCreateAccount, onLogin, onExplore, onAbout }) {
       <div className="welcome-glow welcome-glow-one" />
       <div className="welcome-glow welcome-glow-two" />
       <header className="welcome-header">
-        <div className="welcome-brand" aria-label="ReUsa+">
-          <span className="material-symbols-outlined">recycling</span><strong>REUSA<span>+</span></strong>
+        <div className="welcome-brand-logo" aria-label="ReUsa+">
+          <img src={feedLogo} alt="REUSA+" />
         </div>
         <button className="welcome-about" onClick={onAbout}>Sobre</button>
       </header>
@@ -517,12 +516,15 @@ function FeedCard({ post, onOpenChat }) {
   const [commentText, setCommentText] = useState('');
   const [commentsOpen, setCommentsOpen] = useState(false);
   const [commentBusy, setCommentBusy] = useState(false);
+  const [heartAnimationKey, setHeartAnimationKey] = useState(0);
+  const [saveAnimationKey, setSaveAnimationKey] = useState(0);
 
   async function like() {
     try {
       const result = await toggleLike(post.id);
       setLiked(result.liked);
       setLikes(result.likes);
+      if (result.liked) setHeartAnimationKey((current) => current + 1);
     } catch (error) {
       alert(error.message);
     }
@@ -557,6 +559,7 @@ function FeedCard({ post, onOpenChat }) {
     try {
       const result = await toggleFavorite(post.id);
       setSaved(result.saved);
+      if (result.saved) setSaveAnimationKey((current) => current + 1);
     } catch (error) {
       alert(error.message);
     }
@@ -589,7 +592,7 @@ function FeedCard({ post, onOpenChat }) {
   return (
     <article className="card post-card">
       <div className="post-head">
-        <button className={saved ? 'icon-btn saved-btn' : 'icon-btn'} onClick={favorite} aria-label={saved ? 'Remover dos salvos' : 'Salvar anúncio'}><span className="material-symbols-outlined">{saved ? 'bookmark' : 'bookmark_border'}</span></button>
+        <button className={saved ? 'icon-btn saved-btn' : 'icon-btn'} onClick={favorite} aria-label={saved ? 'Remover dos salvos' : 'Salvar anúncio'}><span key={saveAnimationKey} className={saved ? 'material-symbols-outlined save-icon saved-bookmark' : 'material-symbols-outlined save-icon'}>{saved ? 'bookmark' : 'bookmark_border'}</span></button>
         {post.author.avatar ? <img className="avatar" src={post.author.avatar} alt={post.author.name} /> : <span className="avatar avatar-placeholder material-symbols-outlined" aria-label={`Perfil de ${post.author.name}`}>person</span>}
         <div className="post-meta"><strong>{post.author.name}</strong><span>Há 2 horas • {post.author.city}</span></div>
         {post.authorId === session?.id ? <button className="icon-btn" onClick={removePost} title="Excluir anúncio" aria-label="Excluir anúncio"><span className="material-symbols-outlined">delete</span></button> : null}
@@ -604,10 +607,10 @@ function FeedCard({ post, onOpenChat }) {
         <div className="tag-row"><span>{post.category}</span><span>{post.condition}</span><span className={`status-tag status-${String(post.status || 'Disponível').toLowerCase().replace(/\s+/g, '-')}`}>{post.status || 'Disponível'}</span></div>
       </div>
       <div className="post-actions">
-        <div className="post-stats"><button className={liked ? 'ghost-inline liked' : 'ghost-inline'} onClick={like}><span className="material-symbols-outlined">{liked ? 'favorite' : 'favorite_border'}</span>{likes}</button><button className="ghost-inline" onClick={toggleComments}><span className="material-symbols-outlined">chat_bubble</span>{commentCount}</button></div>
+        <div className="post-stats"><button className={liked ? 'ghost-inline liked' : 'ghost-inline'} onClick={like}><span key={heartAnimationKey} className={liked ? 'material-symbols-outlined like-icon liked-heart' : 'material-symbols-outlined like-icon'}>{liked ? 'favorite' : 'favorite_border'}</span>{likes}</button><button className="ghost-inline" onClick={toggleComments}><span className="material-symbols-outlined">chat_bubble</span>{commentCount}</button></div>
         <button className="primary-btn compact" onClick={onOpenChat}><span className="material-symbols-outlined">handshake</span>{post.goal === 'Troca' ? 'Fazer oferta' : 'Tenho interesse'}</button>
       </div>
-      {commentsOpen ? <section className="comments-panel"><div className="comments-list">{comments.length ? comments.map((comment) => <div className="comment" key={comment.id}><img src={comment.avatar} alt="" /><div><strong>{comment.name}</strong><p>{comment.text}</p></div></div>) : <p className="comments-empty">Ainda não há comentários. Seja o primeiro.</p>}</div><form className="comment-form" onSubmit={addComment}><input value={commentText} maxLength="500" onChange={(event) => setCommentText(event.target.value)} placeholder="Escreva um comentário..." /><button className="send-btn" disabled={commentBusy} aria-label="Publicar comentário"><span className="material-symbols-outlined">send</span></button></form></section> : null}
+      {commentsOpen ? <section className="comments-panel"><div className="comments-list">{comments.length ? comments.map((comment) => <div className="comment" key={comment.id}><img src={comment.avatar} alt="" /><div><strong>{comment.name}</strong><p>{comment.text}</p></div></div>) : commentCount === 0 ? <p className="comments-empty">Ainda não há comentários. Seja o primeiro.</p> : null}</div><form className="comment-form" onSubmit={addComment}><input value={commentText} maxLength="500" onChange={(event) => setCommentText(event.target.value)} placeholder="Escreva um comentário..." /><button className="send-btn" disabled={commentBusy} aria-label="Publicar comentário"><span className="material-symbols-outlined">send</span></button></form></section> : null}
     </article>
   );
 }
@@ -622,12 +625,12 @@ function MessagesScreen({ onOpenThread }) {
   }, [loadThreads]);
 
   const visibleThreads = threads.filter((thread) => `${thread.title} ${thread.subtitle}`.toLowerCase().includes(search.toLowerCase()));
-
   return (
     <Shell nav={navRoutes} active="/mensagens">
-      <header className="topbar compact-topbar messages-topbar"><h1>Mensagens</h1><button className="icon-btn" aria-label="Pesquisar conversas"><span className="material-symbols-outlined">search</span></button></header>
+      <header className="topbar compact-topbar messages-topbar"><h1>Mensagens</h1></header>
       <main className="page messages-page">
-        <label className="search-shell messages-search"><span className="material-symbols-outlined">search</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Pesquisar conversas..." /></label>
+        <section className="messages-intro"><span className="eyebrow">Sua caixa de entrada</span></section>
+        <label className="search-shell messages-search"><span className="material-symbols-outlined">search</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Pesquisar por pessoa ou mensagem..." /></label>
         <div className="thread-list">
           {(visibleThreads.length ? visibleThreads : threads.length ? [] : [{ title: 'Ana Costa', subtitle: 'Olá! Tenho interesse nesse aparelho...', time: '14:20', unreadCount: 2 }]).map((thread) => (
             <button key={thread.id || thread.title} className="thread-card" onClick={() => onOpenThread(thread.id)}>
@@ -636,9 +639,10 @@ function MessagesScreen({ onOpenThread }) {
                 <div><strong>{thread.title}</strong><span>{thread.time}</span></div>
                 <p>{thread.subtitle}</p>
               </div>
-              {thread.unreadCount ? <div className="unread">{thread.unreadCount}</div> : null}
+              <div className="thread-card-end">{thread.unreadCount ? <div className="unread">{thread.unreadCount}</div> : null}<span className="material-symbols-outlined thread-chevron">chevron_right</span></div>
             </button>
           ))}
+          {threads.length && !visibleThreads.length ? <div className="messages-empty"><span className="material-symbols-outlined">search_off</span><strong>Nenhuma conversa encontrada</strong><small>Tente buscar por outro nome ou mensagem.</small></div> : null}
         </div>
       </main>
     </Shell>
@@ -979,37 +983,29 @@ function ProfileScreen({ onGoToFeed, onSettings, onSaved, onMyPosts, onAdmin }) 
   return (
     <Shell nav={navRoutes} active="/perfil">
       <main className="page profile-page">
-        <section className="profile-header">
+        <section className="profile-hero">
           <div className="avatar-wrap">{user.avatar ? <img src={user.avatar} alt={user.name} /> : <span className="avatar-placeholder material-symbols-outlined" aria-label={`Perfil de ${user.name}`}>person</span>}<span className="verified material-symbols-outlined">verified</span></div>
-          <h1>{user.accountType === 'business' && user.businessName ? user.businessName : user.name}</h1>
-          {user.accountType === 'business' ? <span className="eyebrow">Empresa parceira</span> : null}
-          <div className="subtle-row"><span className="material-symbols-outlined">location_on</span><span>{[user.neighborhood, user.city].filter(Boolean).join(' · ')}</span></div>
+          <div className="profile-identity"><div className="profile-name-row"><h1>{user.accountType === 'business' && user.businessName ? user.businessName : user.name}</h1>{user.accountType === 'business' ? <span className="eyebrow">Empresa parceira</span> : null}</div><div className="subtle-row"><span className="material-symbols-outlined">location_on</span><span>{[user.neighborhood, user.city].filter(Boolean).join(' · ')}</span></div></div>
+          <div className="profile-quick-actions"><button className="profile-icon-action" onClick={onSettings} aria-label="Configurações" title="Configurações"><span className="material-symbols-outlined">settings</span></button>{user.role === 'admin' ? <button className="profile-icon-action" onClick={onAdmin} aria-label="Administração" title="Administração"><span className="material-symbols-outlined">admin_panel_settings</span></button> : null}</div>
         </section>
         <section className="stats-row">
-          <Stat value={stats.donations} label="Doações" tone="primary" />
-          <Stat value={stats.received} label="Recebidos" tone="secondary" />
-          <Stat value={stats.rating ? stats.rating.toFixed(1) : 'Nova'} label="Avaliação" tone="primary" star={Boolean(stats.rating)} />
+          <Stat value={stats.donations} label="Doações" icon="volunteer_activism" tone="primary" />
+          <Stat value={stats.received} label="Recebidos" icon="redeem" tone="secondary" />
+          <Stat value={stats.rating ? stats.rating.toFixed(1) : '—'} label="Avaliação" icon="star" tone="primary" />
         </section>
         <section className="impact-card">
-          <div className="impact-head"><h2>Seu impacto no ReUsa+</h2><small>Indicadores estimados a partir de negociações concluídas.</small></div>
+          <div className="impact-head"><span className="eyebrow">Impacto pessoal</span><h2>Seu impacto no ReUsa+</h2></div>
           <div className="impact-grid">
-            <MiniImpact icon="recycling" value={impact.itemsReused} label="Itens reaproveitados" />
-            <MiniImpact icon="eco" value={impact.divertedFromDisposal} label="Itens desviados do descarte" />
-            <MiniImpact icon="diversity_3" value={impact.beneficiaries} label="Pessoas beneficiadas" />
-            <MiniImpact icon="swap_horiz" value={impact.exchanges} label="Trocas realizadas" />
+            <MiniImpact icon="recycling" value={impact.itemsReused} label="Itens reaproveitados" layout="inline" />
+            <MiniImpact icon="eco" value={impact.divertedFromDisposal} label="Itens desviados do descarte" layout="inline" />
+            <MiniImpact icon="diversity_3" value={impact.beneficiaries} label="Pessoas beneficiadas" layout="inline" />
+            <MiniImpact icon="swap_horiz" value={impact.exchanges} label="Trocas realizadas" layout="inline" />
           </div>
         </section>
-        {communityImpact ? <section className="community-impact-card"><span className="eyebrow">Impacto da comunidade ReUsa+</span><div><MiniImpact icon="recycling" value={communityImpact.itemsReused} label="Itens reaproveitados" /><MiniImpact icon="diversity_3" value={communityImpact.beneficiaries} label="Pessoas beneficiadas" /><MiniImpact icon="swap_horiz" value={communityImpact.exchanges} label="Trocas concluídas" /></div><small>Indicadores estimados a partir das negociações concluídas na plataforma.</small></section> : null}
-        <section className="reputation-card"><div><span className="eyebrow">Reputação</span><h2>{reputation.rating ? `⭐ ${reputation.rating.toFixed(1)}` : 'Ainda sem avaliações'}</h2><p>{reputation.count} avaliações recebidas</p></div>{data?.reviews?.length ? <div className="review-preview">{data.reviews.slice(0, 2).map((review) => <p key={review.id}><strong>⭐ {review.rating} · {review.reviewerName}</strong>{review.comment ? ` — ${review.comment}` : ''}</p>)}</div> : null}</section>
-        <section className="badge-row">
-          {(achievements.length ? achievements : ['Novo membro']).map((achievement, index) => <Badge key={achievement} tone={['mint', 'coral', 'stone'][index % 3]} icon={achievement === 'Novo membro' ? 'person_add' : 'workspace_premium'} label={achievement} />)}
-        </section>
-        <section className="tabs">
-          <button className="tab tab-active" onClick={onMyPosts}>Meus anúncios</button>
-          <button className="tab" onClick={onSaved}>Itens salvos</button>
-          <button className="tab" onClick={onSettings}>Config</button>
-        </section>
-        {user.role === 'admin' ? <button className="admin-entry" onClick={onAdmin}><span className="material-symbols-outlined">admin_panel_settings</span><span><strong>Central de Administração</strong><small>Gerencie usuários, conteúdos e denúncias</small></span><span className="material-symbols-outlined">arrow_forward</span></button> : null}
+        {communityImpact ? <section className="community-impact-card"><span className="eyebrow">Comunidade ReUsa+</span><div><MiniImpact icon="recycling" value={communityImpact.itemsReused} label="Reaproveitados" layout="centered" /><MiniImpact icon="diversity_3" value={communityImpact.beneficiaries} label="Beneficiados" layout="centered" /><MiniImpact icon="swap_horiz" value={communityImpact.exchanges} label="Trocas" layout="centered" /></div></section> : null}
+        <section className="reputation-card"><div><span className="eyebrow">Reputação</span><h2>{reputation.rating ? `⭐ ${reputation.rating.toFixed(1)}` : 'Sem avaliações'}</h2><p>{reputation.count} avaliações</p></div>{data?.reviews?.length ? <div className="review-preview">{data.reviews.slice(0, 2).map((review) => <p key={review.id}><strong>⭐ {review.rating} · {review.reviewerName}</strong>{review.comment ? ` — ${review.comment}` : ''}</p>)}</div> : null}</section>
+        {achievements.length ? <section className="badge-row">{achievements.map((achievement, index) => <Badge key={achievement} tone={['mint', 'coral', 'stone'][index % 3]} icon="workspace_premium" label={achievement} />)}</section> : null}
+        <section className="profile-toolbar"><h2>Meus anúncios</h2><div><button className="profile-icon-action active" onClick={onMyPosts} aria-label="Meus anúncios" title="Meus anúncios"><span className="material-symbols-outlined">grid_view</span></button><button className="profile-icon-action" onClick={onSaved} aria-label="Itens salvos" title="Itens salvos"><span className="material-symbols-outlined">bookmark</span></button></div></section>
         <section className="profile-grid">
           {posts.filter((post) => post.authorId === user.id || post.author?.id === user.id).map((post) => (
             <div key={post.id} className="mini-post">
@@ -1132,6 +1128,7 @@ function RecenterMap({ position }) {
   return null;
 }
 
+
 function SuggestCollectionPointScreen({ onBack }) {
   const [form, setForm] = useState({ name: '', location: '', hours: '', categories: '' });
   const [busy, setBusy] = useState(false);
@@ -1153,10 +1150,11 @@ function MapViewport({ position }) {
   return null;
 }
 
-function SettingsScreen({ onBack, onLogout, onAbout }) {
+function SettingsScreen({ onBack, onLogout }) {
   const profile = useAppStore((state) => state.profile);
   const updateProfile = useAppStore((state) => state.updateProfile);
   const logout = useAppStore((state) => state.logout);
+  const [activeSection, setActiveSection] = useState('perfil');
   const [form, setForm] = useState({ name: profile?.user?.name || '', city: profile?.user?.city || '', neighborhood: profile?.user?.neighborhood || '', cep: profile?.user?.cep || '', address: profile?.user?.address || '', businessName: profile?.user?.businessName || '' });
   const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '' });
   const [preferences, setPreferences] = useState(profile?.user?.notificationPreferences || ['Curtidas', 'Comentários', 'Interesse', 'Mensagens', 'Negociações', 'Avaliações', 'Sistema']);
@@ -1196,25 +1194,49 @@ function SettingsScreen({ onBack, onLogout, onAbout }) {
   return (
     <Shell nav={navRoutes} active="/configuracoes">
       <main className="page settings-page">
-        <button className="back-link" onClick={onBack}>Voltar</button>
-        <section className="card settings-card">
-          <h2>Configurações</h2>
-          <p>Atualize seus dados para manter sua comunidade por perto.</p>
-          <form className="auth-form" onSubmit={save}>
-            <Field label="Nome" icon="person" value={form.name} onChange={(value) => setForm((current) => ({ ...current, name: value }))} />
-            <Field label="Cidade" icon="location_on" value={form.city} onChange={(value) => setForm((current) => ({ ...current, city: value }))} />
-            <Field label="Bairro público" icon="location_city" value={form.neighborhood} onChange={(value) => setForm((current) => ({ ...current, neighborhood: value }))} />
-            <Field label="CEP" icon="markunread_mailbox" value={form.cep} onChange={(value) => setForm((current) => ({ ...current, cep: value }))} />
-            <Field label="Endereço" icon="home" value={form.address} onChange={(value) => setForm((current) => ({ ...current, address: value }))} />
-            {profile?.user?.accountType === 'business' ? <Field label="Razão social" icon="business" value={form.businessName} onChange={(value) => setForm((current) => ({ ...current, businessName: value }))} /> : null}
-            <button className="primary-btn full">Salvar alterações</button>
-          </form>
-          <section className="settings-section"><h3>Privacidade e conta</h3><p>Seu endereço completo nunca é exibido publicamente. Os anúncios mostram apenas a localização aproximada.</p><form className="auth-form" onSubmit={changePassword}><Field label="Senha atual" icon="lock" type="password" value={passwordForm.currentPassword} onChange={(value) => setPasswordForm((current) => ({ ...current, currentPassword: value }))} /><Field label="Nova senha" icon="password" type="password" value={passwordForm.newPassword} onChange={(value) => setPasswordForm((current) => ({ ...current, newPassword: value }))} placeholder="Pelo menos 8 caracteres" /><button className="secondary-btn">Alterar senha</button></form></section>
-          <section className="settings-section"><h3>Preferências de notificações</h3><div className="preference-list">{['Curtidas', 'Comentários', 'Interesse', 'Mensagens', 'Negociações', 'Avaliações', 'Sistema'].map((item) => <label key={item}><input type="checkbox" checked={preferences.includes(item)} onChange={() => setPreferences((current) => current.includes(item) ? current.filter((value) => value !== item) : [...current, item])} />{item}</label>)}</div><button className="secondary-btn" onClick={savePreferences}>Salvar preferências</button></section>
-          <button className="secondary-btn full" onClick={onAbout}><span className="material-symbols-outlined">info</span>Sobre o ReUsa+</button>
-          <button className="danger-btn" onClick={signOut}><span className="material-symbols-outlined">logout</span>Sair da conta</button>
-          <button className="danger-btn" onClick={removeAccount}><span className="material-symbols-outlined">delete_forever</span>Excluir minha conta</button>
-        </section>
+        <header className="settings-heading">
+          <button className="back-link settings-back" onClick={onBack} aria-label="Voltar ao perfil"><span className="material-symbols-outlined">arrow_back</span></button>
+          <h1>Configurações</h1>
+        </header>
+        <div className="settings-layout">
+          <aside className="settings-menu" aria-label="Seções de configurações">
+            <button className={`settings-menu-item ${activeSection === 'perfil' ? 'active' : ''}`} onClick={() => setActiveSection('perfil')}><span className="material-symbols-outlined">person</span><span><strong>Meu perfil</strong></span></button>
+            <button className={`settings-menu-item ${activeSection === 'seguranca' ? 'active' : ''}`} onClick={() => setActiveSection('seguranca')}><span className="material-symbols-outlined">shield</span><span><strong>Segurança</strong></span></button>
+            <button className={`settings-menu-item ${activeSection === 'notificacoes' ? 'active' : ''}`} onClick={() => setActiveSection('notificacoes')}><span className="material-symbols-outlined">notifications</span><span><strong>Notificações</strong></span></button>
+          </aside>
+          <div className="settings-content">
+            {activeSection === 'perfil' ? <section className="settings-profile-banner">
+              <div className="settings-avatar"><span className="material-symbols-outlined">person</span></div>
+              <div><span className="settings-kicker">Perfil ReUsa+</span><h2>{profile?.user?.name || 'Seu perfil'}</h2><p>{profile?.user?.email || 'Atualize seus dados para manter sua comunidade por perto.'}</p></div>
+              <span className="settings-status"><span className="material-symbols-outlined">verified</span>Conta ativa</span>
+            </section> : null}
+            {activeSection === 'perfil' ? <section className="card settings-card settings-panel" id="perfil">
+              <div className="settings-panel-heading"><div><span className="settings-panel-icon"><span className="material-symbols-outlined">person</span></span><div><h2>Informações do perfil</h2></div></div></div>
+              <form className="settings-form" onSubmit={save}>
+                <div className="settings-form-grid">
+                  <Field label="Nome" icon="person" value={form.name} onChange={(value) => setForm((current) => ({ ...current, name: value }))} />
+                  <Field label="Cidade" icon="location_on" value={form.city} onChange={(value) => setForm((current) => ({ ...current, city: value }))} />
+                  <Field label="Bairro público" icon="location_city" value={form.neighborhood} onChange={(value) => setForm((current) => ({ ...current, neighborhood: value }))} />
+                  <Field label="CEP" icon="markunread_mailbox" value={form.cep} onChange={(value) => setForm((current) => ({ ...current, cep: value }))} />
+                  <div className="settings-field-wide"><Field label="Endereço" icon="home" value={form.address} onChange={(value) => setForm((current) => ({ ...current, address: value }))} /></div>
+                  {profile?.user?.accountType === 'business' ? <div className="settings-field-wide"><Field label="Razão social" icon="business" value={form.businessName} onChange={(value) => setForm((current) => ({ ...current, businessName: value }))} /></div> : null}
+                </div>
+                <div className="settings-form-footer"><small><span className="material-symbols-outlined">lock</span>Seu endereço completo nunca é exibido publicamente.</small><button className="secondary-btn">Salvar alterações</button></div>
+              </form>
+            </section> : null}
+            {activeSection === 'seguranca' ? <section className="card settings-card settings-panel" id="seguranca">
+              <div className="settings-panel-heading"><div><span className="settings-panel-icon security"><span className="material-symbols-outlined">shield</span></span><div><h2>Segurança e privacidade</h2></div></div></div>
+              <div className="privacy-note"><span className="material-symbols-outlined">visibility_off</span><span><strong>Privacidade por padrão</strong><small>Seus anúncios mostram apenas a localização aproximada.</small></span></div>
+              <form className="settings-form" onSubmit={changePassword}><div className="settings-form-grid"><Field label="Senha atual" icon="lock" type="password" value={passwordForm.currentPassword} onChange={(value) => setPasswordForm((current) => ({ ...current, currentPassword: value }))} /><Field label="Nova senha" icon="password" type="password" value={passwordForm.newPassword} onChange={(value) => setPasswordForm((current) => ({ ...current, newPassword: value }))} placeholder="Pelo menos 8 caracteres" /></div><div className="settings-form-footer"><span /><button className="secondary-btn">Alterar senha</button></div></form>
+            </section> : null}
+            {activeSection === 'notificacoes' ? <section className="card settings-card settings-panel" id="notificacoes">
+              <div className="settings-panel-heading"><div><span className="settings-panel-icon notifications"><span className="material-symbols-outlined">notifications</span></span><div><h2>Preferências de notificações</h2></div></div></div>
+              <div className="preference-list">{['Curtidas', 'Comentários', 'Interesse', 'Mensagens', 'Negociações', 'Avaliações', 'Sistema'].map((item) => <label className="preference-row" key={item}><span><strong>{item}</strong><small>Atualizações sobre {item.toLowerCase()}</small></span><input type="checkbox" checked={preferences.includes(item)} onChange={() => setPreferences((current) => current.includes(item) ? current.filter((value) => value !== item) : [...current, item])} /><i /></label>)}</div>
+              <div className="settings-form-footer"><span /><button className="secondary-btn" onClick={savePreferences}>Salvar preferências</button></div>
+            </section> : null}
+            <section className="settings-actions"><button className="danger-btn" onClick={signOut}><span className="material-symbols-outlined">logout</span>Sair da conta</button><button className="danger-btn" onClick={removeAccount}><span className="material-symbols-outlined">delete_forever</span>Excluir minha conta</button></section>
+          </div>
+        </div>
       </main>
     </Shell>
   );
@@ -1264,17 +1286,17 @@ function Field({ label, icon, value, onChange, placeholder, type = 'text', multi
   );
 }
 
-function Stat({ value, label, tone, star }) {
+function Stat({ value, label, tone, icon }) {
   return (
     <div className={`stat stat-${tone}`}>
-      {star ? <div className="stat-rating"><strong>{value}</strong><span className="material-symbols-outlined">star</span></div> : <strong>{value}</strong>}
+      <span className="stat-icon material-symbols-outlined">{icon}</span><strong>{value}</strong>
       <span>{label}</span>
     </div>
   );
 }
 
-function MiniImpact({ icon, value, label }) {
-  return <div className="mini-impact"><span className="material-symbols-outlined">{icon}</span><strong>{value}</strong><p>{label}</p></div>;
+function MiniImpact({ icon, value, label, layout = 'default' }) {
+  return <div className={`mini-impact mini-impact-${layout}`}><div className="mini-impact-value"><span className="material-symbols-outlined">{icon}</span><strong>{value}</strong></div><p>{label}</p></div>;
 }
 
 function Badge({ tone, icon, label }) {

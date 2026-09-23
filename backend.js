@@ -5,6 +5,13 @@ const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
 const initSqlJs = require('sql.js');
+const { EventPublisher } = require('./distributed/event-publisher');
+const { PostgresRepository, postgresEnabled, postgresConnectionString } = require('./storage/postgres-repository');
+const { registerPostgresRoutes } = require('./storage/postgres-api');
+const { applyMigrations } = require('./scripts/run-postgres-migrations');
+const { createObjectStorage } = require('./distributed/object-storage');
+const { connectRedis } = require('./distributed/redis-client');
+const { metricsText, requestMetrics } = require('./distributed/observability');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -14,6 +21,10 @@ const GOOGLE_CLIENT_ID = String(process.env.GOOGLE_CLIENT_ID || '').trim();
 const GOOGLE_CLIENT_SECRET = String(process.env.GOOGLE_CLIENT_SECRET || '').trim();
 const GOOGLE_REDIRECT_URI = String(process.env.GOOGLE_REDIRECT_URI || '').trim();
 const APP_BASE_URL = String(process.env.APP_BASE_URL || '').trim().replace(/\/$/, '');
+const NOTIFICATION_SERVICE_URL = String(process.env.NOTIFICATION_SERVICE_URL || '').trim().replace(/\/$/, '');
+const IMPACT_SERVICE_URL = String(process.env.IMPACT_SERVICE_URL || '').trim().replace(/\/$/, '');
+const SERVICE_AUTH_TOKEN = String(process.env.SERVICE_AUTH_TOKEN || '').trim();
+const INSTANCE_ID = String(process.env.INSTANCE_ID || `core-${crypto.randomUUID()}`).slice(0, 120);
 const ROOT = __dirname;
 // Railway exposes the path of an attached Volume through this variable.
 // Without a Volume, development continues to use the local data folder.
@@ -30,6 +41,9 @@ const IMAGE_EXTENSIONS = new Map([
 ]);
 
 let db;
+let postgres;
+let eventPublisher;
+let redisClient;
 const externalCache = new Map();
 
 function cachedExternalValue(key) {
@@ -134,9 +148,23 @@ function googleCallbackUrl(req, returnTo, params = {}) {
 function createRateLimiter({ windowMs, maxRequests }) {
   const attempts = new Map();
 
-  return (req, res, next) => {
+  return async (req, res, next) => {
     const now = Date.now();
     const key = `${req.ip}:${req.path}`;
+    if (redisClient) {
+      try {
+        const redisKey = `ratelimit:${key}`;
+        const count = await redisClient.incr(redisKey);
+        if (count === 1) await redisClient.expire(redisKey, Math.ceil(windowMs / 1000));
+        if (count > maxRequests) {
+          res.setHeader('Retry-After', Math.ceil(windowMs / 1000));
+          return res.status(429).json({ error: 'Too many requests. Try again later.' });
+        }
+        return next();
+      } catch (error) {
+        console.error('[redis] rate limiter unavailable; using local limiter:', error.message);
+      }
+    }
     const record = attempts.get(key);
     const current = !record || now - record.startedAt >= windowMs
       ? { startedAt: now, count: 0 }
@@ -166,6 +194,19 @@ async function fetchWithTimeout(url, options = {}, timeoutMs = 8000) {
     return response;
   } finally {
     clearTimeout(timeout);
+  }
+}
+
+async function distributedServiceValue(baseUrl, resource, options = {}) {
+  if (!baseUrl) return null;
+  try {
+    const headers = { ...(options.headers || {}) };
+    if (SERVICE_AUTH_TOKEN) headers.Authorization = `Bearer ${SERVICE_AUTH_TOKEN}`;
+    const response = await fetchWithTimeout(`${baseUrl}${resource}`, { ...options, headers }, 2500);
+    return await response.json();
+  } catch {
+    // A consumer may be restarting; the core must continue serving users.
+    return null;
   }
 }
 
@@ -354,6 +395,91 @@ function notification(userId, type, title, text, link = '') {
   );
 }
 
+// Transactional outbox: the business change and its event are persisted in the
+// same local database before any network call is attempted. This gives us
+// at-least-once delivery even when RabbitMQ is temporarily unavailable.
+function emitDomainEvent(type, data, correlationId = 'system') {
+  const event = {
+    id: uid('event'),
+    type,
+    occurredAt: new Date().toISOString(),
+    correlationId,
+    data
+  };
+  run('INSERT INTO event_outbox (id, type, payload_json, correlation_id, created_at) VALUES (?, ?, ?, ?, ?)', [event.id, event.type, JSON.stringify(event.data), event.correlationId, event.occurredAt]);
+  queueMicrotask(() => { void flushPendingEvents(); });
+  return event;
+}
+
+async function flushPendingEvents() {
+  if (!eventPublisher?.enabled()) return;
+  const pending = postgresEnabled()
+    ? await postgres.transaction(async (client) => {
+      const result = await client.query(`
+        WITH ready AS (
+          SELECT id
+          FROM event_outbox
+          WHERE published_at IS NULL
+            AND next_attempt_at <= now()
+            AND (locked_until IS NULL OR locked_until < now())
+          ORDER BY created_at ASC, id ASC
+          FOR UPDATE SKIP LOCKED
+          LIMIT 100
+        )
+        UPDATE event_outbox AS outbox
+        SET locked_by = $1,
+            locked_until = now() + interval '1 minute',
+            attempts = attempts + 1
+        FROM ready
+        WHERE outbox.id = ready.id
+        RETURNING outbox.*
+      `, [INSTANCE_ID]);
+      return result.rows;
+    })
+    : all('SELECT * FROM event_outbox WHERE published_at IS NULL ORDER BY created_at ASC LIMIT 100');
+  for (const row of pending) {
+    let delivered = false;
+    try {
+      delivered = await eventPublisher.publish({
+        id: row.id,
+        type: row.type,
+        occurredAt: row.created_at,
+        correlationId: row.correlation_id,
+        data: JSON.parse(row.payload_json)
+      });
+    } catch (error) {
+      console.error(`[events] Invalid outbox payload ${row.id}:`, error);
+    }
+    if (!delivered) {
+      if (postgresEnabled()) {
+        const delaySeconds = Math.min(300, 2 ** Math.min(Number(row.attempts || 1), 8));
+        await postgres.query(`
+          UPDATE event_outbox
+          SET locked_by = NULL,
+              locked_until = NULL,
+              next_attempt_at = now() + ($1 * interval '1 second'),
+              last_error = COALESCE(last_error, 'publish failed')
+          WHERE id = $2 AND locked_by = $3
+        `, [delaySeconds, row.id, INSTANCE_ID]);
+      }
+      break;
+    }
+    if (postgresEnabled()) {
+      await postgres.query(`
+        UPDATE event_outbox
+        SET published_at = now(),
+            locked_by = NULL,
+            locked_until = NULL,
+            last_error = NULL
+        WHERE id = $1 AND locked_by = $2
+      `, [row.id, INSTANCE_ID]);
+    } else {
+      run('UPDATE event_outbox SET published_at = ?, attempts = attempts + 1 WHERE id = ?', [new Date().toISOString(), row.id]);
+      persistDb();
+    }
+  }
+}
+
 function publicPost(row, viewerId = null) {
   const author = get('SELECT id, name, city, neighborhood, account_type, business_name, avatar FROM users WHERE id = ?', [row.author_id]);
   const interestCount = get("SELECT COUNT(*) AS count FROM negotiations WHERE post_id = ? AND status IN ('interested', 'reserved', 'completed')", [row.id])?.count || 0;
@@ -410,7 +536,7 @@ function createToken(userId) {
   return jwt.sign({ sub: userId }, JWT_SECRET, { expiresIn: '7d' });
 }
 
-function authMiddleware(req, res, next) {
+async function authMiddleware(req, res, next) {
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
 
@@ -420,7 +546,7 @@ function authMiddleware(req, res, next) {
 
   try {
     const payload = jwt.verify(token, JWT_SECRET);
-    const user = get('SELECT * FROM users WHERE id = ?', [payload.sub]);
+    const user = postgresEnabled() ? await postgres.users().findById(payload.sub) : get('SELECT * FROM users WHERE id = ?', [payload.sub]);
 
     if (!user) {
       return res.status(401).json({ error: 'Invalid token' });
@@ -703,6 +829,18 @@ function seedDatabase() {
     );
   `);
 
+  run(`
+    CREATE TABLE IF NOT EXISTS event_outbox (
+      id TEXT PRIMARY KEY,
+      type TEXT NOT NULL,
+      payload_json TEXT NOT NULL,
+      correlation_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      published_at TEXT,
+      attempts INTEGER NOT NULL DEFAULT 0
+    );
+  `);
+
   ensureColumn('users', 'role', "TEXT NOT NULL DEFAULT 'user'");
   ensureColumn('users', 'suspended', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('users', 'notification_preferences_json', "TEXT NOT NULL DEFAULT '[]'");
@@ -922,13 +1060,13 @@ function seedDatabase() {
   persistDb();
 }
 
-function optionalAuth(req, _res, next) {
+async function optionalAuth(req, _res, next) {
   const header = req.headers.authorization || '';
   const token = header.startsWith('Bearer ') ? header.slice(7) : null;
   if (!token) return next();
   try {
     const payload = jwt.verify(token, JWT_SECRET);
-    const user = get('SELECT * FROM users WHERE id = ?', [payload.sub]);
+    const user = postgresEnabled() ? await postgres.users().findById(payload.sub) : get('SELECT * FROM users WHERE id = ?', [payload.sub]);
     if (user && !user.suspended) req.user = userFromRow(user);
   } catch {
     // Public routes continue to work without a valid optional session.
@@ -1014,6 +1152,9 @@ function buildExists() {
 }
 
 async function start() {
+  if (process.env.NODE_ENV === 'production' && !postgresEnabled()) {
+    throw new Error('DATABASE_PROVIDER=postgres and POSTGRES_URL or DATABASE_URL are required in production');
+  }
   if (!hasConfiguredJwtSecret) {
     console.warn('JWT_SECRET is not configured. A temporary secret was generated; sessions will end after a restart.');
   }
@@ -1021,13 +1162,34 @@ async function start() {
   ensureDir(DATA_DIR);
   ensureDir(UPLOAD_DIR);
 
-  const SQL = await initSqlJs({
-    locateFile: (file) => path.join(ROOT, 'node_modules', 'sql.js', 'dist', file)
-  });
-
-  const bytes = loadDbBytes();
-  db = bytes ? new SQL.Database(bytes) : new SQL.Database();
-  seedDatabase();
+  if (postgresEnabled()) {
+    postgres = new PostgresRepository(postgresConnectionString());
+    await postgres.health();
+    const migrationClient = await postgres.pool.connect();
+    try {
+      await applyMigrations(migrationClient);
+    } finally {
+      migrationClient.release();
+    }
+    console.log('[database] PostgreSQL is the only runtime source of truth');
+  } else {
+    const SQL = await initSqlJs({
+      locateFile: (file) => path.join(ROOT, 'node_modules', 'sql.js', 'dist', file)
+    });
+    const bytes = loadDbBytes();
+    db = bytes ? new SQL.Database(bytes) : new SQL.Database();
+    seedDatabase();
+    console.log('[database] SQLite fallback enabled explicitly');
+  }
+  eventPublisher = new EventPublisher({ url: process.env.AMQP_URL, exchange: process.env.EVENT_EXCHANGE || 'reusa.events' });
+  redisClient = await connectRedis(process.env.REDIS_URL);
+  if (eventPublisher.enabled()) {
+    console.log('[events] transactional outbox enabled');
+    void flushPendingEvents();
+    setInterval(() => { void flushPendingEvents(); }, 5_000).unref();
+  } else {
+    console.log('[events] AMQP_URL not set; events remain in the outbox until a broker is configured');
+  }
 
   const uploadStorage = multer.diskStorage({
     destination: (_req, _file, callback) => callback(null, UPLOAD_DIR),
@@ -1036,9 +1198,41 @@ async function start() {
       callback(null, `${Date.now()}-${crypto.randomUUID()}${ext}`);
     }
   });
+  const objectStorage = createObjectStorage({
+    bucket: process.env.S3_BUCKET,
+    endpoint: process.env.S3_ENDPOINT,
+    publicBaseUrl: process.env.S3_PUBLIC_BASE_URL,
+    region: process.env.S3_REGION,
+    accessKeyId: process.env.S3_ACCESS_KEY_ID,
+    secretAccessKey: process.env.S3_SECRET_ACCESS_KEY,
+    forcePathStyle: process.env.S3_FORCE_PATH_STYLE === 'true'
+  });
+  if (objectStorage) await objectStorage.ensureBucket();
+  const objectUploadStorage = objectStorage ? {
+    _handleFile: (req, file, callback) => {
+      const chunks = [];
+      let size = 0;
+      file.stream.on('data', (chunk) => {
+        size += chunk.length;
+        chunks.push(chunk);
+      });
+      file.stream.once('error', callback);
+      file.stream.once('end', async () => {
+        try {
+          const ext = IMAGE_EXTENSIONS.get(file.mimetype) || '.img';
+          const key = `uploads/${Date.now()}-${crypto.randomUUID()}${ext}`;
+          const location = await objectStorage.put({ key, body: Buffer.concat(chunks, size), contentType: file.mimetype });
+          callback(null, { destination: '', filename: key, path: key, size, mimetype: file.mimetype, location });
+        } catch (error) {
+          callback(error);
+        }
+      });
+    },
+    _removeFile: (_req, _file, callback) => callback(null)
+  } : uploadStorage;
 
   const upload = multer({
-    storage: uploadStorage,
+    storage: objectUploadStorage,
     limits: { fileSize: 5 * 1024 * 1024, files: 1 },
     fileFilter: (_req, file, callback) => {
       if (IMAGE_EXTENSIONS.has(file.mimetype)) {
@@ -1053,9 +1247,85 @@ async function start() {
 
   app.use(express.json({ limit: '100kb' }));
   app.use(express.urlencoded({ extended: true }));
+  app.use(requestMetrics);
+  app.use((req, res, next) => {
+    req.correlationId = String(req.get('X-Correlation-Id') || uid('request')).slice(0, 120);
+    res.setHeader('X-Correlation-Id', req.correlationId);
+    next();
+  });
+  if (postgresEnabled()) {
+    registerPostgresRoutes(app, {
+      db: postgres,
+      jwtSecret: JWT_SECRET,
+      createToken,
+      uid,
+      publisher: { flush: flushPendingEvents }
+    });
+  }
   app.use('/uploads', express.static(UPLOAD_DIR));
 
+  app.get('/api/health/live', (_req, res) => res.json({ ok: true, status: 'live' }));
+
+  app.get('/api/health/ready', async (_req, res) => {
+    try {
+      if (postgresEnabled()) await postgres.health();
+      if (process.env.REDIS_URL && (!redisClient || !redisClient.isReady)) {
+        return res.status(503).json({ ok: false, status: 'not_ready', dependency: 'redis' });
+      }
+      if (eventPublisher.enabled() && !await eventPublisher.connect()) {
+        return res.status(503).json({ ok: false, status: 'not_ready', dependency: 'rabbitmq' });
+      }
+      return res.json({ ok: true, status: 'ready' });
+    } catch (error) {
+      return res.status(503).json({ ok: false, status: 'not_ready', error: error.message });
+    }
+  });
+
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
+
+  app.get('/metrics', (req, res) => {
+    if (SERVICE_AUTH_TOKEN && req.get('authorization') !== `Bearer ${SERVICE_AUTH_TOKEN}`) {
+      return res.status(401).json({ error: 'Unauthorized metrics request' });
+    }
+    res.type('text/plain').send(metricsText());
+  });
+
+  app.get('/api/distributed/status', (_req, res) => {
+    const pending = get('SELECT COUNT(*) AS count FROM event_outbox WHERE published_at IS NULL')?.count || 0;
+    const delivered = get('SELECT COUNT(*) AS count FROM event_outbox WHERE published_at IS NOT NULL')?.count || 0;
+    return res.json({ brokerConfigured: eventPublisher.enabled(), delivery: 'at-least-once', pendingEvents: pending, deliveredEvents: delivered });
+  });
+
+  app.get('/api/distributed/overview', authMiddleware, async (req, res) => {
+    const [pendingRow, deliveredRow] = postgresEnabled()
+      ? await Promise.all([
+        postgres.one('SELECT COUNT(*)::int AS count FROM event_outbox WHERE published_at IS NULL'),
+        postgres.one('SELECT COUNT(*)::int AS count FROM event_outbox WHERE published_at IS NOT NULL')
+      ])
+      : [
+        get('SELECT COUNT(*) AS count FROM event_outbox WHERE published_at IS NULL'),
+        get('SELECT COUNT(*) AS count FROM event_outbox WHERE published_at IS NOT NULL')
+      ];
+    const pendingEvents = Number(pendingRow?.count || 0);
+    const deliveredEvents = Number(deliveredRow?.count || 0);
+    const [notificationHealth, impactHealth, impact] = await Promise.all([
+      distributedServiceValue(NOTIFICATION_SERVICE_URL, '/health'),
+      distributedServiceValue(IMPACT_SERVICE_URL, '/health'),
+      distributedServiceValue(IMPACT_SERVICE_URL, '/impact')
+    ]);
+    return res.json({
+      brokerConfigured: eventPublisher.enabled(),
+      delivery: 'at-least-once',
+      pendingEvents,
+      deliveredEvents,
+      services: {
+        notifications: notificationHealth ? { online: true, processedEvents: notificationHealth.processedEvents } : { online: false },
+        impact: impactHealth ? { online: true, processedEvents: impactHealth.processedEvents } : { online: false }
+      },
+      impact: impact || { itemsReused: 0, donations: 0, exchanges: 0, beneficiaries: 0, consistency: 'unavailable' },
+      userId: req.user.id
+    });
+  });
 
   app.get('/api/businesses/cnpj/:cnpj', publicLookupRateLimit, async (req, res) => {
     const cnpj = String(req.params.cnpj || '').replace(/\D/g, '');
@@ -1390,7 +1660,7 @@ async function start() {
     const location = typeof req.body?.location === 'string' ? req.body.location.trim() : post.location;
     if (!title || !description || !category) return res.status(400).json({ error: 'Title, description and category are required' });
     if (title.length > 140 || description.length > 3000 || category.length > 60 || condition.length > 60 || goal.length > 40 || location.length > 160) return res.status(400).json({ error: 'One or more fields exceed the allowed length' });
-    const imageUrl = req.file ? `/uploads/${req.file.filename}` : post.image_url;
+    const imageUrl = req.file ? (req.file.location || `/uploads/${req.file.filename}`) : post.image_url;
     const updatedAt = new Date().toISOString();
     run('UPDATE posts SET title = ?, description = ?, category = ?, condition = ?, goal = ?, location = ?, image_url = ?, updated_at = ? WHERE id = ?', [title, description, category, condition, goal, location, imageUrl, updatedAt, post.id]);
     persistDb();
@@ -1427,7 +1697,15 @@ async function start() {
     run("UPDATE negotiations SET status = 'interested', updated_at = ? WHERE post_id = ? AND status = 'reserved'", [now, post.id]);
     run("UPDATE negotiations SET status = 'reserved', updated_at = ? WHERE id = ?", [now, negotiation.id]);
     run("UPDATE posts SET status = 'Reservado', reserved_by = ?, updated_at = ? WHERE id = ?", [interestedId, now, post.id]);
-    notification(interestedId, 'negotiation', 'Item reservado para você', `Você foi selecionado para ${post.title}.`, `/anuncios/${post.id}`);
+    if (!eventPublisher.enabled()) notification(interestedId, 'negotiation', 'Item reservado para você', `Você foi selecionado para ${post.title}.`, `/anuncios/${post.id}`);
+    emitDomainEvent('negotiation.reserved', {
+      negotiationId: negotiation.id,
+      postId: post.id,
+      postTitle: post.title,
+      ownerId: post.author_id,
+      interestedId,
+      status: 'reserved'
+    }, req.correlationId);
     persistDb();
     return res.json({ post: publicPost(get('SELECT * FROM posts WHERE id = ?', [post.id]), req.user.id) });
   });
@@ -1446,7 +1724,16 @@ async function start() {
     run('UPDATE posts SET status = ?, completed_with = ?, completed_at = ?, updated_at = ? WHERE id = ?', [outcome, post.reserved_by, now, now, post.id]);
     refreshUserMetrics(post.author_id);
     refreshUserMetrics(post.reserved_by);
-    notification(post.reserved_by, 'negotiation', 'Negociação concluída', `A negociação de ${post.title} foi concluída. Avalie a experiência.`, `/anuncios/${post.id}`);
+    if (!eventPublisher.enabled()) notification(post.reserved_by, 'negotiation', 'Negociação concluída', `A negociação de ${post.title} foi concluída. Avalie a experiência.`, `/anuncios/${post.id}`);
+    emitDomainEvent('negotiation.completed', {
+      negotiationId: negotiation.id,
+      postId: post.id,
+      postTitle: post.title,
+      ownerId: post.author_id,
+      interestedId: post.reserved_by,
+      outcome,
+      completedAt: now
+    }, req.correlationId);
     persistDb();
     return res.json({ post: publicPost(get('SELECT * FROM posts WHERE id = ?', [post.id]), req.user.id), negotiationId: negotiation.id });
   });
@@ -1478,7 +1765,8 @@ async function start() {
     run('INSERT INTO reviews (id, negotiation_id, reviewer_id, reviewee_id, rating, comment, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', Object.values(review));
     const aggregate = get('SELECT AVG(rating) AS average FROM reviews WHERE reviewee_id = ?', [revieweeId]);
     run('UPDATE users SET rating = ? WHERE id = ?', [Number(aggregate?.average || 0), revieweeId]);
-    notification(revieweeId, 'review', 'Você recebeu uma avaliação', `${req.user.name} avaliou uma negociação com você.`, '/perfil');
+    if (!eventPublisher.enabled()) notification(revieweeId, 'review', 'Você recebeu uma avaliação', `${req.user.name} avaliou uma negociação com você.`, '/perfil');
+    emitDomainEvent('review.created', { negotiationId: negotiation.id, revieweeId, reviewerId: req.user.id, reviewerName: req.user.name, link: '/perfil' }, req.correlationId);
     persistDb();
     return res.status(201).json({ review: { ...review, reviewerName: req.user.name } });
   });
@@ -1557,7 +1845,7 @@ async function start() {
       return res.status(400).json({ error: 'One or more fields exceed the allowed length' });
     }
 
-    const imageUrl = req.file ? `/uploads/${req.file.filename}` : safeImageUrl(req.body.imageUrl, '');
+    const imageUrl = req.file ? (req.file.location || `/uploads/${req.file.filename}`) : safeImageUrl(req.body.imageUrl, '');
     const createdAt = new Date().toISOString();
     const post = {
       id: uid('post'),
@@ -1610,7 +1898,8 @@ async function start() {
     const thread = { id: uid('thread'), post_id: post.id, participants_json: JSON.stringify([req.user.id, post.author_id]), unread_count: 0, last_message_at: new Date().toISOString() };
     run('INSERT INTO threads (id, post_id, participants_json, unread_count, last_message_at) VALUES (?, ?, ?, ?, ?)', [thread.id, thread.post_id, thread.participants_json, thread.unread_count, thread.last_message_at]);
     run("INSERT INTO negotiations (id, post_id, owner_id, interested_id, thread_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'interested', ?, ?)", [uid('negotiation'), post.id, post.author_id, req.user.id, thread.id, thread.last_message_at, thread.last_message_at]);
-    notification(post.author_id, 'interest', 'Novo interessado', `${req.user.name} demonstrou interesse em "${post.title}".`, `/anuncios/${post.id}`);
+    if (!eventPublisher.enabled()) notification(post.author_id, 'interest', 'Novo interessado', `${req.user.name} demonstrou interesse em "${post.title}".`, `/anuncios/${post.id}`);
+    emitDomainEvent('negotiation.interested', { postId: post.id, postTitle: post.title, ownerId: post.author_id, interestedId: req.user.id, interestedName: req.user.name }, req.correlationId);
     persistDb();
     return res.status(201).json({ thread: threadSummary(thread, req.user.id) });
   });
@@ -1670,15 +1959,19 @@ async function start() {
     );
     run('UPDATE threads SET last_message_at = ? WHERE id = ?', [sentAt, thread.id]);
     if (recipientId) {
-      notification(recipientId, 'message', 'Nova mensagem', `${req.user.name} enviou uma mensagem.`, `/mensagens/ana?thread=${thread.id}`);
+      if (!eventPublisher.enabled()) notification(recipientId, 'message', 'Nova mensagem', `${req.user.name} enviou uma mensagem.`, `/mensagens/ana?thread=${thread.id}`);
+      emitDomainEvent('message.sent', { messageId: message.id, threadId: thread.id, postId: thread.post_id, senderId: req.user.id, senderName: req.user.name, recipientId, link: `/mensagens/ana?thread=${thread.id}` }, req.correlationId);
     }
     persistDb();
 
     return res.status(201).json({ message });
   });
 
-  app.get('/api/notifications', authMiddleware, (req, res) => {
-    const notifications = all('SELECT id, type, title, text, link, created_at AS createdAt, read_at AS readAt FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 50', [req.user.id]);
+  app.get('/api/notifications', authMiddleware, async (req, res) => {
+    const localNotifications = all('SELECT id, type, title, text, link, created_at AS createdAt, read_at AS readAt FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 50', [req.user.id]);
+    const distributed = await distributedServiceValue(NOTIFICATION_SERVICE_URL, `/notifications/${encodeURIComponent(req.user.id)}`);
+    const remoteNotifications = (distributed?.notifications || []).map((item) => ({ ...item, createdAt: item.createdAt || item.created_at, readAt: item.readAt || item.read_at || null }));
+    const notifications = [...localNotifications, ...remoteNotifications].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 50);
     res.json({ notifications, unreadCount: notifications.filter((notification) => !notification.readAt).length });
   });
 
@@ -1688,9 +1981,10 @@ async function start() {
     res.json({ ok: true });
   });
 
-  app.post('/api/notifications/:id/read', authMiddleware, (req, res) => {
+  app.post('/api/notifications/:id/read', authMiddleware, async (req, res) => {
     run('UPDATE notifications SET read_at = ? WHERE id = ? AND user_id = ? AND read_at IS NULL', [new Date().toISOString(), req.params.id, req.user.id]);
     persistDb();
+    if (req.params.id.startsWith('notification-event-')) await distributedServiceValue(NOTIFICATION_SERVICE_URL, `/notifications/${encodeURIComponent(req.user.id)}/${encodeURIComponent(req.params.id)}/read`, { method: 'POST' });
     res.json({ ok: true });
   });
 
@@ -1765,8 +2059,9 @@ async function start() {
     });
   });
 
-  app.get('/api/impact/community', (_req, res) => {
-    res.json({ impact: communityImpact() });
+  app.get('/api/impact/community', async (_req, res) => {
+    const distributedImpact = await distributedServiceValue(IMPACT_SERVICE_URL, '/impact');
+    res.json({ impact: distributedImpact || communityImpact() });
   });
 
   app.put('/api/profile', authMiddleware, (req, res) => {

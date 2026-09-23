@@ -1,0 +1,9 @@
+node_modules
+dist
+data
+data-debug
+data-run
+uploads
+.git
+.env
+npm-debug.log

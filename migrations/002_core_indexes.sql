@@ -1,0 +1,14 @@
+CREATE INDEX IF NOT EXISTS posts_status_created_idx ON posts(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS posts_category_idx ON posts(category);
+CREATE INDEX IF NOT EXISTS favorites_user_created_idx ON favorites(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS post_likes_post_idx ON post_likes(post_id);
+CREATE INDEX IF NOT EXISTS comments_post_created_idx ON comments(post_id, created_at);
+CREATE INDEX IF NOT EXISTS post_views_post_idx ON post_views(post_id);
+CREATE INDEX IF NOT EXISTS negotiations_interested_idx ON negotiations(interested_id, status);
+CREATE INDEX IF NOT EXISTS negotiations_owner_idx ON negotiations(owner_id, status);
+CREATE INDEX IF NOT EXISTS reviews_reviewee_idx ON reviews(reviewee_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS messages_sender_idx ON messages(sender_id, sent_at);
+CREATE INDEX IF NOT EXISTS threads_post_idx ON threads(post_id, last_message_at DESC);
+CREATE INDEX IF NOT EXISTS reports_status_idx ON reports(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS suggestions_status_idx ON collection_point_suggestions(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS outbox_unpublished_idx ON event_outbox(created_at, id) WHERE published_at IS NULL;
