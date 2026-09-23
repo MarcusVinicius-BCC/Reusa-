@@ -243,7 +243,42 @@ async function googleProfileFromCode(req, code) {
   };
 }
 
-function userForGoogleProfile(profile) {
+async function userForGoogleProfile(profile) {
+  if (postgresEnabled()) {
+    return postgres.transaction(async (client) => {
+      const linkedIdentity = await client.query('SELECT user_id FROM auth_identities WHERE provider = $1 AND provider_subject = $2 LIMIT 1', ['google', profile.subject]);
+      let user = linkedIdentity.rowCount
+        ? (await client.query('SELECT * FROM users WHERE id = $1', [linkedIdentity.rows[0].user_id])).rows[0]
+        : null;
+
+      if (!user) {
+        user = (await client.query('SELECT * FROM users WHERE lower(email) = lower($1) LIMIT 1', [profile.email])).rows[0] || null;
+        if (user) {
+          const otherGoogleIdentity = await client.query('SELECT provider_subject FROM auth_identities WHERE provider = $1 AND user_id = $2 LIMIT 1', ['google', user.id]);
+          if (otherGoogleIdentity.rowCount && otherGoogleIdentity.rows[0].provider_subject !== profile.subject) {
+            throw new Error('This ReUsa+ account is already linked to another Google account');
+          }
+        } else {
+          const userId = uid('user');
+          user = (await client.query(
+            `INSERT INTO users (id, name, email, password_hash, city, neighborhood, cep, address, interests_json, avatar, achievements_json, created_at, last_active_at)
+             VALUES ($1, $2, $3, $4, $5, '', '', '', '[]', $6, '["Novo membro"]', now(), now()) RETURNING *`,
+            [userId, profile.name, profile.email, passwordHash(crypto.randomBytes(32).toString('hex')), 'Não informado', profile.avatar]
+          )).rows[0];
+        }
+        await client.query(
+          'INSERT INTO auth_identities (provider, provider_subject, user_id, email_at_linked, created_at) VALUES ($1, $2, $3, $4, now())',
+          ['google', profile.subject, user.id, profile.email]
+        );
+      }
+
+      if (!user.avatar && profile.avatar) {
+        user = (await client.query('UPDATE users SET avatar = $1 WHERE id = $2 RETURNING *', [profile.avatar, user.id])).rows[0];
+      }
+      return user;
+    });
+  }
+
   const linkedIdentity = get('SELECT user_id FROM auth_identities WHERE provider = ? AND provider_subject = ? LIMIT 1', ['google', profile.subject]);
   let user = linkedIdentity ? get('SELECT * FROM users WHERE id = ?', [linkedIdentity.user_id]) : null;
 
@@ -1411,13 +1446,17 @@ async function start() {
       const code = String(req.query.code || '');
       if (!code) throw new Error('Google did not return an authorization code');
       const profile = await googleProfileFromCode(req, code);
-      const user = userForGoogleProfile(profile);
+      const user = await userForGoogleProfile(profile);
       if (user.suspended) {
         return res.redirect(googleCallbackUrl(req, returnTo, { auth_error: 'account_suspended' }));
       }
 
-      run('UPDATE users SET last_active_at = ? WHERE id = ?', [new Date().toISOString(), user.id]);
-      persistDb();
+      if (postgresEnabled()) {
+        await postgres.query('UPDATE users SET last_active_at = now() WHERE id = $1', [user.id]);
+      } else {
+        run('UPDATE users SET last_active_at = ? WHERE id = ?', [new Date().toISOString(), user.id]);
+        persistDb();
+      }
       return res.redirect(googleCallbackUrl(req, returnTo, { reusa_token: createToken(user.id) }));
     } catch (error) {
       console.error('Google OAuth failed:', error.message);
