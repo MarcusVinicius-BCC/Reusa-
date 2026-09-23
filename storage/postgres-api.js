@@ -628,6 +628,49 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
     }
     return true;
   };
+
+  app.get('/api/admin/posts', authenticate, async (req, res, next) => {
+    try {
+      if (!await requireAdmin(req, res)) return;
+      const rows = await db.many('SELECT * FROM posts ORDER BY created_at DESC LIMIT 200');
+      return res.json({ posts: await Promise.all(rows.map((row) => postView(db, row, req.user.id))) });
+    } catch (error) { return next(error); }
+  });
+
+  app.delete('/api/admin/posts/:id', authenticate, async (req, res, next) => {
+    try {
+      if (!await requireAdmin(req, res)) return;
+      const removed = await db.transaction(async (client) => {
+        const post = await client.query('SELECT id FROM posts WHERE id=$1 FOR UPDATE', [req.params.id]);
+        if (!post.rowCount) return false;
+        await client.query("DELETE FROM reports WHERE target_type='post' AND target_id=$1", [req.params.id]);
+        await client.query('DELETE FROM posts WHERE id=$1', [req.params.id]);
+        return true;
+      });
+      if (!removed) return res.status(404).json({ error: 'Post not found' });
+      return res.json({ ok: true });
+    } catch (error) { return next(error); }
+  });
+
+  app.get('/api/admin/reports', authenticate, async (req, res, next) => {
+    try {
+      if (!await requireAdmin(req, res)) return;
+      const reports = await db.many("SELECT reports.*, users.name AS reporter_name FROM reports JOIN users ON users.id=reports.reporter_id ORDER BY CASE reports.status WHEN 'pending' THEN 0 ELSE 1 END, reports.created_at DESC LIMIT 200");
+      return res.json({ reports: reports.map((item) => ({ id: item.id, targetType: item.target_type, targetId: item.target_id, reason: item.reason, details: item.details, status: item.status, createdAt: item.created_at, reporterName: item.reporter_name })) });
+    } catch (error) { return next(error); }
+  });
+
+  app.patch('/api/admin/reports/:id', authenticate, async (req, res, next) => {
+    try {
+      if (!await requireAdmin(req, res)) return;
+      const status = String(req.body?.status || '').trim();
+      if (!['pending', 'reviewed', 'resolved', 'dismissed'].includes(status)) return res.status(400).json({ error: 'Invalid report status' });
+      const report = await db.one('UPDATE reports SET status=$1, reviewed_at=now(), reviewed_by=$2 WHERE id=$3 RETURNING id', [status, req.user.id, req.params.id]);
+      if (!report) return res.status(404).json({ error: 'Report not found' });
+      return res.json({ ok: true });
+    } catch (error) { return next(error); }
+  });
+
   app.get('/api/admin/collection-points', authenticate, async (req, res, next) => {
     try {
       if (!await requireAdmin(req, res)) return;
