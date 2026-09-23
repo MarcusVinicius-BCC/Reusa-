@@ -11,16 +11,23 @@ let googleMapsLoader;
 
 function loadGoogleMaps() {
   if (window.google?.maps) return Promise.resolve(window.google.maps);
-  if (!GOOGLE_MAPS_API_KEY) return Promise.reject(new Error('A chave do Google Maps não foi configurada.'));
   if (googleMapsLoader) return googleMapsLoader;
-  googleMapsLoader = new Promise((resolve, reject) => {
+  googleMapsLoader = (async () => {
+    let apiKey = GOOGLE_MAPS_API_KEY;
+    if (!apiKey) {
+      const response = await fetch('/api/public-config');
+      if (response.ok) apiKey = (await response.json()).googleMapsApiKey;
+    }
+    if (!apiKey) throw new Error('A chave do Google Maps não foi configurada no Railway.');
+    return new Promise((resolve, reject) => {
     const script = document.createElement('script');
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(GOOGLE_MAPS_API_KEY)}&v=weekly&language=pt-BR&region=BR`;
+    script.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(apiKey)}&v=weekly&language=pt-BR&region=BR`;
     script.async = true;
     script.onload = () => window.google?.maps ? resolve(window.google.maps) : reject(new Error('Não foi possível carregar o Google Maps.'));
     script.onerror = () => reject(new Error('Não foi possível carregar o Google Maps. Verifique as restrições da chave.'));
     document.head.appendChild(script);
-  });
+    });
+  })();
   return googleMapsLoader;
 }
 const validDate = (value) => {

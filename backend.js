@@ -1342,6 +1342,13 @@ async function start() {
 
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
 
+  // A chave do Maps é pública no navegador por definição; sua proteção vem das
+  // restrições de domínio e API configuradas no Google Cloud.
+  app.get('/api/public-config', (_req, res) => {
+    res.setHeader('Cache-Control', 'no-store');
+    return res.json({ googleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY || process.env.VITE_GOOGLE_MAPS_API_KEY || '' });
+  });
+
   app.get('/metrics', (req, res) => {
     if (SERVICE_AUTH_TOKEN && req.get('authorization') !== `Bearer ${SERVICE_AUTH_TOKEN}`) {
       return res.status(401).json({ error: 'Unauthorized metrics request' });
