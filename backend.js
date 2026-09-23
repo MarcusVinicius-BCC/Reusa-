@@ -2031,7 +2031,10 @@ async function start() {
     const cacheKey = `collection-points:${city.toLocaleLowerCase('pt-BR')}`;
     const cached = cachedExternalValue(cacheKey);
     if (cached) return res.json({ ...cached, cached: true });
-    const registered = all('SELECT * FROM collection_points WHERE lower(location) LIKE lower(?) ORDER BY name ASC', [`%${cityName}%`]).map((row) => ({ id: row.id, name: row.name, categories: jsonArray(row.categories_json), hours: row.hours, location: row.location, status: row.status, source: row.origin || 'Cadastrado no Reusa+', origin: row.origin || 'ReUsa+', lastUpdated: row.last_updated || null, latitude: row.latitude, longitude: row.longitude, verified: (row.origin || '').includes('ReUsa') }));
+    const registeredRows = postgresEnabled()
+      ? await postgres.many('SELECT * FROM collection_points WHERE lower(location) LIKE lower($1) ORDER BY name ASC', [`%${cityName}%`])
+      : all('SELECT * FROM collection_points WHERE lower(location) LIKE lower(?) ORDER BY name ASC', [`%${cityName}%`]);
+    const registered = registeredRows.map((row) => ({ id: row.id, name: row.name, categories: jsonArray(row.categories_json), hours: row.hours, location: row.location, status: row.status, source: row.origin || 'Cadastrado no Reusa+', origin: row.origin || 'ReUsa+', lastUpdated: row.last_updated || null, latitude: row.latitude, longitude: row.longitude, verified: (row.origin || '').includes('ReUsa') }));
     try {
       const geocodeResponse = await fetchWithTimeout(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=br&q=${encodeURIComponent(city)}`, { headers: { 'User-Agent': 'ReusaPlus/1.0 contact@reusa.local' } });
       const places = await geocodeResponse.json();
