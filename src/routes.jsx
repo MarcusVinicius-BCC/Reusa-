@@ -7,6 +7,10 @@ import { CircleMarker, MapContainer, TileLayer, useMap } from 'react-leaflet';
 import 'leaflet/dist/leaflet.css';
 import feedLogo from './assets/reusa-logo.png';
 
+const BRAZIL_TIME_ZONE = 'America/Sao_Paulo';
+const formatBrazilTime = (value) => new Intl.DateTimeFormat('pt-BR', { timeZone: BRAZIL_TIME_ZONE, hour: '2-digit', minute: '2-digit' }).format(new Date(value));
+const formatBrazilDate = (value) => new Intl.DateTimeFormat('pt-BR', { timeZone: BRAZIL_TIME_ZONE, day: '2-digit', month: '2-digit', year: 'numeric' }).format(new Date(value));
+
 const navRoutes = {
   home: '/feed',
   inicio: '/feed',
@@ -442,7 +446,7 @@ function NotificationsScreen({ onBack, onNavigate }) {
     try { await api.readNotification(notification.id); setNotifications((items) => items.map((item) => item.id === notification.id ? { ...item, readAt: new Date().toISOString() } : item)); await loadNotifications(); } catch {}
     onNavigate(notification.link || '/feed');
   }
-  return <Shell nav={navRoutes} active="/notificacoes"><header className="topbar compact-topbar"><button className="back-btn" onClick={onBack}><span className="material-symbols-outlined">arrow_back_ios_new</span></button><h1>Notificações</h1></header><main className="page padded-top"><div className="notification-list">{notifications.length ? notifications.map((notification) => <button className={notification.readAt ? 'notification-item' : 'notification-item notification-unread'} key={notification.id} onClick={() => openNotification(notification)}><span className="notification-icon material-symbols-outlined">{iconFor(notification.type)}</span><span><strong>{notification.title}</strong><p>{notification.text}</p><small>{new Date(notification.createdAt).toLocaleString('pt-BR')}</small></span></button>) : <EmptyState icon="notifications_none" title="Nenhuma notificação nova" text="Quando algo acontecer na sua comunidade, avisaremos por aqui." />}</div></main></Shell>;
+  return <Shell nav={navRoutes} active="/notificacoes"><header className="topbar compact-topbar"><button className="back-btn" onClick={onBack}><span className="material-symbols-outlined">arrow_back_ios_new</span></button><h1>Notificações</h1></header><main className="page padded-top"><div className="notification-list">{notifications.length ? notifications.map((notification) => <button className={notification.readAt ? 'notification-item' : 'notification-item notification-unread'} key={notification.id} onClick={() => openNotification(notification)}><span className="notification-icon material-symbols-outlined">{iconFor(notification.type)}</span><span><strong>{notification.title}</strong><p>{notification.text}</p><small>{formatBrazilDate(notification.createdAt)} às {formatBrazilTime(notification.createdAt)}</small></span></button>) : <EmptyState icon="notifications_none" title="Nenhuma notificação nova" text="Quando algo acontecer na sua comunidade, avisaremos por aqui." />}</div></main></Shell>;
 }
 
 function InspirationsScreen({ onNavigate }) {
@@ -629,6 +633,8 @@ function MessagesScreen({ onOpenThread }) {
 
   useEffect(() => {
     loadThreads().catch(() => {});
+    const timer = window.setInterval(() => loadThreads().catch(() => {}), 3000);
+    return () => window.clearInterval(timer);
   }, [loadThreads]);
 
   const visibleThreads = threads.filter((thread) => `${thread.title} ${thread.subtitle}`.toLowerCase().includes(search.toLowerCase()));
@@ -643,7 +649,7 @@ function MessagesScreen({ onOpenThread }) {
             <button key={thread.id || thread.title} className="thread-card" onClick={() => onOpenThread(thread.id)}>
               <div className="thread-avatar" aria-label={`Perfil de ${thread.title || 'usuário'}`}><span className="material-symbols-outlined">person</span></div>
               <div className="thread-content">
-                <div><strong>{thread.title}</strong><span>{thread.time}</span></div>
+                <div><strong>{thread.title}</strong><span>{formatBrazilTime(thread.time)}</span></div>
                 <p>{thread.subtitle}</p>
               </div>
               <div className="thread-card-end">{thread.unreadCount ? <div className="unread">{thread.unreadCount}</div> : null}<span className="material-symbols-outlined thread-chevron">chevron_right</span></div>
@@ -661,15 +667,26 @@ function ChatScreen({ onBack }) {
   const [messages, setMessages] = useState([]);
   const [thread, setThread] = useState(null);
   const sendMessage = useAppStore((state) => state.sendMessage);
+  const readThreadNotifications = useAppStore((state) => state.readThreadNotifications);
   const session = useAppStore((state) => state.session);
   const threadId = new URLSearchParams(window.location.search).get('thread') || 'thread-ana-notebook';
 
   useEffect(() => {
-    api.thread(threadId).then((result) => {
-      setThread(result.thread);
-      setMessages(result.messages || []);
-    }).catch(() => {});
-  }, [threadId]);
+    let active = true;
+    const refresh = async () => {
+      try {
+        const result = await api.thread(threadId);
+        if (active) {
+          setThread(result.thread);
+          setMessages(result.messages || []);
+          readThreadNotifications(threadId).catch(() => {});
+        }
+      } catch {}
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 2000);
+    return () => { active = false; window.clearInterval(timer); };
+  }, [threadId, readThreadNotifications]);
 
   async function send() {
     if (!text.trim()) return;
@@ -680,7 +697,10 @@ function ChatScreen({ onBack }) {
     const messageText = text.trim();
     try {
       await sendMessage(threadId, { text: messageText });
-      setMessages((current) => [...current, { id: Date.now(), sender_id: session.id, text: messageText, sent_at: new Date().toISOString() }]);
+      const result = await api.thread(threadId);
+      setMessages(result.messages || []);
+      setThread(result.thread);
+      await readThreadNotifications(threadId);
       setText('');
     } catch (error) {
       alert(error.message);
@@ -691,7 +711,7 @@ function ChatScreen({ onBack }) {
     <div className="chat-screen">
       <header className="topbar compact-topbar chat-topbar"><button className="back-btn" onClick={onBack} aria-label="Voltar para mensagens"><span className="material-symbols-outlined">arrow_back_ios_new</span></button><h1>Conversa Direta</h1></header>
       <div className="chat-banner"><span className="chat-person-avatar material-symbols-outlined" aria-label={`Perfil de ${thread?.title || 'Ana Costa'}`}>person</span><div><strong>{thread?.title || 'Ana Costa'}</strong><span>Negocie com segurança e combine a retirada</span></div></div>
-      <main className="chat-body">{messages.map((message) => { const mine = message.sender_id === session?.id; return <div key={message.id} className={mine ? 'bubble mine' : 'bubble'}><p>{message.text}</p><span>{new Date(message.sent_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}</span></div>; })}</main>
+      <main className="chat-body">{messages.map((message) => { const mine = message.sender_id === session?.id; return <div key={message.id} className={mine ? 'bubble mine' : 'bubble'}><p>{message.text}</p><span>{formatBrazilTime(message.sent_at)}</span></div>; })}</main>
       <footer className="chat-compose"><textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="Digite sua mensagem..." rows={1} /><button className="send-btn" onClick={send}><span className="material-symbols-outlined">send</span></button></footer>
     </div>
   );
@@ -940,7 +960,7 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
 
   return <div className="detail-screen"><header className="topbar compact-topbar"><button className="back-btn" onClick={onBack} aria-label="Voltar"><span className="material-symbols-outlined">arrow_back_ios_new</span></button><h1>Anúncio</h1><button className="icon-btn" onClick={share} aria-label="Compartilhar"><span className="material-symbols-outlined">ios_share</span></button></header><main className="detail-page">
     <section className="detail-image"><img src={post.imageUrl} alt={post.title} /><span className={`status-tag status-${String(post.status || 'Disponível').toLowerCase().replace(/\s+/g, '-')}`}>{post.status || 'Disponível'}</span></section>
-    <section className="detail-summary"><div className="detail-kicker"><span>{post.category}</span><span>{post.condition}</span></div><h1>{post.title}</h1><p>{post.description}</p><div className="detail-info"><span><i className="material-symbols-outlined">swap_horiz</i>{post.goal}</span><span><i className="material-symbols-outlined">location_on</i>{post.location}</span><span><i className="material-symbols-outlined">schedule</i>{new Date(post.createdAt).toLocaleDateString('pt-BR')}</span></div><div className="detail-actions"><button className={post.saved ? 'secondary-btn saved-btn' : 'secondary-btn'} onClick={save}><span className="material-symbols-outlined">{post.saved ? 'bookmark' : 'bookmark_border'}</span>{post.saved ? 'Salvo' : 'Salvar'}</button><button className="secondary-btn" onClick={share}><span className="material-symbols-outlined">share</span>Compartilhar</button>{!ownPost ? <button className="primary-btn" disabled={post.status !== 'Disponível'} onClick={startConversation}><span className="material-symbols-outlined">handshake</span>Tenho interesse</button> : null}</div></section>
+    <section className="detail-summary"><div className="detail-kicker"><span>{post.category}</span><span>{post.condition}</span></div><h1>{post.title}</h1><p>{post.description}</p><div className="detail-info"><span><i className="material-symbols-outlined">swap_horiz</i>{post.goal}</span><span><i className="material-symbols-outlined">location_on</i>{post.location}</span><span><i className="material-symbols-outlined">schedule</i>{formatBrazilDate(post.createdAt)} às {formatBrazilTime(post.createdAt)}</span></div><div className="detail-actions"><button className={post.saved ? 'secondary-btn saved-btn' : 'secondary-btn'} onClick={save}><span className="material-symbols-outlined">{post.saved ? 'bookmark' : 'bookmark_border'}</span>{post.saved ? 'Salvo' : 'Salvar'}</button><button className="secondary-btn" onClick={share}><span className="material-symbols-outlined">share</span>Compartilhar</button>{!ownPost ? <button className="primary-btn" disabled={post.status !== 'Disponível'} onClick={startConversation}><span className="material-symbols-outlined">handshake</span>Tenho interesse</button> : null}</div></section>
     <section className="detail-owner"><div>{post.author.avatar ? <img src={post.author.avatar} alt={post.author.name} /> : <span className="avatar-placeholder material-symbols-outlined">person</span>}</div><div><span>Anunciante</span><h2>{post.author.name}</h2><p>{post.author.city} · {post.authorReputation ? `⭐ ${post.authorReputation.toFixed(1)} (${post.authorReviewCount})` : 'Novo na comunidade'}</p></div>{!ownPost ? <div className="owner-actions"><button className="text-btn" onClick={blockAuthor}>Bloquear</button><button className="text-btn" onClick={() => openReport('user', post.authorId)}>Denunciar</button></div> : null}</section>
     {ownPost ? <section className="owner-management"><div className="section-title"><div><span className="eyebrow">Gerenciar anúncio</span><h2>Negociação e status</h2></div><div><button className="text-btn" onClick={() => setEditing((value) => !value)}>Editar</button><button className="secondary-btn" onClick={loadInterested}>Interessados ({post.interestedCount || 0})</button><button className="text-btn danger-text" onClick={removeOwnedPost}>Excluir</button></div></div>{editing ? <form className="edit-post-form" onSubmit={saveEdit}><Field label="Título" icon="title" value={editForm.title || ''} onChange={(value) => setEditForm((current) => ({ ...current, title: value }))} /><Field label="Descrição" icon="description" multiline value={editForm.description || ''} onChange={(value) => setEditForm((current) => ({ ...current, description: value }))} /><Field label="Categoria" icon="category" value={editForm.category || ''} onChange={(value) => setEditForm((current) => ({ ...current, category: value }))} /><Field label="Localização aproximada" icon="location_on" value={editForm.location || ''} onChange={(value) => setEditForm((current) => ({ ...current, location: value }))} /><button className="primary-btn">Salvar edição</button></form> : null}<div className="status-controls"><button onClick={() => useAppStore.getState().updatePostStatus(post.id, 'Disponível').then(setPost).catch((error) => alert(error.message))}>Disponível</button><button onClick={() => useAppStore.getState().updatePostStatus(post.id, 'Encerrado').then(setPost).catch((error) => alert(error.message))}>Encerrar</button>{post.status === 'Reservado' ? <><button onClick={() => complete('Doado')}>Marcar doado</button><button onClick={() => complete('Trocado')}>Marcar trocado</button></> : null}</div>{interested.length ? <div className="interested-list">{interested.map((item) => <article key={item.id}><span className="avatar-placeholder material-symbols-outlined">person</span><div><strong>{item.user?.name || 'Usuário'}</strong><small>{item.user?.city} · {item.status}</small></div>{post.status === 'Disponível' || post.status === 'Reservado' ? <button className="secondary-btn" onClick={() => reserve(item.user.id)}>Reservar</button> : null}</article>)}</div> : null}</section> : null}
     {negotiation?.status === 'completed' && !reviewed ? <section className="review-form-card"><span className="eyebrow">Negociação concluída</span><h2>Como foi a experiência?</h2><form onSubmit={submitReview}><label>Nota<select value={reviewForm.rating} onChange={(event) => setReviewForm((current) => ({ ...current, rating: Number(event.target.value) }))}>{[5, 4, 3, 2, 1].map((rating) => <option key={rating} value={rating}>{'⭐'.repeat(rating)} ({rating})</option>)}</select></label><textarea value={reviewForm.comment} onChange={(event) => setReviewForm((current) => ({ ...current, comment: event.target.value }))} maxLength="500" placeholder="Comentário opcional" /><button className="primary-btn">Enviar avaliação</button></form></section> : null}

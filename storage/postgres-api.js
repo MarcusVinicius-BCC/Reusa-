@@ -214,7 +214,7 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
         title: row.other_user_name,
         avatar: row.other_user_avatar || '',
         subtitle: row.last_message_text || row.post_title,
-        time: new Date(row.last_message_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+        time: row.last_message_at,
         unreadCount: Number(row.unread_count || 0)
       })) });
     } catch (error) { return next(error); }
@@ -256,6 +256,12 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
   app.post('/api/notifications/:id/read', authenticate, async (req, res, next) => {
     try {
       await db.query('UPDATE notification_service_notifications SET read_at=now() WHERE id=$1 AND user_id=$2', [req.params.id, req.user.id]);
+      return res.json({ ok: true });
+    } catch (error) { return next(error); }
+  });
+  app.post('/api/notifications/read-thread/:threadId', authenticate, async (req, res, next) => {
+    try {
+      await db.query("UPDATE notification_service_notifications SET read_at=now() WHERE user_id=$1 AND type='message' AND link LIKE $2 AND read_at IS NULL", [req.user.id, `%thread=${req.params.threadId}`]);
       return res.json({ ok: true });
     } catch (error) { return next(error); }
   });

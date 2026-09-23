@@ -26,7 +26,7 @@ function notice(event) {
     'review.created': [data.revieweeId, 'review', 'Você recebeu uma avaliação', `${data.reviewerName || 'Uma pessoa'} avaliou uma negociação com você.`]
   };
   const value = mapping[event.type];
-  return value && { userId: value[0], type: value[1], title: value[2], text: value[3], link: data.link || `/anuncios/${data.postId || ''}` };
+  return value && { userId: value[0], type: value[1], title: value[2], text: value[3], link: data.link || (data.threadId ? `/mensagens/ana?thread=${encodeURIComponent(data.threadId)}` : `/anuncios/${data.postId || ''}`) };
 }
 
 function retry() {

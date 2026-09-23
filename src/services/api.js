@@ -73,6 +73,7 @@ export const api = {
   notifications: () => request('/notifications'),
   readNotifications: () => request('/notifications/read', { method: 'POST' }),
   readNotification: (id) => request(`/notifications/${id}/read`, { method: 'POST' }),
+  readThreadNotifications: (threadId) => request(`/notifications/read-thread/${encodeURIComponent(threadId)}`, { method: 'POST' }),
   createThread: (body) => request('/messages/threads', { method: 'POST', body: JSON.stringify(body) }),
   threads: () => request('/messages/threads'),
   thread: (id) => request(`/messages/threads/${id}`),

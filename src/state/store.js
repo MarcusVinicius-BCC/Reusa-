@@ -78,6 +78,10 @@ export const useAppStore = create((set, get) => ({
     set({ notifications: result.notifications || [] });
     return result.notifications || [];
   },
+  readThreadNotifications: async (threadId) => {
+    await api.readThreadNotifications(threadId);
+    await get().loadNotifications();
+  },
   loadCollectionPoints: async () => {
     const result = await api.collectionPoints();
     set({ collectionPoints: result.collectionPoints || [] });
