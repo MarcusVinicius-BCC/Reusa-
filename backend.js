@@ -21,6 +21,7 @@ const JWT_SECRET = process.env.JWT_SECRET || crypto.randomBytes(32).toString('he
 const GOOGLE_CLIENT_ID = String(process.env.GOOGLE_CLIENT_ID || '').trim();
 const GOOGLE_CLIENT_SECRET = String(process.env.GOOGLE_CLIENT_SECRET || '').trim();
 const GOOGLE_REDIRECT_URI = String(process.env.GOOGLE_REDIRECT_URI || '').trim();
+const ADMIN_EMAIL = String(process.env.ADMIN_EMAIL || '').trim().toLowerCase();
 const APP_BASE_URL = String(process.env.APP_BASE_URL || '').trim().replace(/\/$/, '');
 const NOTIFICATION_SERVICE_URL = String(process.env.NOTIFICATION_SERVICE_URL || '').trim().replace(/\/$/, '');
 const IMPACT_SERVICE_URL = String(process.env.IMPACT_SERVICE_URL || '').trim().replace(/\/$/, '');
@@ -261,9 +262,9 @@ async function userForGoogleProfile(profile) {
         } else {
           const userId = uid('user');
           user = (await client.query(
-            `INSERT INTO users (id, name, email, password_hash, city, neighborhood, cep, address, interests_json, avatar, achievements_json, created_at, last_active_at)
-             VALUES ($1, $2, $3, $4, $5, '', '', '', '[]', $6, '["Novo membro"]', now(), now()) RETURNING *`,
-            [userId, profile.name, profile.email, passwordHash(crypto.randomBytes(32).toString('hex')), 'Não informado', profile.avatar]
+            `INSERT INTO users (id, name, email, password_hash, city, neighborhood, cep, address, interests_json, avatar, achievements_json, role, created_at, last_active_at)
+             VALUES ($1, $2, $3, $4, $5, '', '', '', '[]', $6, '["Novo membro"]', $7, now(), now()) RETURNING *`,
+            [userId, profile.name, profile.email, passwordHash(crypto.randomBytes(32).toString('hex')), 'Não informado', profile.avatar, profile.email === ADMIN_EMAIL ? 'admin' : 'user']
           )).rows[0];
         }
         await client.query(
@@ -274,6 +275,9 @@ async function userForGoogleProfile(profile) {
 
       if (!user.avatar && profile.avatar) {
         user = (await client.query('UPDATE users SET avatar = $1 WHERE id = $2 RETURNING *', [profile.avatar, user.id])).rows[0];
+      }
+      if (ADMIN_EMAIL && String(user.email).toLowerCase() === ADMIN_EMAIL && user.role !== 'admin') {
+        user = (await client.query("UPDATE users SET role = 'admin' WHERE id = $1 RETURNING *", [user.id])).rows[0];
       }
       return user;
     });
@@ -899,7 +903,7 @@ function seedDatabase() {
   run(`UPDATE users SET avatar = '' WHERE id = 'user-ana'`);
   run('UPDATE users SET created_at = COALESCE(created_at, ?)', [new Date().toISOString()]);
 
-  const adminEmail = String(process.env.ADMIN_EMAIL || 'mariana@reusa.com').trim().toLowerCase();
+  const adminEmail = ADMIN_EMAIL || 'mariana@reusa.com';
   if (adminEmail) {
     run('UPDATE users SET role = ? WHERE lower(email) = lower(?)', ['admin', adminEmail]);
   }
@@ -1220,6 +1224,9 @@ async function start() {
       await applyMigrations(migrationClient);
     } finally {
       migrationClient.release();
+    }
+    if (ADMIN_EMAIL) {
+      await postgres.query("UPDATE users SET role = 'admin' WHERE lower(email) = lower($1)", [ADMIN_EMAIL]);
     }
     console.log('[database] PostgreSQL is the only runtime source of truth');
   } else {
