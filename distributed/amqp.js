@@ -1,11 +1,13 @@
 const amqp = require('amqplib');
 
-const AMQP_CONNECTION_OPTIONS = {
-  frameMax: 131072
-};
+const AMQP_FRAME_MAX = 131072;
 
 function connectAmqp(url) {
-  return amqp.connect(url, AMQP_CONNECTION_OPTIONS);
+  const separator = String(url).includes('?') ? '&' : '?';
+  const connectionUrl = String(url).includes('frameMax=')
+    ? String(url)
+    : `${url}${separator}frameMax=${AMQP_FRAME_MAX}`;
+  return amqp.connect(connectionUrl);
 }
 
 module.exports = { connectAmqp };
