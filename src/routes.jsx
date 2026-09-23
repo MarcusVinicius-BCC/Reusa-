@@ -127,6 +127,8 @@ function Shell({ children, nav, active }) {
 }
 
 function BottomNav({ nav, active }) {
+  const notifications = useAppStore((state) => state.notifications);
+  const unreadNotifications = notifications.filter((item) => !item.readAt).length;
   return (
     <nav className="bottom-nav" aria-label="Navegação principal">
       {[
@@ -147,7 +149,7 @@ function BottomNav({ nav, active }) {
             aria-current={isActive ? 'page' : undefined}
             aria-label={label}
           >
-            <span className="material-symbols-outlined">{icon}</span>
+            <span className="nav-icon-wrap"><span className="material-symbols-outlined">{icon}</span>{key === 'mensagens' && unreadNotifications ? <b className="nav-badge">{unreadNotifications}</b> : null}</span>
             <span>{label}</span>
           </a>
         );
@@ -376,6 +378,7 @@ function FeedScreen({ onNavigate }) {
   const search = useAppStore((state) => state.search);
   const setSearch = useAppStore((state) => state.setSearch);
   const loadFeed = useAppStore((state) => state.loadFeed);
+  const loadNotifications = useAppStore((state) => state.loadNotifications);
   const [category, setCategory] = useState('Todos');
   const [categoriesOpen, setCategoriesOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -391,7 +394,10 @@ function FeedScreen({ onNavigate }) {
 
   useEffect(() => {
     loadFeed().catch(() => {});
-  }, [loadFeed]);
+    loadNotifications().catch(() => {});
+    const timer = window.setInterval(() => loadNotifications().catch(() => {}), 15000);
+    return () => window.clearInterval(timer);
+  }, [loadFeed, loadNotifications]);
 
   useEffect(() => {
     let previousScroll = window.scrollY;
@@ -429,10 +435,11 @@ function FeedScreen({ onNavigate }) {
 
 function NotificationsScreen({ onBack, onNavigate }) {
   const [notifications, setNotifications] = useState([]);
-  useEffect(() => { api.notifications().then((result) => setNotifications(result.notifications || [])).catch(() => {}); }, []);
+  const loadNotifications = useAppStore((state) => state.loadNotifications);
+  useEffect(() => { loadNotifications().then((items) => setNotifications(items)).catch(() => {}); }, [loadNotifications]);
   const iconFor = (type) => ({ message: 'chat', comment: 'chat_bubble', like: 'favorite', interest: 'handshake', negotiation: 'swap_horiz', review: 'star', system: 'notifications' }[type] || 'notifications');
   async function openNotification(notification) {
-    try { await api.readNotification(notification.id); setNotifications((items) => items.map((item) => item.id === notification.id ? { ...item, readAt: new Date().toISOString() } : item)); } catch {}
+    try { await api.readNotification(notification.id); setNotifications((items) => items.map((item) => item.id === notification.id ? { ...item, readAt: new Date().toISOString() } : item)); await loadNotifications(); } catch {}
     onNavigate(notification.link || '/feed');
   }
   return <Shell nav={navRoutes} active="/notificacoes"><header className="topbar compact-topbar"><button className="back-btn" onClick={onBack}><span className="material-symbols-outlined">arrow_back_ios_new</span></button><h1>Notificações</h1></header><main className="page padded-top"><div className="notification-list">{notifications.length ? notifications.map((notification) => <button className={notification.readAt ? 'notification-item' : 'notification-item notification-unread'} key={notification.id} onClick={() => openNotification(notification)}><span className="notification-icon material-symbols-outlined">{iconFor(notification.type)}</span><span><strong>{notification.title}</strong><p>{notification.text}</p><small>{new Date(notification.createdAt).toLocaleString('pt-BR')}</small></span></button>) : <EmptyState icon="notifications_none" title="Nenhuma notificação nova" text="Quando algo acontecer na sua comunidade, avisaremos por aqui." />}</div></main></Shell>;
@@ -608,7 +615,7 @@ function FeedCard({ post, onOpenChat }) {
       </div>
       <div className="post-actions">
         <div className="post-stats"><button className={liked ? 'ghost-inline liked' : 'ghost-inline'} onClick={like}><span key={heartAnimationKey} className={liked ? 'material-symbols-outlined like-icon liked-heart' : 'material-symbols-outlined like-icon'}>{liked ? 'favorite' : 'favorite_border'}</span>{likes}</button><button className="ghost-inline" onClick={toggleComments}><span className="material-symbols-outlined">chat_bubble</span>{commentCount}</button></div>
-        <button className="primary-btn compact" onClick={onOpenChat}><span className="material-symbols-outlined">handshake</span>{post.goal === 'Troca' ? 'Fazer oferta' : 'Tenho interesse'}</button>
+        {post.authorId !== session?.id ? <button className="primary-btn compact" onClick={onOpenChat}><span className="material-symbols-outlined">handshake</span>{post.goal === 'Troca' ? 'Fazer oferta' : 'Tenho interesse'}</button> : <span className="post-owner-label">Seu anúncio</span>}
       </div>
       {commentsOpen ? <section className="comments-panel"><div className="comments-list">{comments.length ? comments.map((comment) => <div className="comment" key={comment.id}><img src={comment.avatar} alt="" /><div><strong>{comment.name}</strong><p>{comment.text}</p></div></div>) : commentCount === 0 ? <p className="comments-empty">Ainda não há comentários. Seja o primeiro.</p> : null}</div><form className="comment-form" onSubmit={addComment}><input value={commentText} maxLength="500" onChange={(event) => setCommentText(event.target.value)} placeholder="Escreva um comentário..." /><button className="send-btn" disabled={commentBusy} aria-label="Publicar comentário"><span className="material-symbols-outlined">send</span></button></form></section> : null}
     </article>

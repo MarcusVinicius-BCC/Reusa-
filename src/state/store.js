@@ -11,6 +11,7 @@ export const useAppStore = create((set, get) => ({
   session: null,
   posts: fallbackPosts,
   threads: [],
+  notifications: [],
   collectionPoints: [],
   favorites: [],
   profile: null,
@@ -71,6 +72,11 @@ export const useAppStore = create((set, get) => ({
   loadThreads: async () => {
     const result = await api.threads();
     set({ threads: result.threads || [] });
+  },
+  loadNotifications: async () => {
+    const result = await api.notifications();
+    set({ notifications: result.notifications || [] });
+    return result.notifications || [];
   },
   loadCollectionPoints: async () => {
     const result = await api.collectionPoints();
@@ -153,6 +159,7 @@ export const useAppStore = create((set, get) => ({
   },
   sendMessage: async (threadId, payload) => {
     const result = await api.sendMessage(threadId, payload);
+    get().loadThreads().catch(() => {});
     return result.message;
   },
   setSearch: (value) => set({ search: value }),

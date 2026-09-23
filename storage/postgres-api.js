@@ -184,7 +184,7 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       if (!post) return res.status(404).json({ error: 'Post not found' });
       if (post.author_id === req.user.id) return res.status(400).json({ error: 'You cannot contact yourself' });
       const participants = JSON.stringify([req.user.id, post.author_id]);
-      const existing = await db.one('SELECT * FROM threads WHERE post_id=$1 AND participants_json=$2', [post.id, participants]);
+      const existing = await db.one('SELECT * FROM threads WHERE post_id=$1 AND participants_json::jsonb @> $2::jsonb AND participants_json::jsonb <@ $2::jsonb', [post.id, participants]);
       if (existing) return res.json({ thread: existing });
       const thread = { id: id('thread'), post_id: post.id, participants_json: participants, last_message_at: new Date().toISOString() };
       await db.transaction(async (client) => {
@@ -198,8 +198,25 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
   });
   app.get('/api/messages/threads', authenticate, async (req, res, next) => {
     try {
-      const rows = await db.many('SELECT * FROM threads WHERE participants_json::jsonb @> $1::jsonb ORDER BY last_message_at DESC', [JSON.stringify([req.user.id])]);
-      return res.json({ threads: rows });
+      const rows = await db.many(`SELECT t.id,t.post_id,t.last_message_at,t.unread_count,
+        p.title AS post_title, u.id AS other_user_id,u.name AS other_user_name,u.avatar AS other_user_avatar,
+        last_message.text AS last_message_text
+        FROM threads t
+        JOIN posts p ON p.id=t.post_id
+        JOIN LATERAL jsonb_array_elements_text(t.participants_json::jsonb) participant ON true
+        JOIN users u ON u.id=participant AND u.id <> $1
+        LEFT JOIN LATERAL (SELECT text FROM messages WHERE thread_id=t.id ORDER BY sent_at DESC LIMIT 1) last_message ON true
+        WHERE t.participants_json::jsonb @> $2::jsonb
+        ORDER BY t.last_message_at DESC`, [req.user.id, JSON.stringify([req.user.id])]);
+      return res.json({ threads: rows.map((row) => ({
+        id: row.id,
+        postId: row.post_id,
+        title: row.other_user_name,
+        avatar: row.other_user_avatar || '',
+        subtitle: row.last_message_text || row.post_title,
+        time: new Date(row.last_message_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }),
+        unreadCount: Number(row.unread_count || 0)
+      })) });
     } catch (error) { return next(error); }
   });
   app.get('/api/messages/threads/:id', authenticate, async (req, res, next) => {
@@ -207,7 +224,10 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       const thread = await db.one('SELECT * FROM threads WHERE id=$1 AND participants_json::jsonb @> $2::jsonb', [req.params.id, JSON.stringify([req.user.id])]);
       if (!thread) return res.status(404).json({ error: 'Thread not found' });
       const messages = await db.many('SELECT * FROM messages WHERE thread_id=$1 ORDER BY sent_at ASC', [thread.id]);
-      return res.json({ thread, participants: json(thread.participants_json), messages });
+      await db.query('UPDATE threads SET unread_count=0 WHERE id=$1', [thread.id]);
+      const otherUserId = json(thread.participants_json).find((item) => item !== req.user.id);
+      const otherUser = otherUserId ? await db.one('SELECT id,name,avatar FROM users WHERE id=$1', [otherUserId]) : null;
+      return res.json({ thread: { ...thread, title: otherUser?.name || 'Conversa', avatar: otherUser?.avatar || '' }, participants: json(thread.participants_json), messages });
     } catch (error) { return next(error); }
   });
   app.post('/api/messages/threads/:id/messages', authenticate, async (req, res, next) => {
@@ -220,11 +240,23 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       const recipientId = json(thread.participants_json).find((item) => item !== req.user.id);
       await db.transaction(async (client) => {
         await client.query('INSERT INTO messages(id,thread_id,sender_id,text,sent_at,status) VALUES($1,$2,$3,$4,$5,$6)', Object.values(message));
-        await client.query('UPDATE threads SET last_message_at=$1 WHERE id=$2', [message.sent_at, thread.id]);
+        await client.query('UPDATE threads SET last_message_at=$1,unread_count=unread_count+1 WHERE id=$2', [message.sent_at, thread.id]);
         if (recipientId) await emit(client, 'message.sent', { messageId: message.id, threadId: thread.id, postId: thread.post_id, senderId: req.user.id, senderName: req.user.name, recipientId }, req.correlationId);
       });
       queueMicrotask(() => publisher?.flush?.());
       return res.status(201).json({ message });
+    } catch (error) { return next(error); }
+  });
+  app.get('/api/notifications', authenticate, async (req, res, next) => {
+    try {
+      const rows = await db.many('SELECT id,type,title,text,link,created_at AS "createdAt",read_at AS "readAt" FROM notification_service_notifications WHERE user_id=$1 ORDER BY created_at DESC LIMIT 100', [req.user.id]);
+      return res.json({ notifications: rows });
+    } catch (error) { return next(error); }
+  });
+  app.post('/api/notifications/:id/read', authenticate, async (req, res, next) => {
+    try {
+      await db.query('UPDATE notification_service_notifications SET read_at=now() WHERE id=$1 AND user_id=$2', [req.params.id, req.user.id]);
+      return res.json({ ok: true });
     } catch (error) { return next(error); }
   });
   app.get('/api/posts/:id/comments', async (req, res, next) => {

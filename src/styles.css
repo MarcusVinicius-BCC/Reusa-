@@ -236,6 +236,8 @@ img { display: block; max-width: 100%; }
 .comment-form .send-btn { width: 42px; height: 42px; flex: 0 0 auto; }
 
 .bottom-nav { position: fixed; left: 0; right: 0; bottom: 0; height: 84px; padding: 8px 12px calc(env(safe-area-inset-bottom, 0px) + 8px); display: flex; align-items: flex-end; justify-content: space-between; background: rgba(248,249,255,0.9); backdrop-filter: blur(20px); border-top: 1px solid rgba(222,233,252,0.9); z-index: 40; }
+ .nav-icon-wrap { position: relative; display: inline-flex; }
+ .nav-badge { position: absolute; top: -7px; right: -10px; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 999px; display: grid; place-items: center; background: #c62828; color: #fff; font-size: 10px; line-height: 1; }
 .nav-item { flex: 1; min-width: 0; background: transparent; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 2px; color: var(--text-variant); }
 .nav-active { color: var(--primary); }
 .nav-add { width: 60px; height: 60px; border-radius: 999px; background: var(--primary-container); color: #083; display: grid; place-items: center; margin-top: -24px; box-shadow: var(--shadow-strong); }
