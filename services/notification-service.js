@@ -1,6 +1,6 @@
 const path = require('path');
 const express = require('express');
-const amqp = require('amqplib');
+const { connectAmqp } = require('../distributed/amqp');
 const { NotificationStore, usePostgres } = require('./persistence');
 
 const PORT = +process.env.PORT || 3001;
@@ -47,7 +47,7 @@ function retry() {
 }
 
 async function consume() {
-  const connection = await amqp.connect(URL);
+  const connection = await connectAmqp(URL);
   connection.on('error', () => {});
   connection.on('close', () => { connected = false; setTimeout(retry, 0); });
   const channel = await connection.createChannel();

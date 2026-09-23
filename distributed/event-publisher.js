@@ -1,4 +1,4 @@
-const amqp = require('amqplib');
+const { connectAmqp } = require('./amqp');
 
 /**
  * Publishes records saved by the transactional outbox.  The application never
@@ -26,7 +26,7 @@ class EventPublisher {
 
     this.connecting = (async () => {
       try {
-        this.connection = await amqp.connect(this.url);
+        this.connection = await connectAmqp(this.url);
         this.connection.on('error', () => this.reset());
         this.connection.on('close', () => this.reset());
         this.channel = await this.connection.createConfirmChannel();
