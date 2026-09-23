@@ -142,7 +142,7 @@ function Shell({ children, nav, active }) {
 
 function BottomNav({ nav, active }) {
   const notifications = useAppStore((state) => state.notifications);
-  const unreadNotifications = notifications.filter((item) => !item.readAt).length;
+  const unreadMessages = notifications.filter((item) => item.type === 'message' && !item.readAt).length;
   return (
     <nav className="bottom-nav" aria-label="Navegação principal">
       {[
@@ -163,7 +163,7 @@ function BottomNav({ nav, active }) {
             aria-current={isActive ? 'page' : undefined}
             aria-label={label}
           >
-            <span className="nav-icon-wrap"><span className="material-symbols-outlined">{icon}</span>{key === 'mensagens' && unreadNotifications ? <b className="nav-badge">{unreadNotifications}</b> : null}</span>
+            <span className="nav-icon-wrap"><span className="material-symbols-outlined">{icon}</span>{key === 'mensagens' && unreadMessages ? <b className="nav-badge">{unreadMessages}</b> : null}</span>
             <span>{label}</span>
           </a>
         );
