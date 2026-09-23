@@ -657,7 +657,7 @@ function MessagesScreen({ onOpenThread }) {
         <div className="thread-list">
           {(visibleThreads.length ? visibleThreads : threads.length ? [] : [{ title: 'Ana Costa', subtitle: 'Olá! Tenho interesse nesse aparelho...', time: '14:20', unreadCount: 2 }]).map((thread) => (
             <button key={thread.id || thread.title} className="thread-card" onClick={() => onOpenThread(thread.id)}>
-              <div className="thread-avatar" aria-label={`Perfil de ${thread.title || 'usuário'}`}><span className="material-symbols-outlined">person</span></div>
+              <div className="thread-avatar" aria-label={`Perfil de ${thread.title || 'usuário'}`}>{thread.avatar ? <img src={thread.avatar} alt="" /> : <span className="material-symbols-outlined">person</span>}</div>
               <div className="thread-content">
                 <div><strong>{thread.title}</strong><span>{formatBrazilTime(thread.time)}</span></div>
                 <p>{thread.subtitle}</p>
@@ -720,7 +720,7 @@ function ChatScreen({ onBack }) {
   return (
     <div className="chat-screen">
       <header className="topbar compact-topbar chat-topbar"><button className="back-btn" onClick={onBack} aria-label="Voltar para mensagens"><span className="material-symbols-outlined">arrow_back_ios_new</span></button><h1>Conversa Direta</h1></header>
-      <div className="chat-banner"><span className="chat-person-avatar material-symbols-outlined" aria-label={`Perfil de ${thread?.title || 'Ana Costa'}`}>person</span><div><strong>{thread?.title || 'Ana Costa'}</strong><span>Negocie com segurança e combine a retirada</span></div></div>
+      <div className="chat-banner">{thread?.avatar ? <img className="chat-person-avatar" src={thread.avatar} alt="" /> : <span className="chat-person-avatar material-symbols-outlined" aria-label={`Perfil de ${thread?.title || 'Ana Costa'}`}>person</span>}<div><strong>{thread?.title || 'Ana Costa'}</strong><span>Negocie com segurança e combine a retirada</span></div></div>
       <main className="chat-body">{messages.map((message) => { const mine = message.sender_id === session?.id; return <div key={message.id} className={mine ? 'bubble mine' : 'bubble'}><p>{message.text}</p><span>{formatBrazilTime(message.sent_at)}</span></div>; })}</main>
       <footer className="chat-compose"><textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="Digite sua mensagem..." rows={1} /><button className="send-btn" onClick={send}><span className="material-symbols-outlined">send</span></button></footer>
     </div>
