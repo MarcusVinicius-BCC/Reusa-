@@ -2066,5 +2066,6 @@ body { background: var(--app-night-deep); }
 }
 .header-profile-btn { overflow: hidden; border: 1px solid rgba(184, 240, 205, .32); background: rgba(255,255,255,.08); }
 .header-profile-btn img { width: 34px; height: 34px; border-radius: 50%; object-fit: cover; }
+.login-card .google-auth-icon-only { display: flex; justify-content: center; }
 .landing-account-actions .landing-login, .landing-account-actions .landing-start { border-color: #b8f0cd; background: #b8f0cd; color: #073a25; }
 .landing-account-actions .landing-login:hover, .landing-account-actions .landing-login:focus-visible, .landing-account-actions .landing-start:hover, .landing-account-actions .landing-start:focus-visible { border-color: #e2ffec; background: #e2ffec; color: #052d1c; }
