@@ -172,6 +172,19 @@ function BottomNav({ nav, active }) {
   );
 }
 
+function UnifiedTopbar({ title, onBack, action }) {
+  return <header className="topbar unified-topbar">
+    <a className="brand unified-brand" href="/feed" aria-label="ReUsa+, início"><img src={feedLogo} alt="" /><span>ReUsa+</span></a>
+    {title ? <h1>{title}</h1> : <span aria-hidden="true" />}
+    <div className="unified-topbar-action">{action || (onBack ? <button className="back-btn" onClick={onBack} aria-label="Voltar"><span className="material-symbols-outlined">arrow_back</span></button> : <HeaderProfileButton />)}</div>
+  </header>;
+}
+
+function HeaderProfileButton() {
+  const session = useAppStore((state) => state.session);
+  return <a className="avatar-btn header-profile-btn" href="/perfil" aria-label="Abrir perfil">{session?.avatar ? <img src={session.avatar} alt="" /> : <span className="material-symbols-outlined">person</span>}</a>;
+}
+
 function LandingScreen({ onCreateAccount, onLogin, onExplore, onAbout }) {
   const [featuredPosts, setFeaturedPosts] = useState([]);
   const [postsLoading, setPostsLoading] = useState(true);
@@ -297,6 +310,7 @@ function LoginScreen({ onGoToRegister, onSuccess }) {
 
   return (
     <div className="auth-layout login-layout">
+      <UnifiedTopbar action={<a className="avatar-btn" href="/login" aria-label="Área de login"><span className="material-symbols-outlined">person</span></a>} />
       <div className="login-orb login-orb-one" /><div className="login-orb login-orb-two" />
       <div className="auth-card login-card">
         <div className="auth-logo"><img src={feedLogo} alt="REUSA+" /></div>
@@ -393,6 +407,7 @@ function FeedScreen({ onNavigate }) {
   const setSearch = useAppStore((state) => state.setSearch);
   const loadFeed = useAppStore((state) => state.loadFeed);
   const loadNotifications = useAppStore((state) => state.loadNotifications);
+  const session = useAppStore((state) => state.session);
   const [category, setCategory] = useState('Todos');
   const [categoriesOpen, setCategoriesOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -433,9 +448,9 @@ function FeedScreen({ onNavigate }) {
   return (
     <Shell nav={navRoutes} active="/feed" className="feed-shell">
       <header className={headerHidden ? 'topbar feed-topbar feed-topbar-hidden' : 'topbar feed-topbar'}>
-        <div className="brand"><img className="feed-logo" src={feedLogo} alt="REUSA+" /><span>REUSA+</span></div>
+        <div className="brand"><img className="feed-logo" src={feedLogo} alt="ReUsa+" /><span>ReUsa+</span></div>
         {searchOpen ? <label className="searchbar feed-search-expanded"><span className="material-symbols-outlined">search</span><input value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') setSearchOpen(false); }} placeholder="Buscar anúncios" autoFocus /><button type="button" className={categoriesOpen ? 'category-trigger category-trigger-active' : 'category-trigger'} onClick={toggleCategories} aria-expanded={categoriesOpen} aria-label="Escolher categoria"><span className="material-symbols-outlined">category</span></button><button type="button" className="feed-search-close" onClick={() => setSearchOpen(false)} aria-label="Fechar busca"><span className="material-symbols-outlined">close</span></button></label> : <div className="feed-search-tools"><button type="button" className="icon-btn feed-search-trigger" onClick={() => setSearchOpen(true)} aria-label="Abrir busca"><span className="material-symbols-outlined">search</span></button><button type="button" className={categoriesOpen ? 'category-trigger category-trigger-active' : 'category-trigger'} onClick={toggleCategories} aria-expanded={categoriesOpen} aria-label="Escolher categoria"><span className="material-symbols-outlined">category</span></button></div>}
-        <div className="topbar-actions"><button className="avatar-btn" onClick={() => onNavigate('/perfil')} aria-label="Abrir perfil"><span className="material-symbols-outlined">person</span></button></div>
+        <div className="topbar-actions"><button className="avatar-btn header-profile-btn" onClick={() => onNavigate('/perfil')} aria-label="Abrir perfil">{session?.avatar ? <img src={session.avatar} alt="" /> : <span className="material-symbols-outlined">person</span>}</button></div>
       </header>
       <div className="feed-category-popover">{categoriesOpen ? <CategoryBar selected={category} onChange={(value) => { setCategory(value); setCategoriesOpen(false); }} /> : null}</div>
       <main className="feed-page">
@@ -470,7 +485,7 @@ function InspirationsScreen({ onNavigate }) {
   const visibleProducts = products.filter((product) => `${product.title} ${product.material} ${product.creator}`.toLowerCase().includes(search.toLowerCase()));
   return (
     <Shell nav={navRoutes} active="/inspiracoes">
-      <header className="topbar compact-topbar"><button className="back-btn" onClick={() => onNavigate('/feed')}><span className="material-symbols-outlined">arrow_back_ios_new</span></button><h1>Inspirações</h1><button className="icon-btn" onClick={() => onNavigate('/ana-ia')}><span className="material-symbols-outlined">auto_awesome</span></button></header>
+      <UnifiedTopbar title="Inspirações" onBack={() => onNavigate('/feed')} action={<button className="icon-btn" onClick={() => onNavigate('/ana-ia')} aria-label="Abrir Ana IA"><span className="material-symbols-outlined">auto_awesome</span></button>} />
       <main className="page inspiration-page"><div className="inspiration-intro"><span className="eyebrow">Vitrine circular</span><h2>Produtos com uma segunda vida</h2><p>Descubra criações da comunidade e apoie quem transforma descarte em design.</p><button className="primary-btn" onClick={() => onNavigate('/nova-inspiracao')}><span className="material-symbols-outlined">add</span>Anunciar minha criação</button></div><label className="search-shell"><span className="material-symbols-outlined">search</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar por material ou criador" /></label><div className="product-grid">{visibleProducts.map((product) => <article className="product-card" key={product.id}><img src={product.imageUrl} alt={product.title} /><div className="product-card-body"><span className="product-material">{product.material}</span><h3>{product.title}</h3><p>{product.description}</p><div className="product-meta"><strong>{product.price}</strong><span>{product.creator} · {product.city}</span></div><button className="ghost-btn product-contact" onClick={() => onNavigate('/mensagens')}>Conhecer criador</button></div></article>)}</div></main>
     </Shell>
   );
@@ -625,8 +640,8 @@ function FeedCard({ post, onOpenChat }) {
       <div className="post-body">
         <h3><a className="post-title-link" href={`/anuncios/${post.id}`}>{post.title}</a></h3>
         <p>{post.description}</p>
-        <div className="tag-row"><span>{post.category}</span><span>{post.condition}</span><span className={`status-tag status-${String(post.status || 'Disponível').toLowerCase().replace(/\s+/g, '-')}`}>{post.status || 'Disponível'}</span></div>
       </div>
+      <div className="tag-row feed-post-tags"><span>{post.category}</span><span>{post.condition}</span><span className={`status-tag status-${String(post.status || 'Disponível').toLowerCase().replace(/\s+/g, '-')}`}>{post.status || 'Disponível'}</span></div>
       <div className="post-actions">
         <div className="post-stats"><button className={liked ? 'ghost-inline liked' : 'ghost-inline'} onClick={like}><span key={heartAnimationKey} className={liked ? 'material-symbols-outlined like-icon liked-heart' : 'material-symbols-outlined like-icon'}>{liked ? 'favorite' : 'favorite_border'}</span>{likes}</button><button className="ghost-inline" onClick={toggleComments}><span className="material-symbols-outlined">chat_bubble</span>{commentCount}</button></div>
         {post.authorId !== session?.id ? <button className="primary-btn compact" onClick={onOpenChat}><span className="material-symbols-outlined">handshake</span>{post.goal === 'Troca' ? 'Fazer oferta' : 'Tenho interesse'}</button> : <span className="post-owner-label">Seu anúncio</span>}
@@ -650,7 +665,7 @@ function MessagesScreen({ onOpenThread }) {
   const visibleThreads = threads.filter((thread) => `${thread.title} ${thread.subtitle}`.toLowerCase().includes(search.toLowerCase()));
   return (
     <Shell nav={navRoutes} active="/mensagens">
-      <header className="topbar compact-topbar messages-topbar"><h1>Mensagens</h1></header>
+      <UnifiedTopbar />
       <main className="page messages-page">
         <section className="messages-intro"><span className="eyebrow">Sua caixa de entrada</span></section>
         <label className="search-shell messages-search"><span className="material-symbols-outlined">search</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Pesquisar por pessoa ou mensagem..." /></label>
@@ -783,7 +798,7 @@ function CreatePostScreen({ onBack, onSuccess }) {
 
   return (
     <div className="post-screen publish-screen">
-      <header className="topbar compact-topbar publish-topbar"><button className="back-btn" onClick={onBack} aria-label="Voltar"><span className="material-symbols-outlined">arrow_back_ios_new</span></button><h1>Novo anúncio</h1><span className="publish-progress">1 de 1</span></header>
+      <UnifiedTopbar />
       <main className="page publish-page">
         <section className="publish-hero">
           <span className="publish-hero-icon material-symbols-outlined">volunteer_activism</span>
@@ -1036,6 +1051,7 @@ function ProfileScreen({ onGoToFeed, onSettings, onSaved, onMyPosts, onAdmin }) 
 
   return (
     <Shell nav={navRoutes} active="/perfil">
+      <UnifiedTopbar />
       <main className="page profile-page">
         <section className="profile-hero">
           <button className="avatar-wrap avatar-upload-button" type="button" onClick={() => avatarInput.current?.click()} aria-label="Alterar foto de perfil" title="Alterar foto de perfil" disabled={avatarBusy}>{user.avatar ? <img src={user.avatar} alt={user.name} /> : <span className="avatar-placeholder material-symbols-outlined" aria-label={`Perfil de ${user.name}`}>person</span>}<span className="avatar-upload-icon material-symbols-outlined">{avatarBusy ? 'progress_activity' : 'photo_camera'}</span><span className="verified material-symbols-outlined">verified</span></button>
@@ -1138,6 +1154,7 @@ function MapScreen({ onSuggest }) {
 
   return (
     <Shell nav={navRoutes} active="/mapa">
+      <UnifiedTopbar />
       <main className="map-page">
         <MapContainer center={mapCenter} zoom={12} scrollWheelZoom className="live-map">
           <TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
@@ -1248,6 +1265,7 @@ function SettingsScreen({ onBack, onLogout }) {
 
   return (
     <Shell nav={navRoutes} active="/configuracoes">
+      <UnifiedTopbar onBack={onBack} />
       <main className="page settings-page">
         <header className="settings-heading">
           <button className="back-link settings-back" onClick={onBack} aria-label="Voltar ao perfil"><span className="material-symbols-outlined">arrow_back</span></button>
