@@ -72,7 +72,7 @@ app.use((_req, res, next) => {
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
   res.setHeader('Permissions-Policy', 'geolocation=(self)');
-  res.setHeader('Content-Security-Policy', "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self' https://maps.googleapis.com; worker-src 'self' blob:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https://viacep.com.br https://nominatim.openstreetmap.org https://maps.googleapis.com https://*.googleapis.com");
+  res.setHeader('Content-Security-Policy', "default-src 'self'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'; object-src 'none'; script-src 'self'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; img-src 'self' data: blob: https:; connect-src 'self' https://viacep.com.br https://nominatim.openstreetmap.org");
   next();
 });
 
@@ -1341,13 +1341,6 @@ async function start() {
   });
 
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
-
-  // A chave do Maps é pública no navegador por definição; sua proteção vem das
-  // restrições de domínio e API configuradas no Google Cloud.
-  app.get('/api/public-config', (_req, res) => {
-    res.setHeader('Cache-Control', 'no-store');
-    return res.json({ googleMapsApiKey: process.env.GOOGLE_MAPS_API_KEY || process.env.VITE_GOOGLE_MAPS_API_KEY || '' });
-  });
 
   app.get('/metrics', (req, res) => {
     if (SERVICE_AUTH_TOKEN && req.get('authorization') !== `Bearer ${SERVICE_AUTH_TOKEN}`) {
