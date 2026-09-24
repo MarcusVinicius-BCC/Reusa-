@@ -172,9 +172,9 @@ function BottomNav({ nav, active }) {
   );
 }
 
-function UnifiedTopbar({ title, onBack, action }) {
+function UnifiedTopbar({ title, onBack, action, brandHref = '/feed' }) {
   return <header className="topbar unified-topbar">
-    <a className="brand unified-brand" href="/feed" aria-label="ReUsa+, início"><img src={feedLogo} alt="" /><span>ReUsa+</span></a>
+    <a className="brand unified-brand" href={brandHref} aria-label="ReUsa+, início"><img src={feedLogo} alt="" /><span>ReUsa+</span></a>
     {title ? <h1>{title}</h1> : <span aria-hidden="true" />}
     <div className="unified-topbar-action">{action || (onBack ? <button className="back-btn" onClick={onBack} aria-label="Voltar"><span className="material-symbols-outlined">arrow_back</span></button> : <HeaderProfileButton />)}</div>
   </header>;
@@ -310,7 +310,7 @@ function LoginScreen({ onGoToRegister, onSuccess }) {
 
   return (
     <div className="auth-layout login-layout">
-      <UnifiedTopbar action={<a className="avatar-btn" href="/login" aria-label="Área de login"><span className="material-symbols-outlined">person</span></a>} />
+      <UnifiedTopbar brandHref="/splash" action={<a className="avatar-btn" href="/login" aria-label="Área de login"><span className="material-symbols-outlined">person</span></a>} />
       <div className="login-orb login-orb-one" /><div className="login-orb login-orb-two" />
       <div className="auth-card login-card">
         <div className="auth-logo"><img src={feedLogo} alt="REUSA+" /></div>
@@ -321,7 +321,7 @@ function LoginScreen({ onGoToRegister, onSuccess }) {
           <Field label="Senha" icon="lock" type="password" value={formState.password} onChange={(value) => setFormState((prev) => ({ ...prev, password: value }))} placeholder="••••••••" />
           <button type="submit" className="primary-btn full">Entrar <span className="material-symbols-outlined">arrow_forward</span></button>
         </form>
-        <GoogleSignInButton />
+        <GoogleSignInButton iconOnly />
         <div className="auth-footer">Não tem uma conta? <button className="text-btn" onClick={onGoToRegister}>Cadastre-se</button></div>
       </div>
     </div>
@@ -364,11 +364,11 @@ function RegisterScreen({ onGoToLogin, onSuccess }) {
 
   return (
     <div className="auth-layout register-layout">
+      <UnifiedTopbar brandHref="/splash" action={<a className="avatar-btn" href="/login" aria-label="Entrar"><span className="material-symbols-outlined">person</span></a>} />
       <div className="register-orb register-orb-one" /><div className="register-orb register-orb-two" />
       <div className="auth-card large register-card">
         <header className="register-header">
           <div className="register-brand" aria-label="ReUsa+"><img src={feedLogo} alt="ReUsa+" /></div>
-          <span className="register-step"><i /> Novo por aqui</span>
           <h2>Faça o descarte<br /><em>virar recomeço.</em></h2>
           <p>Uma comunidade local para doar, trocar e reutilizar com propósito.</p>
         </header>
