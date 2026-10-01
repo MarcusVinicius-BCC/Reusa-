@@ -960,7 +960,7 @@ function seedDatabase() {
 
   seedUsers.forEach((user) => {
     run(
-      `INSERT INTO users (id, name, email, password_hash, city, cep, address, interests_json, avatar, rating, donations, received, carbon_saved_percent, achievements_json)
+      `INSERT OR IGNORE INTO users (id, name, email, password_hash, city, cep, address, interests_json, avatar, rating, donations, received, carbon_saved_percent, achievements_json)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         user.id,
@@ -1018,7 +1018,7 @@ function seedDatabase() {
 
   seedPosts.forEach((post) => {
     run(
-      `INSERT INTO posts (id, author_id, title, description, category, condition, goal, image_url, likes, comments, location, created_at, chip_icon, chip_label)
+      `INSERT OR IGNORE INTO posts (id, author_id, title, description, category, condition, goal, image_url, likes, comments, location, created_at, chip_icon, chip_label)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [
         post.id,
@@ -1067,14 +1067,14 @@ function seedDatabase() {
 
   seedThreads.forEach((thread) => {
     run(
-      `INSERT INTO threads (id, post_id, participants_json, unread_count, last_message_at)
+      `INSERT OR IGNORE INTO threads (id, post_id, participants_json, unread_count, last_message_at)
        VALUES (?, ?, ?, ?, ?)`,
       [thread.id, thread.postId, JSON.stringify(thread.participants), thread.unreadCount, thread.lastMessageAt]
     );
 
     thread.messages.forEach((message) => {
       run(
-        `INSERT INTO messages (id, thread_id, sender_id, text, sent_at, status)
+        `INSERT OR IGNORE INTO messages (id, thread_id, sender_id, text, sent_at, status)
          VALUES (?, ?, ?, ?, ?, ?)`,
         [message.id, thread.id, message.senderId, message.text, message.sentAt, message.status]
       );
@@ -1088,7 +1088,7 @@ function seedDatabase() {
 
   seedPoints.forEach((point) => {
     run(
-      `INSERT INTO collection_points (id, name, categories_json, hours, location, status)
+      `INSERT OR IGNORE INTO collection_points (id, name, categories_json, hours, location, status)
        VALUES (?, ?, ?, ?, ?, ?)`,
       [point.id, point.name, JSON.stringify(point.categories), point.hours, point.location, point.status]
     );
