@@ -278,6 +278,7 @@ function LoginScreen({ onGoToRegister, onSuccess }) {
     const fragment = new URLSearchParams(window.location.hash.replace(/^#/, ''));
     const token = fragment.get('reusa_token');
     const error = fragment.get('auth_error');
+    if (fragment.get('email_verified') === '1') alert('E-mail confirmado. Agora você já pode entrar.');
     if (!token && !error) return;
 
     window.history.replaceState({}, '', `${window.location.pathname}${window.location.search}`);
@@ -345,6 +346,7 @@ function RegisterScreen({ onGoToLogin, onSuccess }) {
     event.preventDefault();
     try {
       await register(formState);
+      alert('Cadastro criado. Enviamos um link de confirmação para seu e-mail.');
       onSuccess();
     } catch (error) {
       alert(error.message);
@@ -418,6 +420,7 @@ function FeedScreen({ onNavigate }) {
   const [categoriesOpen, setCategoriesOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [headerHidden, setHeaderHidden] = useState(false);
+  const notifiedIds = useRef(new Set(JSON.parse(window.localStorage.getItem('reusa_browser_notifications') || '[]')));
   const filteredPosts = useMemo(() => {
     const query = search.trim().toLowerCase();
     return posts.filter((post) => {
@@ -429,8 +432,17 @@ function FeedScreen({ onNavigate }) {
 
   useEffect(() => {
     loadFeed().catch(() => {});
-    loadNotifications().catch(() => {});
-    const timer = window.setInterval(() => loadNotifications().catch(() => {}), 15000);
+    const syncNotifications = () => loadNotifications().then((items) => {
+      if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
+      const unseen = items.filter((item) => !item.readAt && !notifiedIds.current.has(item.id)).slice(0, 3);
+      unseen.forEach((item) => {
+        new Notification(item.title, { body: item.text, tag: item.id });
+        notifiedIds.current.add(item.id);
+      });
+      window.localStorage.setItem('reusa_browser_notifications', JSON.stringify([...notifiedIds.current].slice(-100)));
+    }).catch(() => {});
+    syncNotifications();
+    const timer = window.setInterval(syncNotifications, 15000);
     return () => window.clearInterval(timer);
   }, [loadFeed, loadNotifications]);
 
@@ -471,13 +483,20 @@ function FeedScreen({ onNavigate }) {
 function NotificationsScreen({ onBack, onNavigate }) {
   const [notifications, setNotifications] = useState([]);
   const loadNotifications = useAppStore((state) => state.loadNotifications);
+  const [browserPermission, setBrowserPermission] = useState(typeof Notification === 'undefined' ? 'unsupported' : Notification.permission);
   useEffect(() => { loadNotifications().then((items) => setNotifications(items)).catch(() => {}); }, [loadNotifications]);
+  async function enableBrowserNotifications() {
+    if (typeof Notification === 'undefined') return;
+    const permission = await Notification.requestPermission();
+    setBrowserPermission(permission);
+    if (permission === 'granted') new Notification('ReUsa+', { body: 'As notificações do sistema estão ativadas.' });
+  }
   const iconFor = (type) => ({ message: 'chat', comment: 'chat_bubble', like: 'favorite', interest: 'handshake', negotiation: 'swap_horiz', review: 'star', system: 'notifications' }[type] || 'notifications');
   async function openNotification(notification) {
     try { await api.readNotification(notification.id); setNotifications((items) => items.map((item) => item.id === notification.id ? { ...item, readAt: new Date().toISOString() } : item)); await loadNotifications(); } catch {}
     onNavigate(notification.link || '/feed');
   }
-  return <Shell nav={navRoutes} active="/notificacoes"><UnifiedTopbar onBack={onBack} /><main className="page padded-top"><div className="notification-list">{notifications.length ? notifications.map((notification) => <button className={notification.readAt ? 'notification-item' : 'notification-item notification-unread'} key={notification.id} onClick={() => openNotification(notification)}><span className="notification-icon material-symbols-outlined">{iconFor(notification.type)}</span><span><strong>{notification.title}</strong><p>{notification.text}</p><small>{formatBrazilDate(notification.createdAt)} às {formatBrazilTime(notification.createdAt)}</small></span></button>) : <EmptyState icon="notifications_none" title="Nenhuma notificação nova" text="Quando algo acontecer na sua comunidade, avisaremos por aqui." />}</div></main></Shell>;
+  return <Shell nav={navRoutes} active="/notificacoes"><UnifiedTopbar onBack={onBack} /><main className="page padded-top"><section className="browser-notification-card"><div><span className="eyebrow">Notificações do sistema</span><p>Receba avisos do ReUsa+ mesmo quando esta tela não estiver aberta.</p></div>{browserPermission === 'granted' ? <span className="notification-enabled"><span className="material-symbols-outlined">check_circle</span>Ativadas</span> : browserPermission === 'unsupported' ? <small>Navegador incompatível</small> : <button className="secondary-btn" onClick={enableBrowserNotifications}><span className="material-symbols-outlined">notifications_active</span>Ativar no navegador</button>}</section><div className="notification-list">{notifications.length ? notifications.map((notification) => <button className={notification.readAt ? 'notification-item' : 'notification-item notification-unread'} key={notification.id} onClick={() => openNotification(notification)}><span className="notification-icon material-symbols-outlined">{iconFor(notification.type)}</span><span><strong>{notification.title}</strong><p>{notification.text}</p><small>{formatBrazilDate(notification.createdAt)} às {formatBrazilTime(notification.createdAt)}</small></span></button>) : <EmptyState icon="notifications_none" title="Nenhuma notificação nova" text="Quando algo acontecer na sua comunidade, avisaremos por aqui." />}</div></main></Shell>;
 }
 
 function InspirationsScreen({ onNavigate }) {

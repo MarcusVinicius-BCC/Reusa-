@@ -148,6 +148,10 @@ img { display: block; max-width: 100%; }
 .proposal-loading { display: flex; align-items: center; justify-content: center; gap: 8px; min-height: 100px; color: #527264; font-size: 13px; }
 .proposal-loading .material-symbols-outlined { color: #087848; animation: proposal-spin 1s linear infinite; }
 @keyframes proposal-spin { to { transform: rotate(360deg); } }
+.browser-notification-card { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; padding: 16px; border: 1px solid #cfe5d6; border-radius: 16px; background: #f3fbf5; }
+.browser-notification-card p { margin: 5px 0 0; color: #527264; font-size: 13px; }
+.notification-enabled { display: inline-flex; align-items: center; gap: 5px; color: #087848; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.notification-enabled .material-symbols-outlined { font-size: 18px; }
 .interest-modal-close { position: absolute; top: 12px; right: 12px; display: grid; place-items: center; width: 34px; height: 34px; border: 0; border-radius: 50%; background: transparent; color: #527264; cursor: pointer; }
 .interest-modal-close:hover { background: #e3f4e9; color: #102d20; }
 @keyframes interest-modal-enter { from { opacity: 0; transform: translateY(8px) scale(.98); } to { opacity: 1; transform: translateY(0) scale(1); } }

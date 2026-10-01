@@ -43,6 +43,7 @@ export const api = {
   health: () => request('/health'),
   login: (body) => request('/auth/login', { method: 'POST', body: JSON.stringify(body) }),
   register: (body) => request('/auth/register', { method: 'POST', body: JSON.stringify(body) }),
+  resendVerification: () => request('/auth/resend-verification', { method: 'POST' }),
   me: () => request('/auth/me'),
   businessByCnpj: (cnpj) => request(`/businesses/cnpj/${encodeURIComponent(String(cnpj || '').replace(/\D/g, ''))}`),
   feed: () => request('/feed'),

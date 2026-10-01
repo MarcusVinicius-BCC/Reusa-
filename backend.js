@@ -27,6 +27,8 @@ const APP_BASE_URL = String(process.env.APP_BASE_URL || '').trim().replace(/\/$/
 const NOTIFICATION_SERVICE_URL = String(process.env.NOTIFICATION_SERVICE_URL || '').trim().replace(/\/$/, '');
 const IMPACT_SERVICE_URL = String(process.env.IMPACT_SERVICE_URL || '').trim().replace(/\/$/, '');
 const SERVICE_AUTH_TOKEN = String(process.env.SERVICE_AUTH_TOKEN || '').trim();
+const RESEND_API_KEY = String(process.env.RESEND_API_KEY || '').trim();
+const EMAIL_FROM = String(process.env.EMAIL_FROM || 'ReUsa+ <onboarding@resend.dev>').trim();
 const INSTANCE_ID = String(process.env.INSTANCE_ID || `core-${crypto.randomUUID()}`).slice(0, 120);
 const ROOT = __dirname;
 // Railway exposes the path of an attached Volume through this variable.
@@ -393,6 +395,7 @@ function userFromRow(row) {
     id: row.id,
     name: row.name,
     email: row.email,
+    emailVerified: row.email_verified !== false && row.email_verified !== 0,
     city: row.city,
     neighborhood: row.neighborhood || '',
     cep: row.cep || '',
@@ -411,6 +414,28 @@ function userFromRow(row) {
     suspended: Boolean(row.suspended),
     notificationPreferences: jsonArray(row.notification_preferences_json)
   };
+}
+
+function verificationToken() {
+  const raw = crypto.randomBytes(32).toString('hex');
+  return { raw, hash: sha256(raw), expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString() };
+}
+
+async function sendVerificationEmail(email, name, token, requestOrigin = '') {
+  const baseUrl = APP_BASE_URL || requestOrigin || `http://localhost:${PORT}`;
+  const verificationUrl = `${baseUrl}/api/auth/verify-email?token=${encodeURIComponent(token)}`;
+  if (!RESEND_API_KEY) {
+    if (process.env.NODE_ENV === 'production') throw new Error('Email delivery is not configured. Set RESEND_API_KEY and EMAIL_FROM.');
+    console.warn(`[email] Verification URL for ${email}: ${verificationUrl}`);
+    return { delivered: false, verificationUrl };
+  }
+  const response = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from: EMAIL_FROM, to: [email], subject: 'Confirme seu e-mail no ReUsa+', html: `<p>Olá, ${String(name).replace(/[<>&]/g, '')}!</p><p>Confirme seu e-mail para ativar sua conta:</p><p><a href="${verificationUrl}">Confirmar meu e-mail</a></p><p>Este link expira em 24 horas.</p>` })
+  });
+  if (!response.ok) throw new Error(`Email provider returned ${response.status}`);
+  return { delivered: true };
 }
 
 function safeAvatar(value) {
@@ -632,6 +657,9 @@ function seedDatabase() {
       role TEXT NOT NULL DEFAULT 'user',
       suspended INTEGER NOT NULL DEFAULT 0,
       notification_preferences_json TEXT NOT NULL DEFAULT '[]',
+      email_verified INTEGER NOT NULL DEFAULT 1,
+      email_verification_token_hash TEXT,
+      email_verification_expires_at TEXT,
       created_at TEXT
     );
   `);
@@ -932,6 +960,9 @@ function seedDatabase() {
   ensureColumn('users', 'notification_preferences_json', "TEXT NOT NULL DEFAULT '[]'");
   ensureColumn('users', 'last_active_at', 'TEXT');
   ensureColumn('users', 'created_at', 'TEXT');
+  ensureColumn('users', 'email_verified', 'INTEGER NOT NULL DEFAULT 1');
+  ensureColumn('users', 'email_verification_token_hash', 'TEXT');
+  ensureColumn('users', 'email_verification_expires_at', 'TEXT');
   ensureColumn('posts', 'status', "TEXT NOT NULL DEFAULT 'Disponível'");
   ensureColumn('posts', 'reserved_by', 'TEXT');
   ensureColumn('posts', 'completed_with', 'TEXT');
@@ -1363,7 +1394,10 @@ async function start() {
       createToken,
       uid,
       publisher: { flush: flushPendingEvents },
-      upload
+      upload,
+      sendVerificationEmail,
+      verificationToken,
+      sha256
     });
   }
   app.use('/uploads', express.static(UPLOAD_DIR));
@@ -1517,7 +1551,7 @@ async function start() {
     }
   });
 
-  app.post('/api/auth/register', authRateLimit, (req, res) => {
+  app.post('/api/auth/register', authRateLimit, async (req, res, next) => {
     const { name, email, password, city, neighborhood = '', cep = '', address = '', interests = [], accountType = 'person', businessName = '', cnpj = '' } = req.body || {};
     const normalizedName = String(name || '').trim();
     const normalizedEmail = String(email || '').trim().toLowerCase();
@@ -1577,10 +1611,11 @@ async function start() {
       carbonSavedPercent: 0,
       achievements: ['Novo membro']
     };
+    const verification = verificationToken();
 
     run(
-      `INSERT INTO users (id, name, email, password_hash, city, neighborhood, cep, address, account_type, business_name, cnpj, interests_json, avatar, rating, donations, received, carbon_saved_percent, achievements_json)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      `INSERT INTO users (id, name, email, password_hash, city, neighborhood, cep, address, account_type, business_name, cnpj, interests_json, avatar, rating, donations, received, carbon_saved_percent, achievements_json, email_verified, email_verification_token_hash, email_verification_expires_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
       [
         user.id,
         user.name,
@@ -1599,13 +1634,21 @@ async function start() {
         user.donations,
         user.received,
         user.carbonSavedPercent,
-        JSON.stringify(user.achievements)
+        JSON.stringify(user.achievements),
+        0,
+        verification.hash,
+        verification.expiresAt
       ]
     );
     run('UPDATE users SET last_active_at = ?, created_at = ? WHERE id = ?', [new Date().toISOString(), new Date().toISOString(), user.id]);
     persistDb();
 
-    return res.status(201).json({ token: createToken(user.id), user: { ...user, passwordHash: undefined } });
+    try {
+      const delivery = await sendVerificationEmail(user.email, user.name, verification.raw, `${req.protocol}://${req.get('host')}`);
+      return res.status(201).json({ token: createToken(user.id), user: { ...user, passwordHash: undefined, emailVerified: false }, verificationRequired: true, emailDelivered: delivery.delivered });
+    } catch (error) {
+      return next(error);
+    }
   });
 
   app.post('/api/auth/login', authRateLimit, (req, res) => {
@@ -1621,11 +1664,34 @@ async function start() {
     if (!user || !verifyPassword(normalizedPassword, user.password_hash)) {
       return res.status(401).json({ error: 'Invalid credentials' });
     }
+    if (user.email_verified === 0) return res.status(403).json({ error: 'Confirme seu e-mail antes de entrar' });
 
     const normalized = userFromRow(user);
     run('UPDATE users SET last_active_at = ? WHERE id = ?', [new Date().toISOString(), normalized.id]);
     persistDb();
     return res.json({ token: createToken(normalized.id), user: normalized });
+  });
+
+  app.get('/api/auth/verify-email', async (req, res) => {
+    const tokenHash = sha256(String(req.query.token || ''));
+    const user = get('SELECT id FROM users WHERE email_verification_token_hash = ? AND email_verification_expires_at > ?', [tokenHash, new Date().toISOString()]);
+    if (!user) return res.status(400).send('Link de verificação inválido ou expirado. Solicite um novo link pelo aplicativo.');
+    run('UPDATE users SET email_verified = 1, email_verification_token_hash = NULL, email_verification_expires_at = NULL WHERE id = ?', [user.id]);
+    persistDb();
+    return res.redirect('/login#email_verified=1');
+  });
+
+  app.post('/api/auth/resend-verification', authMiddleware, async (req, res, next) => {
+    try {
+      const user = get('SELECT * FROM users WHERE id = ?', [req.user.id]);
+      if (!user) return res.status(404).json({ error: 'User not found' });
+      if (user.email_verified !== 0) return res.json({ emailVerified: true });
+      const verification = verificationToken();
+      run('UPDATE users SET email_verification_token_hash = ?, email_verification_expires_at = ? WHERE id = ?', [verification.hash, verification.expiresAt, user.id]);
+      const delivery = await sendVerificationEmail(user.email, user.name, verification.raw, `${req.protocol}://${req.get('host')}`);
+      persistDb();
+      return res.json({ emailVerified: false, emailDelivered: delivery.delivered });
+    } catch (error) { return next(error); }
   });
 
   app.get('/api/feed', optionalAuth, (req, res) => {

@@ -20,6 +20,7 @@ function userView(row) {
   if (!row) return null;
   return {
     id: row.id, name: row.name, email: row.email, city: row.city,
+    emailVerified: row.email_verified !== false,
     neighborhood: row.neighborhood || '', cep: row.cep || '', address: row.address || '',
     accountType: row.account_type || 'person', businessName: row.business_name || '',
     cnpj: row.cnpj || '', interests: json(row.interests_json), avatar: row.avatar || '',
@@ -85,7 +86,7 @@ function verifyPassword(password, stored) {
   return expected.length === actual.length && crypto.timingSafeEqual(actual, expected);
 }
 
-function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publisher, upload }) {
+function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publisher, upload, sendVerificationEmail, verificationToken, sha256 }) {
   const authenticate = async (req, res, next) => {
     const token = String(req.headers.authorization || '').replace(/^Bearer\s+/, '');
     if (!token) return res.status(401).json({ error: 'Authentication required' });
@@ -125,13 +126,15 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       const normalizedEmail = String(email || '').trim().toLowerCase();
       if (!String(name || '').trim() || !normalizedEmail || String(password || '').length < 8 || !String(city || '').trim()) return res.status(400).json({ error: 'Missing required fields' });
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) return res.status(400).json({ error: 'Invalid email address' });
-      const user = { id: id('user'), name: String(name).trim(), email: normalizedEmail, password_hash: passwordHash(password), city: String(city).trim(), neighborhood: String(neighborhood).trim(), cep: String(cep).trim(), address: String(address).trim(), account_type: accountType, business_name: String(businessName).trim(), cnpj: String(cnpj).replace(/\D/g, ''), interests_json: JSON.stringify(Array.isArray(interests) ? interests : []), avatar: '', achievements_json: JSON.stringify(['Novo membro']), created_at: new Date().toISOString(), last_active_at: new Date().toISOString() };
+      const verification = verificationToken();
+      const user = { id: id('user'), name: String(name).trim(), email: normalizedEmail, password_hash: passwordHash(password), city: String(city).trim(), neighborhood: String(neighborhood).trim(), cep: String(cep).trim(), address: String(address).trim(), account_type: accountType, business_name: String(businessName).trim(), cnpj: String(cnpj).replace(/\D/g, ''), interests_json: JSON.stringify(Array.isArray(interests) ? interests : []), avatar: '', achievements_json: JSON.stringify(['Novo membro']), email_verified: false, email_verification_token_hash: verification.hash, email_verification_expires_at: verification.expiresAt, created_at: new Date().toISOString(), last_active_at: new Date().toISOString() };
       const created = await db.transaction(async (client) => {
         if (await client.query('SELECT 1 FROM users WHERE lower(email)=lower($1)', [normalizedEmail]).then((r) => r.rowCount)) throw Object.assign(new Error('Email already registered'), { status: 409 });
-        await client.query(`INSERT INTO users (id,name,email,password_hash,city,neighborhood,cep,address,account_type,business_name,cnpj,interests_json,avatar,achievements_json,created_at,last_active_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)`, Object.values(user));
+        await client.query(`INSERT INTO users (id,name,email,password_hash,city,neighborhood,cep,address,account_type,business_name,cnpj,interests_json,avatar,achievements_json,email_verified,email_verification_token_hash,email_verification_expires_at,created_at,last_active_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`, Object.values(user));
         return client.query('SELECT * FROM users WHERE id=$1', [user.id]).then((r) => r.rows[0]);
       });
-      return res.status(201).json({ token: createToken(created.id), user: userView(created) });
+      await sendVerificationEmail(created.email, created.name, verification.raw, `${req.protocol}://${req.get('host')}`);
+      return res.status(201).json({ token: createToken(created.id), user: userView(created), verificationRequired: true });
     } catch (error) { return next(error); }
   });
 
@@ -139,11 +142,31 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
     try {
       const row = await db.one('SELECT * FROM users WHERE lower(email)=lower($1)', [String(req.body?.email || '').trim()]);
       if (!row || !verifyPassword(req.body?.password, row.password_hash)) return res.status(401).json({ error: 'Invalid credentials' });
+      if (row.email_verified === false) return res.status(403).json({ error: 'Confirme seu e-mail antes de entrar' });
       await db.query('UPDATE users SET last_active_at=now() WHERE id=$1', [row.id]);
       return res.json({ token: createToken(row.id), user: userView(row) });
     } catch (error) { return next(error); }
   });
   app.get('/api/auth/me', authenticate, (req, res) => res.json({ user: req.user }));
+  app.get('/api/auth/verify-email', async (req, res, next) => {
+    try {
+      const tokenHash = sha256(String(req.query.token || ''));
+      const user = await db.one('SELECT id FROM users WHERE email_verification_token_hash=$1 AND email_verification_expires_at > now()', [tokenHash]);
+      if (!user) return res.status(400).send('Link de verificação inválido ou expirado. Solicite um novo link pelo aplicativo.');
+      await db.query('UPDATE users SET email_verified=true,email_verification_token_hash=NULL,email_verification_expires_at=NULL WHERE id=$1', [user.id]);
+      return res.redirect('/login#email_verified=1');
+    } catch (error) { return next(error); }
+  });
+  app.post('/api/auth/resend-verification', authenticate, async (req, res, next) => {
+    try {
+      const user = await db.one('SELECT * FROM users WHERE id=$1', [req.user.id]);
+      if (user.email_verified) return res.json({ emailVerified: true });
+      const verification = verificationToken();
+      await db.query('UPDATE users SET email_verification_token_hash=$1,email_verification_expires_at=$2 WHERE id=$3', [verification.hash, verification.expiresAt, user.id]);
+      await sendVerificationEmail(user.email, user.name, verification.raw, `${req.protocol}://${req.get('host')}`);
+      return res.json({ emailVerified: false, emailDelivered: true });
+    } catch (error) { return next(error); }
+  });
 
   app.get('/api/feed', optional, async (req, res, next) => {
     try { const rows = await db.many("SELECT * FROM posts WHERE status <> 'Encerrado' ORDER BY created_at DESC"); return res.json({ posts: await Promise.all(rows.map((row) => postView(db, row, req.user?.id))) }); } catch (error) { return next(error); }
