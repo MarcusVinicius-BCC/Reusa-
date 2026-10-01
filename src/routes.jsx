@@ -87,7 +87,7 @@ function ScreenRouter({ location, navigate }) {
     case '/':
       return <Navigate to="/splash" replace />;
     case '/splash':
-      return <LandingScreen onCreateAccount={() => navigate('/criar-conta')} onLogin={() => navigate('/login')} onExplore={() => navigate('/feed')} onAbout={() => navigate('/sobre')} />;
+      return <LandingScreen onCreateAccount={() => navigate('/criar-conta')} onLogin={() => navigate('/login')} onAbout={() => navigate('/sobre')} />;
     case '/onboarding':
       return <Navigate to="/login" replace />;
     case '/login':
@@ -185,7 +185,7 @@ function HeaderProfileButton() {
   return <a className="avatar-btn header-profile-btn" href="/perfil" aria-label="Abrir perfil">{session?.avatar ? <img src={session.avatar} alt="" /> : <span className="material-symbols-outlined">person</span>}</a>;
 }
 
-function LandingScreen({ onCreateAccount, onLogin, onExplore, onAbout }) {
+function LandingScreen({ onCreateAccount, onLogin, onAbout }) {
   const [featuredPosts, setFeaturedPosts] = useState([]);
   const [postsLoading, setPostsLoading] = useState(true);
 
@@ -214,7 +214,7 @@ function LandingScreen({ onCreateAccount, onLogin, onExplore, onAbout }) {
           <div className="landing-cycle landing-cycle-legacy"><span className="material-symbols-outlined">sync</span></div>
           <article className="listing-card listing-card-two"><div className="listing-photo plant-photo"><span>Recebido</span></div><div className="listing-content"><small><i />Novo lar encontrado</small><h2>Monstera com Cachepot</h2><p>Planta viva · Vila Mariana, SP</p><footer>Adotado por Lucas T. <b>Com carinho</b></footer></div></article>
           <div className="landing-steps"><div><span className="material-symbols-outlined">add_box</span><strong>Publique</strong><small>o que não usa</small></div><div><span className="material-symbols-outlined">forum</span><strong>Converse</strong><small>com interessados</small></div><div><span className="material-symbols-outlined">group</span><strong>Transforme</strong><small>o descarte</small></div></div>
-          <div className="landing-conversion"><button onClick={onCreateAccount}>Criar minha conta <span className="material-symbols-outlined">arrow_forward</span></button><button onClick={onExplore}><span className="material-symbols-outlined">search</span>Explorar anúncios sem entrar</button></div>
+          <div className="landing-conversion"><button onClick={onCreateAccount}>Criar minha conta <span className="material-symbols-outlined">arrow_forward</span></button></div>
         </div>
       </section>
       <footer className="landing-footer"><p>© 2025 REUSA+. Economia sustentável feita por pessoas.</p><div><a href="#termos">Termos de uso</a><a href="#privacidade">Política de privacidade</a><a href="#ajuda">Central de ajuda</a></div></footer>
@@ -222,7 +222,7 @@ function LandingScreen({ onCreateAccount, onLogin, onExplore, onAbout }) {
   );
 }
 
-function SplashScreen({ onCreateAccount, onLogin, onExplore, onAbout }) {
+function SplashScreen({ onCreateAccount, onLogin, onAbout }) {
   return (
     <main className="welcome-screen">
       <div className="welcome-glow welcome-glow-one" />
@@ -255,7 +255,6 @@ function SplashScreen({ onCreateAccount, onLogin, onExplore, onAbout }) {
 
       <section className="welcome-actions">
         <button className="primary-btn full welcome-main-action" onClick={onCreateAccount}>Criar minha conta <span className="material-symbols-outlined">arrow_forward</span></button>
-        <button className="welcome-explore" onClick={onExplore}><span className="material-symbols-outlined">travel_explore</span> Explorar anúncios sem entrar</button>
         <p>Já faz parte da comunidade? <button className="text-btn" onClick={onLogin}>Fazer login</button></p>
       </section>
 
