@@ -183,6 +183,12 @@ test('favorites, negotiation status and reviews persist with permission checks',
   const reviews = await request(`/api/users/${ownerRegistration.payload.user.id}/reviews`);
   assert.equal(reviews.payload.reputation.count, 1);
   assert.equal(reviews.payload.reputation.rating, 5);
+
+  const readThreadNotifications = await request(`/api/notifications/read-thread/${thread.payload.thread.id}`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${ownerToken}` }
+  });
+  assert.equal(readThreadNotifications.response.status, 200);
 });
 
 test('public listing location rejects exact residential addresses', async () => {

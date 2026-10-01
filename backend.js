@@ -796,6 +796,43 @@ function seedDatabase() {
   `);
 
   run(`
+    CREATE TABLE IF NOT EXISTS payments (
+      id TEXT PRIMARY KEY,
+      negotiation_id TEXT NOT NULL,
+      payer_id TEXT NOT NULL,
+      payee_id TEXT NOT NULL,
+      amount_cents INTEGER NOT NULL,
+      currency TEXT NOT NULL DEFAULT 'BRL',
+      method TEXT NOT NULL,
+      status TEXT NOT NULL,
+      idempotency_key TEXT NOT NULL,
+      provider_reference TEXT NOT NULL,
+      failure_code TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      paid_at TEXT,
+      refunded_at TEXT,
+      UNIQUE(negotiation_id, idempotency_key),
+      FOREIGN KEY(negotiation_id) REFERENCES negotiations(id),
+      FOREIGN KEY(payer_id) REFERENCES users(id),
+      FOREIGN KEY(payee_id) REFERENCES users(id)
+    );
+  `);
+
+  run(`
+    CREATE TABLE IF NOT EXISTS payment_audit_events (
+      id TEXT PRIMARY KEY,
+      payment_id TEXT NOT NULL,
+      from_status TEXT,
+      to_status TEXT NOT NULL,
+      reason TEXT NOT NULL,
+      correlation_id TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(payment_id) REFERENCES payments(id)
+    );
+  `);
+
+  run(`
     CREATE TABLE IF NOT EXISTS reviews (
       id TEXT PRIMARY KEY,
       negotiation_id TEXT NOT NULL,
@@ -1749,6 +1786,90 @@ async function start() {
     return res.json({ negotiation: negotiation ? { id: negotiation.id, status: negotiation.status, ownerId: negotiation.owner_id, interestedId: negotiation.interested_id, completedAt: negotiation.completed_at } : null });
   });
 
+  app.get('/api/negotiations/:id/payment', authMiddleware, (req, res) => {
+    const negotiation = get('SELECT * FROM negotiations WHERE id = ?', [req.params.id]);
+    if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
+    if (![negotiation.owner_id, negotiation.interested_id].includes(req.user.id)) return res.status(403).json({ error: 'Payment access denied' });
+    const payment = get('SELECT * FROM payments WHERE negotiation_id = ? ORDER BY created_at DESC LIMIT 1', [negotiation.id]);
+    return res.json({ payment: payment ? {
+      id: payment.id,
+      negotiationId: payment.negotiation_id,
+      payerId: payment.payer_id,
+      payeeId: payment.payee_id,
+      amountCents: payment.amount_cents,
+      currency: payment.currency,
+      method: payment.method,
+      status: payment.status,
+      providerReference: payment.provider_reference,
+      failureCode: payment.failure_code,
+      createdAt: payment.created_at,
+      updatedAt: payment.updated_at,
+      paidAt: payment.paid_at
+    } : null });
+  });
+
+  app.post('/api/negotiations/:id/payment', authMiddleware, (req, res) => {
+    const negotiation = get('SELECT * FROM negotiations WHERE id = ?', [req.params.id]);
+    const amountCents = Number(req.body?.amountCents);
+    const currency = String(req.body?.currency || 'BRL').trim().toUpperCase();
+    const method = String(req.body?.method || '').trim().toLowerCase();
+    const idempotencyKey = String(req.body?.idempotencyKey || '').trim();
+    const simulateFailure = req.body?.simulateFailure === true;
+    if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
+    if (negotiation.interested_id !== req.user.id) return res.status(403).json({ error: 'Only the interested user can make this payment' });
+    if (negotiation.status !== 'reserved') return res.status(400).json({ error: 'The negotiation must be reserved before payment' });
+    if (!Number.isSafeInteger(amountCents) || amountCents < 100 || amountCents > 100000000) return res.status(400).json({ error: 'Amount must be between R$ 1,00 and R$ 1.000.000,00' });
+    if (currency !== 'BRL' || !['pix', 'card', 'boleto'].includes(method)) return res.status(400).json({ error: 'Use BRL and pix, card or boleto' });
+    if (!/^[A-Za-z0-9._:-]{16,128}$/.test(idempotencyKey)) return res.status(400).json({ error: 'A valid idempotency key is required' });
+    const existing = get('SELECT * FROM payments WHERE negotiation_id = ? AND idempotency_key = ?', [negotiation.id, idempotencyKey]);
+    if (existing) return res.status(200).json({ payment: {
+      id: existing.id, negotiationId: existing.negotiation_id, payerId: existing.payer_id, payeeId: existing.payee_id,
+      amountCents: existing.amount_cents, currency: existing.currency, method: existing.method, status: existing.status,
+      providerReference: existing.provider_reference, failureCode: existing.failure_code, createdAt: existing.created_at,
+      updatedAt: existing.updated_at, paidAt: existing.paid_at
+    }, idempotentReplay: true });
+    if (get("SELECT id FROM payments WHERE negotiation_id = ? AND status = 'succeeded'", [negotiation.id])) return res.status(409).json({ error: 'This negotiation already has a successful payment' });
+
+    const now = new Date().toISOString();
+    const status = simulateFailure ? 'failed' : 'succeeded';
+    const payment = {
+      id: uid('payment'),
+      negotiation_id: negotiation.id,
+      payer_id: negotiation.interested_id,
+      payee_id: negotiation.owner_id,
+      amount_cents: amountCents,
+      currency,
+      method,
+      status,
+      idempotency_key: idempotencyKey,
+      provider_reference: `sim_${crypto.randomUUID()}`,
+      failure_code: simulateFailure ? 'SIMULATED_PROVIDER_DECLINE' : null,
+      created_at: now,
+      updated_at: now,
+      paid_at: simulateFailure ? null : now,
+      refunded_at: null
+    };
+    try {
+      db.exec('BEGIN TRANSACTION');
+      run('INSERT INTO payments (id, negotiation_id, payer_id, payee_id, amount_cents, currency, method, status, idempotency_key, provider_reference, failure_code, created_at, updated_at, paid_at, refunded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', Object.values(payment));
+      run('INSERT INTO payment_audit_events (id, payment_id, from_status, to_status, reason, correlation_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', [uid('payment-audit'), payment.id, null, status, simulateFailure ? 'simulated_provider_decline' : 'simulated_provider_approved', req.correlationId, now]);
+      emitDomainEvent(`payment.${status}`, { paymentId: payment.id, negotiationId: negotiation.id, postId: negotiation.post_id, payerId: payment.payer_id, payeeId: payment.payee_id, amountCents, currency, method, status }, req.correlationId);
+      db.exec('COMMIT');
+    } catch (error) {
+      try { db.exec('ROLLBACK'); } catch {}
+      console.error('Payment transaction failed', error);
+      return res.status(500).json({ error: 'Payment could not be processed' });
+    }
+    if (!eventPublisher.enabled() && !simulateFailure) notification(payment.payee_id, 'payment', 'Pagamento simulado recebido', `Um pagamento de R$ ${(amountCents / 100).toFixed(2).replace('.', ',')} foi confirmado.`, `/anuncios/${negotiation.post_id}`);
+    persistDb();
+    return res.status(201).json({ payment: {
+      id: payment.id, negotiationId: payment.negotiation_id, payerId: payment.payer_id, payeeId: payment.payee_id,
+      amountCents: payment.amount_cents, currency: payment.currency, method: payment.method, status: payment.status,
+      providerReference: payment.provider_reference, failureCode: payment.failure_code, createdAt: payment.created_at,
+      updatedAt: payment.updated_at, paidAt: payment.paid_at
+    }, idempotentReplay: false });
+  });
+
   app.post('/api/posts/:id/reserve', authMiddleware, (req, res) => {
     const post = get('SELECT * FROM posts WHERE id = ?', [req.params.id]);
     const interestedId = String(req.body?.interestedId || '');
@@ -2044,6 +2165,18 @@ async function start() {
 
   app.post('/api/notifications/read', authMiddleware, (req, res) => {
     run('UPDATE notifications SET read_at = ? WHERE user_id = ? AND read_at IS NULL', [new Date().toISOString(), req.user.id]);
+    persistDb();
+    res.json({ ok: true });
+  });
+
+  app.post('/api/notifications/read-thread/:threadId', authMiddleware, (req, res) => {
+    const thread = get('SELECT id, participants_json FROM threads WHERE id = ?', [req.params.threadId]);
+    if (!thread) return res.status(404).json({ error: 'Thread not found' });
+    if (!JSON.parse(thread.participants_json || '[]').includes(req.user.id)) {
+      return res.status(403).json({ error: 'Thread access denied' });
+    }
+    const link = `/mensagens/ana?thread=${thread.id}`;
+    run('UPDATE notifications SET read_at = ? WHERE user_id = ? AND read_at IS NULL AND link = ?', [new Date().toISOString(), req.user.id, link]);
     persistDb();
     res.json({ ok: true });
   });
