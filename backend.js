@@ -524,6 +524,7 @@ async function flushPendingEvents() {
 function publicPost(row, viewerId = null) {
   const author = get('SELECT id, name, city, neighborhood, account_type, business_name, avatar FROM users WHERE id = ?', [row.author_id]);
   const interestCount = get("SELECT COUNT(*) AS count FROM negotiations WHERE post_id = ? AND status IN ('interested', 'reserved', 'completed')", [row.id])?.count || 0;
+  const viewerNegotiation = viewerId ? get('SELECT status, proposal_status, proposal_amount_cents, proposal_method FROM negotiations WHERE post_id = ? AND interested_id = ? ORDER BY updated_at DESC LIMIT 1', [row.id, viewerId]) : null;
   const saved = viewerId ? Boolean(get('SELECT post_id FROM favorites WHERE user_id = ? AND post_id = ?', [viewerId, row.id])) : false;
   const liked = viewerId ? Boolean(get('SELECT post_id FROM post_likes WHERE user_id = ? AND post_id = ?', [viewerId, row.id])) : false;
   const reputation = author ? get('SELECT ROUND(AVG(rating), 1) AS average, COUNT(*) AS count FROM reviews WHERE reviewee_id = ?', [author.id]) : null;
@@ -546,6 +547,9 @@ function publicPost(row, viewerId = null) {
     status: row.status || 'Disponível',
     views: Number(row.views || 0),
     interestedCount: Number(interestCount),
+    offerStatus: viewerNegotiation?.proposal_status || 'none',
+    offerAmountCents: viewerNegotiation?.proposal_amount_cents || null,
+    offerMethod: viewerNegotiation?.proposal_method || null,
     saved,
     liked,
     updatedAt: row.updated_at || row.created_at,
@@ -631,6 +635,10 @@ function seedDatabase() {
       created_at TEXT
     );
   `);
+  ensureColumn('negotiations', 'proposal_status', "TEXT NOT NULL DEFAULT 'none'");
+  ensureColumn('negotiations', 'proposal_amount_cents', 'INTEGER');
+  ensureColumn('negotiations', 'proposal_method', "TEXT");
+  ensureColumn('negotiations', 'proposal_created_at', 'TEXT');
 
   const userColumns = new Set(all('PRAGMA table_info(users)').map((column) => column.name));
   ['neighborhood', 'cep', 'address', 'account_type', 'business_name', 'cnpj'].forEach((column) => {
@@ -1774,7 +1782,7 @@ async function start() {
     if (post.author_id !== req.user.id) return res.status(403).json({ error: 'Only the owner can view interested users' });
     const negotiations = all('SELECT * FROM negotiations WHERE post_id = ? ORDER BY created_at DESC', [post.id]).map((item) => {
       const user = get('SELECT id, name, city, avatar FROM users WHERE id = ?', [item.interested_id]);
-      return { id: item.id, status: item.status, createdAt: item.created_at, threadId: item.thread_id, user: user ? { ...user, avatar: safeAvatar(user.avatar) } : null };
+      return { id: item.id, status: item.status, proposalStatus: item.proposal_status || 'none', proposalAmountCents: item.proposal_amount_cents || null, proposalMethod: item.proposal_method || null, createdAt: item.created_at, threadId: item.thread_id, user: user ? { ...user, avatar: safeAvatar(user.avatar) } : null };
     });
     return res.json({ negotiations });
   });
@@ -1783,7 +1791,37 @@ async function start() {
     const post = get('SELECT id, author_id FROM posts WHERE id = ?', [req.params.id]);
     if (!post) return res.status(404).json({ error: 'Post not found' });
     const negotiation = get('SELECT * FROM negotiations WHERE post_id = ? AND (owner_id = ? OR interested_id = ?) ORDER BY updated_at DESC LIMIT 1', [post.id, req.user.id, req.user.id]);
-    return res.json({ negotiation: negotiation ? { id: negotiation.id, status: negotiation.status, ownerId: negotiation.owner_id, interestedId: negotiation.interested_id, completedAt: negotiation.completed_at } : null });
+    return res.json({ negotiation: negotiation ? { id: negotiation.id, status: negotiation.status, ownerId: negotiation.owner_id, interestedId: negotiation.interested_id, completedAt: negotiation.completed_at, proposalStatus: negotiation.proposal_status || 'none', proposalAmountCents: negotiation.proposal_amount_cents || null, proposalMethod: negotiation.proposal_method || null, proposalCreatedAt: negotiation.proposal_created_at || null } : null });
+  });
+
+  app.post('/api/negotiations/:id/proposal', authMiddleware, (req, res) => {
+    const negotiation = get('SELECT * FROM negotiations WHERE id = ?', [req.params.id]);
+    const amountCents = Number(req.body?.amountCents);
+    const method = String(req.body?.method || '').trim().toLowerCase();
+    if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
+    if (negotiation.interested_id !== req.user.id) return res.status(403).json({ error: 'Only the interested user can send this proposal' });
+    if (negotiation.status !== 'interested') return res.status(400).json({ error: 'This negotiation is no longer accepting proposals' });
+    if (!Number.isSafeInteger(amountCents) || amountCents < 100 || amountCents > 100000000) return res.status(400).json({ error: 'Amount must be between R$ 1,00 and R$ 1.000.000,00' });
+    if (!['pix', 'card', 'boleto'].includes(method)) return res.status(400).json({ error: 'Use pix, card or boleto' });
+    const now = new Date().toISOString();
+    run("UPDATE negotiations SET proposal_status = 'pending', proposal_amount_cents = ?, proposal_method = ?, proposal_created_at = ?, updated_at = ? WHERE id = ?", [amountCents, method, now, now, negotiation.id]);
+    if (!eventPublisher.enabled()) notification(negotiation.owner_id, 'negotiation', 'Nova proposta recebida', `Uma proposta de R$ ${(amountCents / 100).toFixed(2).replace('.', ',')} foi enviada.`, `/anuncios/${negotiation.post_id}`);
+    persistDb();
+    return res.status(201).json({ proposal: { negotiationId: negotiation.id, status: 'pending', amountCents, method, createdAt: now } });
+  });
+
+  app.patch('/api/negotiations/:id/proposal', authMiddleware, (req, res) => {
+    const negotiation = get('SELECT * FROM negotiations WHERE id = ?', [req.params.id]);
+    const decision = String(req.body?.decision || '').trim().toLowerCase();
+    if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
+    if (negotiation.owner_id !== req.user.id) return res.status(403).json({ error: 'Only the seller can decide this proposal' });
+    if (negotiation.proposal_status !== 'pending') return res.status(400).json({ error: 'There is no pending proposal to decide' });
+    if (!['accepted', 'rejected'].includes(decision)) return res.status(400).json({ error: 'Decision must be accepted or rejected' });
+    const now = new Date().toISOString();
+    run('UPDATE negotiations SET proposal_status = ?, updated_at = ? WHERE id = ?', [decision, now, negotiation.id]);
+    if (decision === 'rejected' && !eventPublisher.enabled()) notification(negotiation.interested_id, 'negotiation', 'Proposta recusada', 'O vendedor recusou sua proposta.', `/anuncios/${negotiation.post_id}`);
+    persistDb();
+    return res.json({ proposal: { negotiationId: negotiation.id, status: decision, amountCents: negotiation.proposal_amount_cents, method: negotiation.proposal_method, createdAt: negotiation.proposal_created_at } });
   });
 
   app.get('/api/negotiations/:id/payment', authMiddleware, (req, res) => {
@@ -1880,7 +1918,7 @@ async function start() {
     if (!negotiation || negotiation.status === 'cancelled') return res.status(400).json({ error: 'Choose a user who demonstrated interest' });
     const now = new Date().toISOString();
     run("UPDATE negotiations SET status = 'interested', updated_at = ? WHERE post_id = ? AND status = 'reserved'", [now, post.id]);
-    run("UPDATE negotiations SET status = 'reserved', updated_at = ? WHERE id = ?", [now, negotiation.id]);
+    run("UPDATE negotiations SET status = 'reserved', proposal_status = CASE WHEN proposal_status = 'pending' THEN 'accepted' ELSE proposal_status END, updated_at = ? WHERE id = ?", [now, negotiation.id]);
     run("UPDATE posts SET status = 'Reservado', reserved_by = ?, updated_at = ? WHERE id = ?", [interestedId, now, post.id]);
     if (!eventPublisher.enabled()) notification(interestedId, 'negotiation', 'Item reservado para você', `Você foi selecionado para ${post.title}.`, `/anuncios/${post.id}`);
     emitDomainEvent('negotiation.reserved', {
