@@ -30,13 +30,32 @@ function userView(row) {
   };
 }
 
+function paymentView(payment) {
+  return {
+    id: payment.id,
+    negotiationId: payment.negotiation_id,
+    payerId: payment.payer_id,
+    payeeId: payment.payee_id,
+    amountCents: payment.amount_cents,
+    currency: payment.currency,
+    method: payment.method,
+    status: payment.status,
+    providerReference: payment.provider_reference,
+    failureCode: payment.failure_code,
+    createdAt: payment.created_at,
+    updatedAt: payment.updated_at,
+    paidAt: payment.paid_at
+  };
+}
+
 async function postView(db, row, viewerId) {
-  const [author, interest, reputation, saved, liked] = await Promise.all([
+  const [author, interest, reputation, saved, liked, offer] = await Promise.all([
     db.one('SELECT id,name,city,neighborhood,account_type,business_name,avatar FROM users WHERE id=$1', [row.author_id]),
     db.one("SELECT COUNT(*)::int AS count FROM negotiations WHERE post_id=$1 AND status IN ('interested','reserved','completed')", [row.id]),
     db.one('SELECT COALESCE(ROUND(AVG(rating),1),0)::float AS average, COUNT(*)::int AS count FROM reviews WHERE reviewee_id=$1', [row.author_id]),
     viewerId ? db.one('SELECT 1 FROM favorites WHERE user_id=$1 AND post_id=$2', [viewerId, row.id]) : null,
-    viewerId ? db.one('SELECT 1 FROM post_likes WHERE user_id=$1 AND post_id=$2', [viewerId, row.id]) : null
+    viewerId ? db.one('SELECT 1 FROM post_likes WHERE user_id=$1 AND post_id=$2', [viewerId, row.id]) : null,
+    viewerId ? db.one('SELECT proposal_status,proposal_amount_cents,proposal_method FROM negotiations WHERE post_id=$1 AND interested_id=$2 ORDER BY updated_at DESC LIMIT 1', [row.id, viewerId]) : null
   ]);
   return {
     id: row.id, authorId: row.author_id,
@@ -46,7 +65,10 @@ async function postView(db, row, viewerId) {
     location: row.location, createdAt: row.created_at, chipIcon: row.chip_icon, chipLabel: row.chip_label,
     status: row.status, views: Number(row.views || 0), interestedCount: Number(interest?.count || 0),
     saved: Boolean(saved), liked: Boolean(liked), updatedAt: row.updated_at || row.created_at,
-    authorReputation: Number(reputation?.average || 0), authorReviewCount: Number(reputation?.count || 0)
+    authorReputation: Number(reputation?.average || 0), authorReviewCount: Number(reputation?.count || 0),
+    offerStatus: offer?.proposal_status || 'none',
+    offerAmountCents: offer?.proposal_amount_cents || null,
+    offerMethod: offer?.proposal_method || null
   };
 }
 
@@ -209,8 +231,69 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
     try {
       const post = await db.one('SELECT id FROM posts WHERE id=$1', [req.params.id]);
       if (!post) return res.status(404).json({ error: 'Post not found' });
-      const negotiation = await db.one('SELECT id,status,owner_id,interested_id,completed_at FROM negotiations WHERE post_id=$1 AND (owner_id=$2 OR interested_id=$2) ORDER BY updated_at DESC LIMIT 1', [post.id, req.user.id]);
-      return res.json({ negotiation: negotiation ? { id: negotiation.id, status: negotiation.status, ownerId: negotiation.owner_id, interestedId: negotiation.interested_id, completedAt: negotiation.completed_at } : null });
+      const negotiation = await db.one('SELECT id,status,owner_id,interested_id,completed_at,proposal_status,proposal_amount_cents,proposal_method,proposal_created_at FROM negotiations WHERE post_id=$1 AND (owner_id=$2 OR interested_id=$2) ORDER BY updated_at DESC LIMIT 1', [post.id, req.user.id]);
+      return res.json({ negotiation: negotiation ? { id: negotiation.id, status: negotiation.status, ownerId: negotiation.owner_id, interestedId: negotiation.interested_id, completedAt: negotiation.completed_at, proposalStatus: negotiation.proposal_status || 'none', proposalAmountCents: negotiation.proposal_amount_cents || null, proposalMethod: negotiation.proposal_method || null, proposalCreatedAt: negotiation.proposal_created_at || null } : null });
+    } catch (error) { return next(error); }
+  });
+  app.post('/api/negotiations/:id/proposal', authenticate, async (req, res, next) => {
+    try {
+      const negotiation = await db.one('SELECT * FROM negotiations WHERE id=$1', [req.params.id]);
+      const amountCents = Number(req.body?.amountCents);
+      const method = String(req.body?.method || '').trim().toLowerCase();
+      if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
+      if (negotiation.interested_id !== req.user.id) return res.status(403).json({ error: 'Only the interested user can send this proposal' });
+      if (negotiation.status !== 'interested') return res.status(400).json({ error: 'This negotiation is no longer accepting proposals' });
+      if (!Number.isSafeInteger(amountCents) || amountCents < 100 || amountCents > 100000000) return res.status(400).json({ error: 'Amount must be between R$ 1,00 and R$ 1.000.000,00' });
+      if (!['pix', 'card', 'boleto'].includes(method)) return res.status(400).json({ error: 'Use pix, card or boleto' });
+      const createdAt = new Date().toISOString();
+      const updated = await db.one('UPDATE negotiations SET proposal_status=$1,proposal_amount_cents=$2,proposal_method=$3,proposal_created_at=$4,updated_at=$4 WHERE id=$5 RETURNING *', ['pending', amountCents, method, createdAt, negotiation.id]);
+      return res.status(201).json({ proposal: { negotiationId: updated.id, status: updated.proposal_status, amountCents: updated.proposal_amount_cents, method: updated.proposal_method, createdAt: updated.proposal_created_at } });
+    } catch (error) { return next(error); }
+  });
+  app.patch('/api/negotiations/:id/proposal', authenticate, async (req, res, next) => {
+    try {
+      const negotiation = await db.one('SELECT * FROM negotiations WHERE id=$1', [req.params.id]);
+      const decision = String(req.body?.decision || '').trim().toLowerCase();
+      if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
+      if (negotiation.owner_id !== req.user.id) return res.status(403).json({ error: 'Only the seller can decide this proposal' });
+      if (negotiation.proposal_status !== 'pending') return res.status(400).json({ error: 'There is no pending proposal to decide' });
+      if (!['accepted', 'rejected'].includes(decision)) return res.status(400).json({ error: 'Decision must be accepted or rejected' });
+      const updated = await db.one('UPDATE negotiations SET proposal_status=$1,updated_at=now() WHERE id=$2 RETURNING *', [decision, negotiation.id]);
+      return res.json({ proposal: { negotiationId: updated.id, status: updated.proposal_status, amountCents: updated.proposal_amount_cents, method: updated.proposal_method, createdAt: updated.proposal_created_at } });
+    } catch (error) { return next(error); }
+  });
+  app.get('/api/negotiations/:id/payment', authenticate, async (req, res, next) => {
+    try {
+      const negotiation = await db.one('SELECT * FROM negotiations WHERE id=$1', [req.params.id]);
+      if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
+      if (![negotiation.owner_id, negotiation.interested_id].includes(req.user.id)) return res.status(403).json({ error: 'Payment access denied' });
+      const payment = await db.one('SELECT * FROM payments WHERE negotiation_id=$1 ORDER BY created_at DESC LIMIT 1', [negotiation.id]);
+      return res.json({ payment: payment ? paymentView(payment) : null });
+    } catch (error) { return next(error); }
+  });
+  app.post('/api/negotiations/:id/payment', authenticate, async (req, res, next) => {
+    try {
+      const negotiation = await db.one('SELECT * FROM negotiations WHERE id=$1', [req.params.id]);
+      const amountCents = Number(req.body?.amountCents);
+      const currency = String(req.body?.currency || 'BRL').trim().toUpperCase();
+      const method = String(req.body?.method || '').trim().toLowerCase();
+      const idempotencyKey = String(req.body?.idempotencyKey || '').trim();
+      const simulateFailure = req.body?.simulateFailure === true;
+      if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
+      if (negotiation.interested_id !== req.user.id) return res.status(403).json({ error: 'Only the interested user can make this payment' });
+      if (negotiation.status !== 'reserved') return res.status(400).json({ error: 'The negotiation must be reserved before payment' });
+      if (!Number.isSafeInteger(amountCents) || amountCents < 100 || amountCents > 100000000 || currency !== 'BRL' || !['pix', 'card', 'boleto'].includes(method)) return res.status(400).json({ error: 'Use a valid BRL amount and pix, card or boleto' });
+      if (!/^[A-Za-z0-9._:-]{16,128}$/.test(idempotencyKey)) return res.status(400).json({ error: 'A valid idempotency key is required' });
+      const existing = await db.one('SELECT * FROM payments WHERE negotiation_id=$1 AND idempotency_key=$2', [negotiation.id, idempotencyKey]);
+      if (existing) return res.json({ payment: paymentView(existing), idempotentReplay: true });
+      if (await db.one("SELECT id FROM payments WHERE negotiation_id=$1 AND status='succeeded'", [negotiation.id])) return res.status(409).json({ error: 'This negotiation already has a successful payment' });
+      const now = new Date().toISOString();
+      const payment = { id: id('payment'), negotiation_id: negotiation.id, payer_id: negotiation.interested_id, payee_id: negotiation.owner_id, amount_cents: amountCents, currency, method, status: simulateFailure ? 'failed' : 'succeeded', idempotency_key: idempotencyKey, provider_reference: `sim_${crypto.randomUUID()}`, failure_code: simulateFailure ? 'SIMULATED_PROVIDER_DECLINE' : null, created_at: now, updated_at: now, paid_at: simulateFailure ? null : now, refunded_at: null };
+      await db.transaction(async (client) => {
+        await client.query('INSERT INTO payments (id,negotiation_id,payer_id,payee_id,amount_cents,currency,method,status,idempotency_key,provider_reference,failure_code,created_at,updated_at,paid_at,refunded_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)', Object.values(payment));
+        await client.query('INSERT INTO payment_audit_events (id,payment_id,from_status,to_status,reason,correlation_id,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)', [id('payment-audit'), payment.id, null, payment.status, simulateFailure ? 'simulated_provider_decline' : 'simulated_provider_approved', req.correlationId, now]);
+      });
+      return res.status(201).json({ payment: paymentView(payment), idempotentReplay: false });
     } catch (error) { return next(error); }
   });
   app.patch('/api/posts/:id/status', authenticate, async (req, res, next) => {
