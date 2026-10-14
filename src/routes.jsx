@@ -221,7 +221,7 @@ function LandingScreen({ onCreateAccount, onLogin, onAbout }) {
           <button type="button" className="landing-cycle landing-cycle-legacy" onClick={() => loadFeaturedPosts()} disabled={postsLoading} aria-label="Atualizar anúncios exibidos"><span className="material-symbols-outlined">sync</span></button>
           <article className="listing-card listing-card-two"><div className="listing-photo plant-photo"><span>Recebido</span></div><div className="listing-content"><small><i />Novo lar encontrado</small><h2>Monstera com Cachepot</h2><p>Planta viva · Vila Mariana, SP</p><footer>Adotado por Lucas T. <b>Com carinho</b></footer></div></article>
           <div className="landing-steps"><div><span className="material-symbols-outlined">add_box</span><strong>Publique</strong><small>o que não usa</small></div><div><span className="material-symbols-outlined">forum</span><strong>Converse</strong><small>com interessados</small></div><div><span className="material-symbols-outlined">group</span><strong>Transforme</strong><small>o descarte</small></div></div>
-          <div className="landing-conversion"><button onClick={onCreateAccount}>Criar minha conta <span className="material-symbols-outlined">arrow_forward</span></button></div>
+          <div className="landing-conversion"><button onClick={onCreateAccount}>Criar minha conta</button></div>
         </div>
       </section>
       <footer className="landing-footer"><p>© 2026 REUSA+. Economia sustentável feita por pessoas.</p><div><span>Termos de uso</span><span>Política de privacidade</span><span>Central de ajuda</span></div></footer>
