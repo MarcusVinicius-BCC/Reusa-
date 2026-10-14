@@ -419,7 +419,18 @@ function GoogleSignInButton({ label = 'Continuar com Google', iconOnly = false }
     window.location.assign('/api/auth/google?return_to=/login');
   }
 
-  return <div className={iconOnly ? 'google-auth google-auth-icon-only' : 'google-auth'}>{iconOnly ? null : <span>ou</span>}<button type="button" className={iconOnly ? 'google-auth-btn google-auth-icon' : 'google-auth-btn'} onClick={start} disabled={busy} aria-label={busy ? 'Abrindo Google' : label} title={label}><b aria-hidden="true">G</b>{iconOnly ? null : busy ? 'Abrindo Google...' : label}</button></div>;
+  return <div className={iconOnly ? 'google-auth google-auth-icon-only' : 'google-auth'}>{iconOnly ? null : <span>ou</span>}<button type="button" className={iconOnly ? 'google-auth-btn google-auth-icon' : 'google-auth-btn'} onClick={start} disabled={busy} aria-label={busy ? 'Abrindo Google' : label} title={label}><GoogleIcon />{iconOnly ? null : busy ? 'Abrindo Google...' : label}</button></div>;
+}
+
+function GoogleIcon() {
+  return (
+    <svg className="google-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+      <path fill="#4285F4" d="M21.35 12.27c0-.72-.06-1.42-.18-2.09H12v3.96h5.23a4.47 4.47 0 0 1-1.94 2.93v2.43h3.14c1.84-1.69 2.92-4.18 2.92-7.23Z" />
+      <path fill="#34A853" d="M12 21.71c2.63 0 4.84-.87 6.45-2.36l-3.14-2.43c-.87.58-1.98.92-3.31.92-2.54 0-4.69-1.72-5.46-4.03H3.3v2.51A9.75 9.75 0 0 0 12 21.71Z" />
+      <path fill="#FBBC05" d="M6.54 13.81a5.86 5.86 0 0 1 0-3.62V7.68H3.3a9.75 9.75 0 0 0 0 8.64l3.24-2.51Z" />
+      <path fill="#EA4335" d="M12 6.16c1.43 0 2.71.49 3.72 1.46l2.79-2.79C16.84 3.27 14.63 2.29 12 2.29a9.75 9.75 0 0 0-8.7 5.39l3.24 2.51C7.31 7.88 9.46 6.16 12 6.16Z" />
+    </svg>
+  );
 }
 
 function FeedScreen({ onNavigate }) {
