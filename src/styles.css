@@ -2126,3 +2126,17 @@ body { background: var(--app-night-deep); }
 .login-card .google-auth-icon-only { display: flex; justify-content: center; }
 .landing-account-actions .landing-login, .landing-account-actions .landing-start { border-color: transparent; background: var(--landing-action-background); color: var(--header-foreground); box-shadow: var(--landing-action-shadow); }
 .landing-account-actions .landing-login:hover, .landing-account-actions .landing-login:focus-visible, .landing-account-actions .landing-start:hover, .landing-account-actions .landing-start:focus-visible { border-color: transparent; background: var(--landing-action-background); color: var(--header-foreground); filter: brightness(1.08); }
+
+/* A navegação inferior acompanha sempre a largura da janela, inclusive em telas estreitas. */
+.screen-frame .bottom-nav, .feed-shell .bottom-nav {
+  left: 0;
+  right: 0;
+  bottom: 0;
+  width: 100%;
+  max-width: none;
+  min-height: 88px;
+  height: 88px;
+  padding-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
+  border-radius: 0;
+  transform: none;
+}
