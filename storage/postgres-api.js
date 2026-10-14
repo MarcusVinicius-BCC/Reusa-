@@ -307,16 +307,29 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       if (negotiation.status !== 'reserved') return res.status(400).json({ error: 'The negotiation must be reserved before payment' });
       if (!Number.isSafeInteger(amountCents) || amountCents < 100 || amountCents > 100000000 || currency !== 'BRL' || !['pix', 'card', 'boleto'].includes(method)) return res.status(400).json({ error: 'Use a valid BRL amount and pix, card or boleto' });
       if (!/^[A-Za-z0-9._:-]{16,128}$/.test(idempotencyKey)) return res.status(400).json({ error: 'A valid idempotency key is required' });
-      const existing = await db.one('SELECT * FROM payments WHERE negotiation_id=$1 AND idempotency_key=$2', [negotiation.id, idempotencyKey]);
-      if (existing) return res.json({ payment: paymentView(existing), idempotentReplay: true });
-      if (await db.one("SELECT id FROM payments WHERE negotiation_id=$1 AND status='succeeded'", [negotiation.id])) return res.status(409).json({ error: 'This negotiation already has a successful payment' });
-      const now = new Date().toISOString();
-      const payment = { id: id('payment'), negotiation_id: negotiation.id, payer_id: negotiation.interested_id, payee_id: negotiation.owner_id, amount_cents: amountCents, currency, method, status: simulateFailure ? 'failed' : 'succeeded', idempotency_key: idempotencyKey, provider_reference: `sim_${crypto.randomUUID()}`, failure_code: simulateFailure ? 'SIMULATED_PROVIDER_DECLINE' : null, created_at: now, updated_at: now, paid_at: simulateFailure ? null : now, refunded_at: null };
-      await db.transaction(async (client) => {
+      const result = await db.transaction(async (client) => {
+        const lockedNegotiation = (await client.query('SELECT * FROM negotiations WHERE id=$1 FOR UPDATE', [negotiation.id])).rows[0];
+        const existing = (await client.query('SELECT * FROM payments WHERE negotiation_id=$1 AND idempotency_key=$2', [lockedNegotiation.id, idempotencyKey])).rows[0];
+        if (existing) {
+          if (existing.amount_cents !== amountCents || existing.currency !== currency || existing.method !== method) {
+            throw Object.assign(new Error('The idempotency key was already used with different payment data'), { status: 409 });
+          }
+          return { payment: existing, idempotentReplay: true };
+        }
+        if (lockedNegotiation.proposal_status === 'accepted' &&
+            (lockedNegotiation.proposal_amount_cents !== amountCents || lockedNegotiation.proposal_method !== method)) {
+          throw Object.assign(new Error('Payment must use the accepted proposal amount and method'), { status: 400 });
+        }
+        if ((await client.query("SELECT id FROM payments WHERE negotiation_id=$1 AND status='succeeded'", [lockedNegotiation.id])).rowCount) {
+          throw Object.assign(new Error('This negotiation already has a successful payment'), { status: 409 });
+        }
+        const now = new Date().toISOString();
+        const payment = { id: id('payment'), negotiation_id: lockedNegotiation.id, payer_id: lockedNegotiation.interested_id, payee_id: lockedNegotiation.owner_id, amount_cents: amountCents, currency, method, status: simulateFailure ? 'failed' : 'succeeded', idempotency_key: idempotencyKey, provider_reference: `sim_${crypto.randomUUID()}`, failure_code: simulateFailure ? 'SIMULATED_PROVIDER_DECLINE' : null, created_at: now, updated_at: now, paid_at: simulateFailure ? null : now, refunded_at: null };
         await client.query('INSERT INTO payments (id,negotiation_id,payer_id,payee_id,amount_cents,currency,method,status,idempotency_key,provider_reference,failure_code,created_at,updated_at,paid_at,refunded_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)', Object.values(payment));
         await client.query('INSERT INTO payment_audit_events (id,payment_id,from_status,to_status,reason,correlation_id,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)', [id('payment-audit'), payment.id, null, payment.status, simulateFailure ? 'simulated_provider_decline' : 'simulated_provider_approved', req.correlationId, now]);
+        return { payment, idempotentReplay: false };
       });
-      return res.status(201).json({ payment: paymentView(payment), idempotentReplay: false });
+      return res.status(result.idempotentReplay ? 200 : 201).json({ payment: paymentView(result.payment), idempotentReplay: result.idempotentReplay });
     } catch (error) { return next(error); }
   });
   app.patch('/api/posts/:id/status', authenticate, async (req, res, next) => {

@@ -16,9 +16,11 @@ O ReUsa+ reúne anúncios, conversas, favoritos, perfil, inspirações de reapro
 - [Variáveis de ambiente](#variáveis-de-ambiente)
 - [Comandos disponíveis](#comandos-disponíveis)
 - [Banco de dados e serviços opcionais](#banco-de-dados-e-serviços-opcionais)
+- [API de pagamento gratuita](#api-de-pagamento-gratuita)
 - [Testes](#testes)
 - [Deploy na Railway](#deploy-na-railway)
 - [Estrutura do projeto](#estrutura-do-projeto)
+- [Guia para entender o sistema](#guia-para-entender-o-sistema)
 
 ## Tecnologias
 
@@ -61,6 +63,29 @@ npm start
 Abra [http://localhost:3000](http://localhost:3000) no navegador.
 
 A primeira execução cria os dados locais automaticamente na pasta `data/`. A aplicação funciona sem PostgreSQL, Redis, RabbitMQ ou chave de mapa.
+
+### API de pagamento gratuita
+
+O fluxo de pagamento do ReUsa+ é um provedor local simulado, sem conta externa,
+chave de API ou tarifa. Ele existe para validar o ciclo da negociação durante o
+desenvolvimento e pode usar SQLite local ou PostgreSQL:
+
+- `GET /api/negotiations/:id/payment` consulta o último pagamento da negociação;
+- `POST /api/negotiations/:id/payment` cria um pagamento em BRL com `pix`, `card`
+  ou `boleto`;
+- o corpo exige `amountCents` e uma `idempotencyKey` com 16 a 128 caracteres;
+- o retorno possui `providerReference` local (`sim_...`), auditoria e status
+  `succeeded` ou `failed`.
+
+O pagamento só pode ser criado pelo interessado depois da reserva. Se houver uma
+proposta aceita, o valor e o método precisam ser exatamente os da proposta.
+Repetir a mesma requisição com a mesma chave é seguro; reutilizar a chave com
+outros dados retorna `409 Conflict`. Para testar a recusa controlada, use
+`"simulateFailure": true`.
+
+Esse fluxo não movimenta dinheiro real. Para produção financeira, substitua o
+adaptador simulado por um provedor regulado e implemente a confirmação por
+webhook antes de liberar qualquer produto ou valor.
 
 ### Desenvolvimento com atualização da interface
 
@@ -200,3 +225,11 @@ backend.js      # API Express e servidor da aplicação
 ## Entrega acadêmica
 
 Para entregar o projeto em outro repositório, envie os arquivos versionados e execute `npm install`, `npm run build` e `npm start` após o clone. Não inclua `node_modules/`, `.env`, `dist/`, `data/`, `uploads/` ou pastas `data-local-*`.
+
+## Guia para entender o sistema
+
+Se voce precisa explicar a arquitetura do projeto, veja:
+
+- [`docs/ENTENDA-O-SISTEMA.md`](docs/ENTENDA-O-SISTEMA.md): mapa das pastas e explicacao geral.
+- [`docs/FLUXO-TELA-API-BANCO.md`](docs/FLUXO-TELA-API-BANCO.md): fluxo de dados entre tela, API e banco.
+- [`docs/GUIA-PARA-EXPLICAR.md`](docs/GUIA-PARA-EXPLICAR.md): respostas curtas para apresentar ao professor.

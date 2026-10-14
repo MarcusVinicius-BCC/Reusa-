@@ -663,11 +663,6 @@ function seedDatabase() {
       created_at TEXT
     );
   `);
-  ensureColumn('negotiations', 'proposal_status', "TEXT NOT NULL DEFAULT 'none'");
-  ensureColumn('negotiations', 'proposal_amount_cents', 'INTEGER');
-  ensureColumn('negotiations', 'proposal_method', "TEXT");
-  ensureColumn('negotiations', 'proposal_created_at', 'TEXT');
-
   const userColumns = new Set(all('PRAGMA table_info(users)').map((column) => column.name));
   ['neighborhood', 'cep', 'address', 'account_type', 'business_name', 'cnpj'].forEach((column) => {
     if (!userColumns.has(column)) {
@@ -830,6 +825,10 @@ function seedDatabase() {
       FOREIGN KEY(interested_id) REFERENCES users(id)
     );
   `);
+  ensureColumn('negotiations', 'proposal_status', "TEXT NOT NULL DEFAULT 'none'");
+  ensureColumn('negotiations', 'proposal_amount_cents', 'INTEGER');
+  ensureColumn('negotiations', 'proposal_method', "TEXT");
+  ensureColumn('negotiations', 'proposal_created_at', 'TEXT');
 
   run(`
     CREATE TABLE IF NOT EXISTS payments (
@@ -1615,7 +1614,7 @@ async function start() {
 
     run(
       `INSERT INTO users (id, name, email, password_hash, city, neighborhood, cep, address, account_type, business_name, cnpj, interests_json, avatar, rating, donations, received, carbon_saved_percent, achievements_json, email_verified, email_verification_token_hash, email_verification_expires_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)` ,
       [
         user.id,
         user.name,
@@ -1926,12 +1925,21 @@ async function start() {
     if (currency !== 'BRL' || !['pix', 'card', 'boleto'].includes(method)) return res.status(400).json({ error: 'Use BRL and pix, card or boleto' });
     if (!/^[A-Za-z0-9._:-]{16,128}$/.test(idempotencyKey)) return res.status(400).json({ error: 'A valid idempotency key is required' });
     const existing = get('SELECT * FROM payments WHERE negotiation_id = ? AND idempotency_key = ?', [negotiation.id, idempotencyKey]);
-    if (existing) return res.status(200).json({ payment: {
-      id: existing.id, negotiationId: existing.negotiation_id, payerId: existing.payer_id, payeeId: existing.payee_id,
-      amountCents: existing.amount_cents, currency: existing.currency, method: existing.method, status: existing.status,
-      providerReference: existing.provider_reference, failureCode: existing.failure_code, createdAt: existing.created_at,
-      updatedAt: existing.updated_at, paidAt: existing.paid_at
-    }, idempotentReplay: true });
+    if (existing) {
+      if (existing.amount_cents !== amountCents || existing.currency !== currency || existing.method !== method) {
+        return res.status(409).json({ error: 'The idempotency key was already used with different payment data' });
+      }
+      return res.status(200).json({ payment: {
+        id: existing.id, negotiationId: existing.negotiation_id, payerId: existing.payer_id, payeeId: existing.payee_id,
+        amountCents: existing.amount_cents, currency: existing.currency, method: existing.method, status: existing.status,
+        providerReference: existing.provider_reference, failureCode: existing.failure_code, createdAt: existing.created_at,
+        updatedAt: existing.updated_at, paidAt: existing.paid_at
+      }, idempotentReplay: true });
+    }
+    if (negotiation.proposal_status === 'accepted' &&
+        (negotiation.proposal_amount_cents !== amountCents || negotiation.proposal_method !== method)) {
+      return res.status(400).json({ error: 'Payment must use the accepted proposal amount and method' });
+    }
     if (get("SELECT id FROM payments WHERE negotiation_id = ? AND status = 'succeeded'", [negotiation.id])) return res.status(409).json({ error: 'This negotiation already has a successful payment' });
 
     const now = new Date().toISOString();
