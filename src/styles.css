@@ -241,6 +241,9 @@ img { display: block; max-width: 100%; }
 .community-action small { color: var(--text-variant); line-height: 1.3; }
 .community-action > span:last-child { color: var(--text-variant); }
 .community-action-ai { background: linear-gradient(135deg, #e4f8ed, #fff); }
+.saved-filter-pill { display: inline-flex; align-items: center; gap: 5px; }
+.saved-filter-pill .material-symbols-outlined { font-size: 17px; }
+.saved-filter-pill b { min-width: 17px; padding: 2px 5px; border-radius: 999px; background: var(--secondary-container); color: var(--on-secondary-container); font-size: 10px; line-height: 1; }
 .card, .composer-card, .impact-card, .mini-post, .thread-card, .map-card, .hero-card { background: var(--surface-lowest); border: 1px solid rgba(214,225,246,0.9); }
 .post-card { border-radius: 20px; box-shadow: var(--shadow); overflow: hidden; }
 .post-head, .post-actions, .map-card-head, .map-card-body, .chat-banner { display: flex; align-items: center; gap: 12px; }

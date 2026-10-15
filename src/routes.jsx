@@ -465,9 +465,11 @@ function GoogleIcon() {
 
 function FeedScreen({ onNavigate }) {
   const posts = useAppStore((state) => state.posts);
+  const favorites = useAppStore((state) => state.favorites);
   const search = useAppStore((state) => state.search);
   const setSearch = useAppStore((state) => state.setSearch);
   const loadFeed = useAppStore((state) => state.loadFeed);
+  const loadFavorites = useAppStore((state) => state.loadFavorites);
   const loadNotifications = useAppStore((state) => state.loadNotifications);
   const session = useAppStore((state) => state.session);
   const [category, setCategory] = useState('Todos');
@@ -475,17 +477,19 @@ function FeedScreen({ onNavigate }) {
   const [searchOpen, setSearchOpen] = useState(false);
   const [headerHidden, setHeaderHidden] = useState(false);
   const notifiedIds = useRef(new Set(JSON.parse(window.localStorage.getItem('reusa_browser_notifications') || '[]')));
+  const feedPosts = category === 'Salvos' ? favorites : posts;
   const filteredPosts = useMemo(() => {
     const query = search.trim().toLowerCase();
-    return posts.filter((post) => {
-      const matchesCategory = category === 'Todos' || post.category.toLowerCase() === category.toLowerCase();
+    return feedPosts.filter((post) => {
+      const matchesCategory = category === 'Todos' || category === 'Salvos' || String(post.category || '').toLowerCase() === category.toLowerCase();
       const matchesSearch = !query || [post.title, post.description, post.category, post.author?.name].some((value) => String(value || '').toLowerCase().includes(query));
       return matchesCategory && matchesSearch;
-    });
-  }, [posts, search, category]);
+    }).filter(Boolean);
+  }, [feedPosts, search, category]);
 
   useEffect(() => {
     loadFeed().catch(() => {});
+    if (session) loadFavorites().catch(() => {});
     const syncNotifications = () => loadNotifications().then((items) => {
       if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
       const unseen = items.filter((item) => !item.readAt && !notifiedIds.current.has(item.id)).slice(0, 3);
@@ -498,7 +502,7 @@ function FeedScreen({ onNavigate }) {
     syncNotifications();
     const timer = window.setInterval(syncNotifications, 15000);
     return () => window.clearInterval(timer);
-  }, [loadFeed, loadNotifications]);
+  }, [loadFeed, loadFavorites, loadNotifications, session]);
 
   useEffect(() => {
     let previousScroll = window.scrollY;
@@ -524,10 +528,10 @@ function FeedScreen({ onNavigate }) {
         {searchOpen ? <label className="searchbar feed-search-expanded"><span className="material-symbols-outlined">search</span><input value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') setSearchOpen(false); }} placeholder="Buscar anúncios" autoFocus /><button type="button" className={categoriesOpen ? 'category-trigger category-trigger-active' : 'category-trigger'} onClick={toggleCategories} aria-expanded={categoriesOpen} aria-label="Escolher categoria"><span className="material-symbols-outlined">category</span></button><button type="button" className="feed-search-close" onClick={() => setSearchOpen(false)} aria-label="Fechar busca"><span className="material-symbols-outlined">close</span></button></label> : <div className="feed-search-tools"><button type="button" className="icon-btn feed-search-trigger" onClick={() => setSearchOpen(true)} aria-label="Abrir busca"><span className="material-symbols-outlined">search</span></button><button type="button" className={categoriesOpen ? 'category-trigger category-trigger-active' : 'category-trigger'} onClick={toggleCategories} aria-expanded={categoriesOpen} aria-label="Escolher categoria"><span className="material-symbols-outlined">category</span></button></div>}
         <div className="topbar-actions"><HeaderProfileButton /></div>
       </header>
-      <div className="feed-category-popover">{categoriesOpen ? <CategoryBar selected={category} onChange={(value) => { setCategory(value); setCategoriesOpen(false); }} /> : null}</div>
+      <div className="feed-category-popover">{categoriesOpen ? <CategoryBar selected={category} onChange={(value) => { setCategory(value); setCategoriesOpen(false); }} showSaved={Boolean(session)} savedCount={favorites.length} /> : null}</div>
       <main className="feed-page">
         <div className="feed-list">
-          {filteredPosts.length ? filteredPosts.map((post) => <FeedCard key={post.id} post={post} onNavigate={onNavigate} onOpenChat={async () => { try { const thread = await useAppStore.getState().createThread(post.id); onNavigate(`/mensagens/ana?thread=${thread.id}`); } catch (error) { alert(error.message); } }} onOpenPayment={async () => useAppStore.getState().createThread(post.id)} />) : <div className="empty-state"><span className="material-symbols-outlined">search_off</span><h2>Nada encontrado</h2><p>Tente outra busca ou categoria.</p></div>}
+          {filteredPosts.length ? filteredPosts.map((post) => <FeedCard key={post.id} post={post} onNavigate={onNavigate} onOpenChat={async () => { try { const thread = await useAppStore.getState().createThread(post.id); onNavigate(`/mensagens/ana?thread=${thread.id}`); } catch (error) { alert(error.message); } }} onOpenPayment={async () => useAppStore.getState().createThread(post.id)} />) : <div className="empty-state"><span className="material-symbols-outlined">{category === 'Salvos' ? 'bookmark_border' : 'search_off'}</span><h2>{category === 'Salvos' ? 'Nenhum item salvo' : 'Nada encontrado'}</h2><p>{category === 'Salvos' ? 'Toque no marcador de um anúncio para encontrá-lo aqui.' : 'Tente outra busca ou categoria.'}</p></div>}
         </div>
       </main>
     </Shell>
@@ -624,9 +628,9 @@ function AiIdeasScreen({ onBack }) {
   return <div className="ai-page"><UnifiedTopbar onBack={onBack} /><main className="ai-content"><div className="ai-hero"><span className="ai-icon material-symbols-outlined">auto_awesome</span><span className="eyebrow">Assistente de reaproveitamento</span><h2>O que você quer reaproveitar?</h2><p>Conte sobre os materiais e a Ana sugere uma ideia prática e segura.</p></div><form className="ai-form" onSubmit={ask}><textarea value={prompt} onChange={(event) => setPrompt(event.target.value)} placeholder="Material disponível: ex. garrafas de vidro" rows={3} /><div className="ai-preferences"><input value={quantity} onChange={(event) => setQuantity(event.target.value)} placeholder="Quantidade aproximada" /><input value={objective} onChange={(event) => setObjective(event.target.value)} placeholder="Objetivo (decorar, organizar...)" /><select value={difficulty} onChange={(event) => setDifficulty(event.target.value)}><option>Fácil</option><option>Média</option><option>Avançada</option></select></div><button className="primary-btn full" disabled={busy}>{busy ? 'Pensando...' : 'Gerar ideia'}<span className="material-symbols-outlined">arrow_forward</span></button></form>{result ? <section className="ai-result"><span className="eyebrow">Sugestão da Ana · {result.difficulty}</span><h2>{result.title}</h2><p>{result.reuse || result.summary}</p><div className="ai-facts"><div><strong>Tempo</strong><span>{result.time}</span></div><div><strong>Materiais</strong><span>{result.materials.join(', ')}</span></div></div><h3>Como poderia ser reaproveitado</h3><ol>{result.steps.map((step) => <li key={step}>{step}</li>)}</ol><div className="ai-care"><span className="material-symbols-outlined">health_and_safety</span><span>{result.care}</span></div><button className="secondary-btn full" onClick={publishInspiration}><span className="material-symbols-outlined">storefront</span>Publicar como inspiração</button></section> : <div className="ai-prompts"><span>Tente perguntar:</span><button onClick={() => setPrompt('garrafas de vidro')}>garrafas de vidro</button><button onClick={() => setPrompt('madeira e pallet')}>madeira e pallet</button><button onClick={() => setPrompt('latas de alumínio')}>latas</button></div>}</main></div>;
 }
 
-function CategoryBar({ selected, onChange }) {
+function CategoryBar({ selected, onChange, showSaved = false, savedCount = 0 }) {
   const items = ['Todos', 'Eletrônicos', 'Roupas', 'Móveis', 'Livros', 'Plástico'];
-  return <section className="category-panel feed-category-panel" aria-label="Categorias de anúncios">{items.map((item) => <button key={item} onClick={() => onChange(item)} className={selected === item ? 'pill pill-active' : 'pill'}>{item}</button>)}</section>;
+  return <section className="category-panel feed-category-panel" aria-label="Categorias de anúncios">{items.map((item) => <button key={item} onClick={() => onChange(item)} className={selected === item ? 'pill pill-active' : 'pill'}>{item}</button>)}{showSaved ? <button onClick={() => onChange('Salvos')} className={selected === 'Salvos' ? 'pill pill-active saved-filter-pill' : 'pill saved-filter-pill'}><span className="material-symbols-outlined">bookmark</span>Salvos{savedCount ? <b>{savedCount}</b> : null}</button> : null}</section>;
 }
 
 function FeedCard({ post, onNavigate, onOpenChat, onOpenPayment }) {
