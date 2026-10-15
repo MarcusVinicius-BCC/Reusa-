@@ -18,7 +18,8 @@ function buildCollectionPointAddress(input = {}) {
   const fallback = text(input.location, 240);
   const streetLine = [street, number].filter(Boolean).join(', ');
   const cityLine = [city, state].filter(Boolean).join(' - ');
-  const location = [streetLine, neighborhood, cityLine, cep ? `${cep.slice(0, 5)}-${cep.slice(5)}` : '', 'Brasil'].filter(Boolean).join(', ') || fallback;
+  const addressParts = [streetLine, neighborhood, cityLine, cep ? `${cep.slice(0, 5)}-${cep.slice(5)}` : ''].filter(Boolean);
+  const location = addressParts.length ? [...addressParts, 'Brasil'].join(', ') : fallback;
   return { street, number, neighborhood, city, state, postalCode: cep, location };
 }
 

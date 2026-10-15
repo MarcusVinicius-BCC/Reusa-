@@ -154,6 +154,31 @@ test('CNPJ lookup rejects malformed identifiers before contacting the external s
   assert.equal(lookup.response.status, 400);
 });
 
+test('administrator can save collection point edits from the form', async () => {
+  const login = await request('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'mariana@reusa.com', password: '12345678' })
+  });
+  assert.equal(login.response.status, 200);
+
+  const update = await request('/api/admin/collection-points/point-1', {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${login.payload.token}` },
+    body: JSON.stringify({
+      name: 'EcoCentro Santarém',
+      location: 'Centro, Santarém - PA',
+      categories: ['Eletrônicos', 'plástico', 'metal'],
+      hours: '08:00 – 18:00'
+    })
+  });
+
+  assert.equal(update.response.status, 200);
+  assert.equal(update.payload.point.location, 'Centro, Santarém - PA');
+  assert.equal(update.payload.point.hours, '08:00 – 18:00');
+  assert.deepEqual(update.payload.point.categories, ['Eletrônicos', 'plástico', 'metal']);
+});
+
 test('map route validates coordinates and returns a sanitized cached route', async () => {
   routingRequests = 0;
   const invalid = await request('/api/map-route?fromLat=91&fromLng=-54.7&toLat=-2.44&toLng=-54.6');

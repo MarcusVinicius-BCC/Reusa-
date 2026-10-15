@@ -2696,20 +2696,27 @@ async function start() {
     }
   });
 
-  app.patch('/api/admin/collection-points/:id', authMiddleware, adminMiddleware, (req, res) => {
+  app.patch('/api/admin/collection-points/:id', authMiddleware, adminMiddleware, async (req, res, next) => {
     const current = get('SELECT * FROM collection_points WHERE id = ?', [req.params.id]);
     if (!current) return res.status(404).json({ error: 'Collection point not found' });
-    const name = String(req.body?.name ?? current.name).trim();
-    const location = String(req.body?.location ?? current.location).trim();
-    const hours = String(req.body?.hours ?? current.hours).trim();
-    const categories = Array.isArray(req.body?.categories) ? req.body.categories.map((item) => String(item).trim()).filter(Boolean).slice(0, 30) : jsonArray(current.categories_json);
+    const body = req.body || {};
+    const name = String(body.name ?? current.name).trim();
+    const address = buildCollectionPointAddress({ ...body, location: body.location ?? current.location });
+    const location = address.location;
+    const hours = String(body.hours ?? current.hours).trim();
+    const categories = Array.isArray(body.categories) ? body.categories.map((item) => String(item).trim()).filter(Boolean).slice(0, 30) : jsonArray(current.categories_json);
     if (!name || !location || name.length > 160 || location.length > 240 || hours.length > 160) return res.status(400).json({ error: 'Name and location are required' });
-    const latitude = req.body?.latitude === undefined ? current.latitude : Number.isFinite(Number(req.body.latitude)) ? Number(req.body.latitude) : null;
-    const longitude = req.body?.longitude === undefined ? current.longitude : Number.isFinite(Number(req.body.longitude)) ? Number(req.body.longitude) : null;
-    const updatedAt = new Date().toISOString();
-    run('UPDATE collection_points SET name = ?, categories_json = ?, hours = ?, location = ?, status = ?, origin = ?, last_updated = ?, latitude = ?, longitude = ? WHERE id = ?', [name, JSON.stringify(categories), hours, location, String(req.body?.status ?? current.status).trim(), String(req.body?.origin ?? current.origin).trim(), updatedAt, latitude, longitude, current.id]);
-    persistDb();
-    return res.json({ point: { id: current.id, name, categories, hours, location, status: String(req.body?.status ?? current.status).trim(), origin: String(req.body?.origin ?? current.origin).trim(), lastUpdated: updatedAt, latitude, longitude } });
+    try {
+      const geocoded = await geocodeCollectionPoint(address);
+      const latitude = body.latitude === undefined ? geocoded?.latitude ?? current.latitude : Number.isFinite(Number(body.latitude)) ? Number(body.latitude) : null;
+      const longitude = body.longitude === undefined ? geocoded?.longitude ?? current.longitude : Number.isFinite(Number(body.longitude)) ? Number(body.longitude) : null;
+      const updatedAt = new Date().toISOString();
+      run('UPDATE collection_points SET name = ?, categories_json = ?, hours = ?, location = ?, status = ?, origin = ?, last_updated = ?, latitude = ?, longitude = ? WHERE id = ?', [name, JSON.stringify(categories), hours, location, String(body.status ?? current.status).trim(), String(body.origin ?? current.origin).trim(), updatedAt, latitude, longitude, current.id]);
+      persistDb();
+      return res.json({ point: { id: current.id, name, categories, hours, location, status: String(body.status ?? current.status).trim(), origin: String(body.origin ?? current.origin).trim(), lastUpdated: updatedAt, latitude, longitude } });
+    } catch (error) {
+      return next(error);
+    }
   });
 
   app.delete('/api/admin/collection-points/:id', authMiddleware, adminMiddleware, (req, res) => {

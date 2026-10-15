@@ -1482,9 +1482,52 @@ function MapScreen({ onSuggest }) {
   );
 }
 
-const emptyCollectionPointForm = () => ({ name: '', postalCode: '', street: '', number: '', neighborhood: '', city: '', state: '', hours: '', categories: '' });
+const emptyCollectionPointForm = () => ({ name: '', postalCode: '', street: '', number: '', neighborhood: '', city: '', state: '', location: '', hours: '', categories: '' });
 
-function CollectionPointFormFields({ form, setForm, cepBusy, setCepBusy }) {
+function collectionPointFormFromPoint(point) {
+  const form = emptyCollectionPointForm();
+  if (!point) return form;
+
+  form.name = String(point.name || '');
+  form.location = String(point.location || '').trim();
+  form.hours = String(point.hours || '');
+  form.categories = Array.isArray(point.categories) ? point.categories.join(', ') : String(point.categories || '');
+
+  const originalParts = form.location.split(',').map((part) => part.trim()).filter(Boolean);
+  const postalCode = originalParts.find((part) => /^\d{5}-?\d{3}$/.test(part));
+  if (postalCode) form.postalCode = postalCode.replace(/\D/g, '');
+  const parts = originalParts.filter((part) => !/^brasil$/i.test(part) && part !== postalCode);
+  let cityStateIndex = -1;
+  for (let index = parts.length - 1; index >= 0; index -= 1) {
+    if (/\s-\s/.test(parts[index])) {
+      cityStateIndex = index;
+      break;
+    }
+  }
+
+  if (cityStateIndex >= 0) {
+    const [city, ...state] = parts[cityStateIndex].split(/\s-\s/);
+    form.city = city || '';
+    form.state = state.join(' - ');
+    const addressParts = parts.slice(0, cityStateIndex);
+    if (addressParts.length) {
+      form.neighborhood = addressParts.at(-1) || '';
+      const streetParts = addressParts.slice(0, -1);
+      const candidateNumber = streetParts.at(-1) || '';
+      if (/^(?:\d+[\w/-]*|s\/n)$/i.test(candidateNumber)) form.number = streetParts.pop() || '';
+      form.street = streetParts.join(', ');
+    }
+  } else if (parts.length >= 2) {
+    form.city = parts.at(-2) || '';
+    form.state = parts.at(-1) || '';
+  } else {
+    form.city = parts[0] || '';
+  }
+
+  return form;
+}
+
+function CollectionPointFormFields({ form, setForm, cepBusy, setCepBusy, editing = false }) {
   const cepRequest = useRef(0);
   const addressPreview = [form.street, form.neighborhood, [form.city, form.state].filter(Boolean).join(' - ')].filter(Boolean).join(' · ');
 
@@ -1520,31 +1563,52 @@ function CollectionPointFormFields({ form, setForm, cepBusy, setCepBusy }) {
     }
   }
 
-  return <><Field label="Nome do local" icon="location_city" value={form.name} onChange={(value) => setForm((current) => ({ ...current, name: value }))} placeholder="Ex: Cooperativa do bairro" /><Field label={cepBusy ? 'Consultando CEP...' : 'CEP (opcional)'} icon="markunread_mailbox" value={form.postalCode} onChange={lookupCep} placeholder="00000-000" />{cepBusy || addressPreview ? <div className="address-preview" role="status"><span className="material-symbols-outlined">{cepBusy ? 'progress_activity' : 'location_on'}</span><span>{cepBusy ? 'Preenchendo o endereço...' : addressPreview}</span></div> : null}<div className="point-address-grid"><Field label="Rua" icon="signpost" value={form.street} onChange={(value) => setForm((current) => ({ ...current, street: value }))} placeholder="Ex: Rua dos Tapajós" /><Field label="Número" icon="pin" value={form.number} onChange={(value) => setForm((current) => ({ ...current, number: value }))} placeholder="Ex: 150" /><Field label="Bairro" icon="location_city" value={form.neighborhood} onChange={(value) => setForm((current) => ({ ...current, neighborhood: value }))} placeholder="Ex: Centro" /><Field label="Cidade" icon="location_on" value={form.city} onChange={(value) => setForm((current) => ({ ...current, city: value }))} placeholder="Ex: Santarém" /><Field label="Estado" icon="map" value={form.state} onChange={(value) => setForm((current) => ({ ...current, state: value }))} placeholder="Ex: PA" /></div><Field label="Materiais aceitos" icon="recycling" value={form.categories} onChange={(value) => setForm((current) => ({ ...current, categories: value }))} placeholder="Ex: papel, plástico, eletrônicos" /><Field label="Horário (opcional)" icon="schedule" value={form.hours} onChange={(value) => setForm((current) => ({ ...current, hours: value }))} placeholder="Ex: segunda a sexta, 8h às 17h" /></>;
+  return <>
+    <Field label="Nome do local" icon="location_city" value={form.name} onChange={(value) => setForm((current) => ({ ...current, name: value }))} placeholder="Ex: Cooperativa do bairro" />
+    {editing ? <><div className="point-location-help"><span className="material-symbols-outlined">info</span><span>Confira a localização atual ou use o CEP e os campos abaixo para atualizá-la.</span></div><Field label="Localização pública atual" icon="location_on" value={form.location} onChange={(value) => setForm((current) => ({ ...current, location: value, postalCode: '', street: '', number: '', neighborhood: '', city: '', state: '' }))} placeholder="Ex: Centro, Santarém - PA" /></> : null}
+    <Field label={cepBusy ? 'Consultando CEP...' : 'CEP (opcional)'} icon="markunread_mailbox" value={form.postalCode} onChange={lookupCep} placeholder="00000-000" />
+    {cepBusy || addressPreview ? <div className="address-preview" role="status"><span className="material-symbols-outlined">{cepBusy ? 'progress_activity' : 'location_on'}</span><span>{cepBusy ? 'Preenchendo o endereço...' : addressPreview}</span></div> : null}
+    <div className="point-address-grid">
+      <Field label="Rua" icon="signpost" value={form.street} onChange={(value) => setForm((current) => ({ ...current, street: value }))} placeholder="Ex: Rua dos Tapajós" />
+      <Field label="Número" icon="pin" value={form.number} onChange={(value) => setForm((current) => ({ ...current, number: value }))} placeholder="Ex: 150" />
+      <Field label="Bairro" icon="location_city" value={form.neighborhood} onChange={(value) => setForm((current) => ({ ...current, neighborhood: value }))} placeholder="Ex: Centro" />
+      <Field label="Cidade" icon="location_on" value={form.city} onChange={(value) => setForm((current) => ({ ...current, city: value }))} placeholder="Ex: Santarém" />
+      <Field label="Estado" icon="map" value={form.state} onChange={(value) => setForm((current) => ({ ...current, state: value }))} placeholder="Ex: PA" />
+    </div>
+    <Field label="Materiais aceitos" icon="recycling" value={form.categories} onChange={(value) => setForm((current) => ({ ...current, categories: value }))} placeholder="Ex: papel, plástico, eletrônicos" />
+    <Field label="Horário (opcional)" icon="schedule" value={form.hours} onChange={(value) => setForm((current) => ({ ...current, hours: value }))} placeholder="Ex: segunda a sexta, 8h às 17h" />
+  </>;
 }
 
-function CollectionPointFormScreen({ onBack, admin = false, onSuccess }) {
-  const [form, setForm] = useState(emptyCollectionPointForm);
+function CollectionPointFormScreen({ onBack, admin = false, onSuccess, point = null }) {
+  const editing = admin && Boolean(point);
+  const [form, setForm] = useState(() => editing ? collectionPointFormFromPoint(point) : emptyCollectionPointForm());
   const [busy, setBusy] = useState(false);
   const [cepBusy, setCepBusy] = useState(false);
-  const heading = admin ? 'Cadastrar ponto de coleta' : 'Conhece um ponto de coleta?';
-  const description = admin ? 'Cadastre um local verificado. Informe o CEP para preencher o endereço automaticamente.' : 'Informe um endereço público. Buscamos as coordenadas automaticamente e a equipe verifica antes de publicar.';
-  const actionLabel = admin ? 'Cadastrar ponto' : 'Enviar sugestão';
+  const heading = editing ? 'Editar ponto de coleta' : admin ? 'Cadastrar ponto de coleta' : 'Conhece um ponto de coleta?';
+  const description = editing ? 'Atualize as informações do local. O CEP preenche os dados de endereço automaticamente.' : admin ? 'Cadastre um local verificado. Informe o CEP para preencher o endereço automaticamente.' : 'Informe um endereço público. Buscamos as coordenadas automaticamente e a equipe verifica antes de publicar.';
+  const actionLabel = editing ? 'Salvar alterações' : admin ? 'Cadastrar ponto' : 'Enviar sugestão';
+
+  useEffect(() => {
+    setForm(editing ? collectionPointFormFromPoint(point) : emptyCollectionPointForm());
+    setCepBusy(false);
+  }, [editing, point?.id]);
 
   async function submit(event) {
     event.preventDefault();
     setBusy(true);
     try {
       const payload = { ...form, categories: form.categories.split(',').map((item) => item.trim()).filter(Boolean) };
-      if (admin) await api.createAdminCollectionPoint(payload);
+      if (editing) await api.updateAdminCollectionPoint(point.id, payload);
+      else if (admin) await api.createAdminCollectionPoint(payload);
       else await api.suggestCollectionPoint(payload);
-      alert(admin ? 'Ponto de coleta cadastrado e disponível no mapa.' : 'Sugestão enviada. Ela ficará disponível após aprovação da equipe.');
+      alert(editing ? 'Ponto de coleta atualizado.' : admin ? 'Ponto de coleta cadastrado e disponível no mapa.' : 'Sugestão enviada. Ela ficará disponível após aprovação da equipe.');
       if (onSuccess) await onSuccess();
       else onBack();
     } catch (error) { alert(error.message); } finally { setBusy(false); }
   }
 
-  return <div className={admin ? 'admin-screen' : 'subpage'}><UnifiedTopbar onBack={onBack} /><main className="page suggestion-page"><section className="composer-card"><span className="eyebrow">{admin ? 'Administração' : 'Mapa colaborativo'}</span><h2>{heading}</h2><p>{description}</p><form className="composer-form" onSubmit={submit}><CollectionPointFormFields form={form} setForm={setForm} cepBusy={cepBusy} setCepBusy={setCepBusy} /><button className="primary-btn full" disabled={busy || cepBusy}>{busy ? (admin ? 'Cadastrando ponto...' : 'Enviando sugestão...') : cepBusy ? 'Consultando CEP...' : actionLabel}<span className="material-symbols-outlined">send</span></button></form></section></main></div>;
+  return <div className={admin ? 'admin-screen' : 'subpage'}><UnifiedTopbar onBack={onBack} /><main className="page suggestion-page"><section className={`composer-card collection-point-form-card${editing ? ' is-editing' : ''}`}><span className="eyebrow">{admin ? 'Administração' : 'Mapa colaborativo'}</span><h2>{heading}</h2><p>{description}</p>{editing ? <div className="point-editor-status"><span className="material-symbols-outlined">edit_location_alt</span><span><strong>{point.name}</strong><small>Revise os dados e salve quando terminar.</small></span></div> : null}<form className="composer-form" onSubmit={submit}><CollectionPointFormFields form={form} setForm={setForm} cepBusy={cepBusy} setCepBusy={setCepBusy} editing={editing} /><div className={`collection-point-form-actions${editing ? ' is-editing' : ''}`}>{editing ? <button className="ghost-btn" type="button" onClick={onBack} disabled={busy || cepBusy}><span className="material-symbols-outlined">close</span>Cancelar</button> : null}<button className={`primary-btn${editing ? '' : ' full'}`} type="submit" disabled={busy || cepBusy}>{busy ? (editing ? 'Salvando alterações...' : admin ? 'Cadastrando ponto...' : 'Enviando sugestão...') : cepBusy ? 'Consultando CEP...' : actionLabel}<span className="material-symbols-outlined">{editing ? 'save' : 'send'}</span></button></div></form></section></main></div>;
 }
 
 function SuggestCollectionPointScreen({ onBack }) {
@@ -1691,7 +1755,7 @@ function AdminScreen({ onBack }) {
   const [reports, setReports] = useState([]);
   const [points, setPoints] = useState({ points: [], suggestions: [] });
   const [busy, setBusy] = useState(true);
-  const [pointFormOpen, setPointFormOpen] = useState(false);
+  const [pointEditor, setPointEditor] = useState(null);
 
   const load = async () => {
     setBusy(true);
@@ -1703,23 +1767,10 @@ function AdminScreen({ onBack }) {
   useEffect(() => { if (session?.role === 'admin') load(); else setBusy(false); }, [session?.role]);
   if (session?.role !== 'admin') return <div className="access-denied"><span className="material-symbols-outlined">admin_panel_settings</span><h1>Acesso restrito</h1><p>Esta área é exclusiva para administradores.</p><button className="primary-btn" onClick={onBack}>Voltar ao perfil</button></div>;
   if (busy) return <div className="loading-stage"><span className="material-symbols-outlined">admin_panel_settings</span></div>;
-  if (pointFormOpen) return <CollectionPointFormScreen admin onBack={() => setPointFormOpen(false)} onSuccess={() => { setPointFormOpen(false); setTab('Pontos'); void load(); }} />;
+  if (pointEditor) return <CollectionPointFormScreen key={pointEditor.point?.id || 'new'} admin point={pointEditor.point} onBack={() => setPointEditor(null)} onSuccess={() => { setPointEditor(null); setTab('Pontos'); void load(); }} />;
   const totals = dashboard?.totals || {};
-  function createCollectionPoint() { setPointFormOpen(true); }
-  async function editCollectionPoint(point) {
-    const name = window.prompt('Nome do ponto de coleta:', point.name);
-    if (!name) return;
-    const street = window.prompt('Rua (opcional):') || '';
-    const number = window.prompt('Número (opcional):') || '';
-    const neighborhood = window.prompt('Bairro (opcional):') || '';
-    const city = window.prompt('Cidade:', point.location);
-    if (!city) return;
-    const state = window.prompt('Estado / UF (opcional):') || '';
-    const postalCode = window.prompt('CEP (opcional):') || '';
-    const categories = window.prompt('Materiais aceitos, separados por vírgula:', point.categories.join(', ')) || '';
-    const hours = window.prompt('Horário de funcionamento:', point.hours) || '';
-    try { await api.updateAdminCollectionPoint(point.id, { name, street, number, neighborhood, city, state, postalCode, categories: categories.split(',').map((item) => item.trim()).filter(Boolean), hours }); await load(); } catch (error) { alert(error.message); }
-  }
+  function createCollectionPoint() { setPointEditor({ point: null }); }
+  function editCollectionPoint(point) { setPointEditor({ point }); }
   async function removeCollectionPoint(point) {
     if (!window.confirm(`Excluir o ponto "${point.name}"?`)) return;
     try { await api.removeAdminCollectionPoint(point.id); await load(); } catch (error) { alert(error.message); }

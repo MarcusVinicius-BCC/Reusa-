@@ -1216,6 +1216,18 @@ button, input, select, textarea { max-width: 100%; }
 .saved-list { display: grid; gap: 11px; }
 .point-address-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(110px, .45fr); gap: 11px; }
 .point-address-grid .field:nth-child(3), .point-address-grid .field:nth-child(4), .point-address-grid .field:nth-child(5), .point-address-grid .field:nth-child(6) { grid-column: span 1; }
+.collection-point-form-card.is-editing { border-color: rgba(8, 120, 72, .25); }
+.point-editor-status { display: flex; align-items: center; gap: 10px; margin-top: 16px; padding: 11px 12px; border: 1px solid rgba(8, 120, 72, .16); border-radius: 15px; background: linear-gradient(135deg, #eefaf2, #f8fdf9); color: #174f34; }
+.point-editor-status > .material-symbols-outlined { display: grid; width: 34px; height: 34px; place-items: center; border-radius: 11px; background: #078b52; color: #fff; font-size: 19px; }
+.point-editor-status strong, .point-editor-status small { display: block; }
+.point-editor-status strong { font-size: 13px; }
+.point-editor-status small { margin-top: 2px; color: #517364; font-size: 11px; }
+.point-location-help { display: flex; align-items: flex-start; gap: 8px; padding: 10px 12px; border: 1px solid #d9e9df; border-radius: 13px; background: #f7fbf8; color: #517364; font-size: 12px; line-height: 1.4; }
+.point-location-help .material-symbols-outlined { color: var(--primary); font-size: 18px; }
+.collection-point-form-actions { display: grid; gap: 10px; }
+.collection-point-form-actions.is-editing { grid-template-columns: minmax(0, 1fr) minmax(0, 1.35fr); }
+.collection-point-form-actions .ghost-btn { width: 100%; }
+@media (max-width: 420px) { .collection-point-form-actions.is-editing { grid-template-columns: 1fr; } }
 @media (max-width: 480px) { .point-address-grid { grid-template-columns: 1fr; } }
 .saved-item { display: grid; grid-template-columns: 92px minmax(0, 1fr); gap: 12px; padding: 10px; border: 1px solid var(--outline); border-radius: 18px; background: var(--surface-lowest); box-shadow: var(--shadow); }
 .saved-item > img { width: 92px; height: 92px; border-radius: 13px; object-fit: cover; }
