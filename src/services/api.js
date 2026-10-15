@@ -90,6 +90,7 @@ export const api = {
   sendMessage: (id, body) => request(`/messages/threads/${id}/messages`, { method: 'POST', body: JSON.stringify(body) }),
   collectionPoints: () => request('/collection-points'),
   collectionPointsNearby: (city) => request(`/collection-points/nearby?city=${encodeURIComponent(city || '')}`),
+  mapRoute: ({ fromLat, fromLng, toLat, toLng }) => request(`/map-route?fromLat=${encodeURIComponent(fromLat)}&fromLng=${encodeURIComponent(fromLng)}&toLat=${encodeURIComponent(toLat)}&toLng=${encodeURIComponent(toLng)}`),
   suggestCollectionPoint: (body) => request('/collection-points/suggestions', { method: 'POST', body: JSON.stringify(body) }),
   communityImpact: () => request('/impact/community'),
   updatePreferences: (preferences) => request('/profile/preferences', { method: 'PUT', body: JSON.stringify({ preferences }) }),

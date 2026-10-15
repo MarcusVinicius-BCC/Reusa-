@@ -30,6 +30,8 @@ const SERVICE_AUTH_TOKEN = String(process.env.SERVICE_AUTH_TOKEN || '').trim();
 const RESEND_API_KEY = String(process.env.RESEND_API_KEY || '').trim();
 const EMAIL_FROM = String(process.env.EMAIL_FROM || 'ReUsa+ <onboarding@resend.dev>').trim();
 const INSTANCE_ID = String(process.env.INSTANCE_ID || `core-${crypto.randomUUID()}`).slice(0, 120);
+const DEFAULT_ROUTING_BASE_URL = 'https://router.project-osrm.org';
+const ROUTING_BASE_URL = validatedRoutingBaseUrl(process.env.ROUTING_BASE_URL || DEFAULT_ROUTING_BASE_URL);
 const ROOT = __dirname;
 // Railway exposes the path of an attached Volume through this variable.
 // Without a Volume, development continues to use the local data folder.
@@ -63,6 +65,89 @@ function cachedExternalValue(key) {
 function cacheExternalValue(key, value, ttlMs) {
   externalCache.set(key, { value, expiresAt: Date.now() + ttlMs });
   return value;
+}
+
+function validatedRoutingBaseUrl(value) {
+  const raw = String(value || '').trim().replace(/\/+$/, '');
+  let url;
+  try {
+    url = new URL(raw);
+  } catch {
+    throw new Error('ROUTING_BASE_URL must be an absolute URL');
+  }
+
+  const isLocalDevelopmentHost = ['localhost', '127.0.0.1', '::1'].includes(url.hostname);
+  const allowsHttpForLocalDevelopment = process.env.NODE_ENV !== 'production' && isLocalDevelopmentHost;
+  if (url.protocol !== 'https:' && !(url.protocol === 'http:' && allowsHttpForLocalDevelopment)) {
+    throw new Error('ROUTING_BASE_URL must use HTTPS (HTTP is allowed only for local development)');
+  }
+  if (url.username || url.password) {
+    throw new Error('ROUTING_BASE_URL must not include credentials');
+  }
+
+  url.hash = '';
+  url.search = '';
+  return url.toString().replace(/\/$/, '');
+}
+
+function routeCoordinate(value, min, max) {
+  if (Array.isArray(value)) return null;
+  const raw = String(value ?? '').trim();
+  if (!raw || raw.length > 32 || !/^-?(?:\d+|\d*\.\d+)$/.test(raw)) return null;
+  const coordinate = Number(raw);
+  return Number.isFinite(coordinate) && coordinate >= min && coordinate <= max ? coordinate : null;
+}
+
+function routeCoordinatesAreValid(coordinates) {
+  return Array.isArray(coordinates)
+    && coordinates.length >= 2
+    && coordinates.length <= 20_000
+    && coordinates.every((coordinate) => Array.isArray(coordinate)
+      && coordinate.length >= 2
+      && typeof coordinate[0] === 'number'
+      && typeof coordinate[1] === 'number'
+      && Number.isFinite(coordinate[0])
+      && Number.isFinite(coordinate[1])
+      && coordinate[0] >= -180
+      && coordinate[0] <= 180
+      && coordinate[1] >= -90
+      && coordinate[1] <= 90);
+}
+
+function sanitizedRoute(route) {
+  const coordinates = route?.geometry?.coordinates;
+  const distance = Number(route?.distance);
+  const duration = Number(route?.duration);
+  if (route?.geometry?.type !== 'LineString'
+    || !routeCoordinatesAreValid(coordinates)
+    || !Number.isFinite(distance)
+    || !Number.isFinite(duration)
+    || distance < 0
+    || duration < 0
+    || distance > 50_000_000
+    || duration > 7 * 24 * 60 * 60) {
+    return null;
+  }
+
+  return {
+    geometry: {
+      type: 'LineString',
+      coordinates: coordinates.map(([longitude, latitude]) => [
+        Number(Number(longitude).toFixed(6)),
+        Number(Number(latitude).toFixed(6))
+      ])
+    },
+    distance: Math.round(distance),
+    duration: Math.round(duration)
+  };
+}
+
+function osrmRouteUrl({ fromLat, fromLng, toLat, toLng }) {
+  const url = new URL(ROUTING_BASE_URL);
+  const basePath = url.pathname.replace(/\/$/, '');
+  url.pathname = `${basePath}/route/v1/driving/${fromLng.toFixed(6)},${fromLat.toFixed(6)};${toLng.toFixed(6)},${toLat.toFixed(6)}`;
+  url.search = new URLSearchParams({ overview: 'full', geometries: 'geojson', alternatives: 'false', steps: 'false' }).toString();
+  return url;
 }
 
 app.disable('x-powered-by');
@@ -1377,6 +1462,7 @@ async function start() {
 
   const authRateLimit = createRateLimiter({ windowMs: 15 * 60 * 1000, maxRequests: 30 });
   const publicLookupRateLimit = createRateLimiter({ windowMs: 15 * 60 * 1000, maxRequests: 60 });
+  const mapRouteRateLimit = createRateLimiter({ windowMs: 15 * 60 * 1000, maxRequests: 60 });
 
   app.use(express.json({ limit: '100kb' }));
   app.use(express.urlencoded({ extended: true }));
@@ -1419,6 +1505,49 @@ async function start() {
   });
 
   app.get('/api/health', (_req, res) => res.json({ ok: true }));
+
+  app.get('/api/map-route', mapRouteRateLimit, async (req, res) => {
+    const fromLat = routeCoordinate(req.query.fromLat, -90, 90);
+    const fromLng = routeCoordinate(req.query.fromLng, -180, 180);
+    const toLat = routeCoordinate(req.query.toLat, -90, 90);
+    const toLng = routeCoordinate(req.query.toLng, -180, 180);
+    if ([fromLat, fromLng, toLat, toLng].some((coordinate) => coordinate === null)) {
+      return res.status(400).json({ error: 'Informe coordenadas válidas de origem e destino.' });
+    }
+
+    const cacheKey = `map-route:${fromLat.toFixed(5)},${fromLng.toFixed(5)}:${toLat.toFixed(5)},${toLng.toFixed(5)}`;
+    const cached = cachedExternalValue(cacheKey);
+    if (cached) {
+      res.setHeader('Cache-Control', 'private, max-age=300');
+      return res.json({ route: cached, cached: true });
+    }
+
+    try {
+      const response = await fetchWithTimeout(osrmRouteUrl({ fromLat, fromLng, toLat, toLng }), {
+        headers: { Accept: 'application/json', 'User-Agent': 'ReusaPlus/1.0' },
+        redirect: 'error'
+      }, 8_000);
+      const contentLength = Number(response.headers.get('content-length'));
+      if (Number.isFinite(contentLength) && contentLength > 2_000_000) {
+        throw new Error('Routing response exceeded the allowed size');
+      }
+      const result = await response.json();
+      if (result?.code === 'NoRoute') {
+        return res.status(404).json({ error: 'Não foi possível encontrar uma rota entre os locais selecionados.' });
+      }
+      const route = sanitizedRoute(result?.routes?.[0]);
+      if (!route) {
+        console.warn('[map-route] Routing provider returned an invalid route');
+        return res.status(502).json({ error: 'O serviço de rotas retornou uma resposta inválida.' });
+      }
+
+      res.setHeader('Cache-Control', 'private, max-age=300');
+      return res.json({ route: cacheExternalValue(cacheKey, route, 5 * 60 * 1000), cached: false });
+    } catch (error) {
+      console.warn('[map-route] Routing request failed:', error.message);
+      return res.status(503).json({ error: 'O serviço de rotas está indisponível no momento.' });
+    }
+  });
 
   app.get('/metrics', (req, res) => {
     if (SERVICE_AUTH_TOKEN && req.get('authorization') !== `Bearer ${SERVICE_AUTH_TOKEN}`) {

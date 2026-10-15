@@ -3,7 +3,7 @@ import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { api, clearToken, setToken } from './services/api';
 import { useAppStore } from './state/store';
 import { fallbackPosts } from './data/fallback-posts';
-import { CircleMarker, MapContainer, Marker, TileLayer, Tooltip, useMap } from 'react-leaflet';
+import { CircleMarker, MapContainer, Marker, Polyline, TileLayer, Tooltip, useMap, useMapEvents } from 'react-leaflet';
 import { divIcon } from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import feedLogo from './assets/reusa-logo.png';
@@ -57,10 +57,25 @@ const collectionPointMarkerIcon = (selected = false) => divIcon({
   tooltipAnchor: [0, -14]
 });
 
-function collectionPointDirectionsUrl(point, origin) {
-  const params = new URLSearchParams({ to: `${point.latitude},${point.longitude}` });
-  if (origin) params.set('from', origin.join(','));
-  return `https://www.openstreetmap.org/directions?${params.toString()}`;
+function formatRouteDistance(distance) {
+  const meters = Number(distance);
+  if (!Number.isFinite(meters)) return '';
+  return meters >= 1000 ? `${(meters / 1000).toLocaleString('pt-BR', { maximumFractionDigits: 1 })} km` : `${Math.round(meters)} m`;
+}
+
+function formatRouteDuration(duration) {
+  const minutes = Math.max(1, Math.round(Number(duration) / 60));
+  if (!Number.isFinite(minutes)) return '';
+  if (minutes < 60) return `${minutes} min`;
+  const hours = Math.floor(minutes / 60);
+  const remainingMinutes = minutes % 60;
+  return remainingMinutes ? `${hours} h ${remainingMinutes} min` : `${hours} h`;
+}
+
+function finiteCoordinate(value) {
+  if (value === null || value === undefined || (typeof value === 'string' && !value.trim())) return null;
+  const coordinate = Number(value);
+  return Number.isFinite(coordinate) ? coordinate : null;
 }
 
 export function AppRoutes() {
@@ -1276,20 +1291,37 @@ function MapScreen({ onSuggest }) {
   const [category, setCategory] = useState('Todos');
   const [search, setSearch] = useState('');
   const [mapCenter, setMapCenter] = useState([-2.4431, -54.7083]);
+  const [routeOrigin, setRouteOrigin] = useState([-2.4431, -54.7083]);
+  const [route, setRoute] = useState(null);
+  const [routeBusy, setRouteBusy] = useState(false);
+  const [routeError, setRouteError] = useState('');
   const [searchBusy, setSearchBusy] = useState(false);
+  const routeRequest = useRef(0);
 
-  const mapPoints = collectionPoints.map((point, index) => ({
-    ...point,
-    latitude: point.latitude || { 'point-1': -2.4431, 'point-2': -1.4558 }[point.id] || [-2.4431, -1.4558, -3.119, -2.53][index] || -2.4431,
-    longitude: point.longitude || { 'point-1': -54.7083, 'point-2': -48.4902 }[point.id] || [-54.7083, -48.4902, -60.0217, -44.3][index] || -54.7083
-  }));
+  const mapPoints = collectionPoints.map((point, index) => {
+    const latitude = finiteCoordinate(point.latitude);
+    const longitude = finiteCoordinate(point.longitude);
+    const hasCoordinates = latitude !== null && longitude !== null
+      && latitude >= -90 && latitude <= 90
+      && longitude >= -180 && longitude <= 180;
+    return {
+      ...point,
+      latitude: hasCoordinates ? latitude : ({ 'point-1': -2.4431, 'point-2': -1.4558 }[point.id] || [-2.4431, -1.4558, -3.119, -2.53][index] || -2.4431),
+      longitude: hasCoordinates ? longitude : ({ 'point-1': -54.7083, 'point-2': -48.4902 }[point.id] || [-54.7083, -48.4902, -60.0217, -44.3][index] || -54.7083),
+      routeCoordinates: hasCoordinates ? [latitude, longitude] : null
+    };
+  });
   const visiblePoints = mapPoints.filter((point) => category === 'Todos' || point.categories?.some((item) => item.toLowerCase().includes(category.toLowerCase())));
-  const directionsUrl = selectedPoint ? collectionPointDirectionsUrl(selectedPoint, userLocation) : '#';
+  const currentSelectedPoint = selectedPoint ? mapPoints.find((point) => point.id === selectedPoint.id) || selectedPoint : null;
+  const canRouteToSelectedPoint = Boolean(currentSelectedPoint?.routeCoordinates);
 
   useEffect(() => {
     if (session?.city) {
       loadCollectionPointsNearby(session.city).then((result) => {
-        if (result.center) setMapCenter(result.center);
+        if (result.center) {
+          setMapCenter(result.center);
+          updateRouteOrigin(result.center);
+        }
       }).catch(() => {});
       return;
     }
@@ -1301,6 +1333,72 @@ function MapScreen({ onSuggest }) {
     if (selectedPoint && !visiblePoints.some((point) => point.id === selectedPoint.id)) setSelectedPoint(visiblePoints[0] || null);
   }, [collectionPoints, category]);
 
+  useEffect(() => {
+    clearRoute();
+  }, [selectedPoint?.id]);
+
+  function updateRouteOrigin(nextOrigin, clearExistingRoute = false) {
+    if (!Array.isArray(nextOrigin)) return;
+    const latitude = finiteCoordinate(nextOrigin[0]);
+    const longitude = finiteCoordinate(nextOrigin[1]);
+    if (latitude === null || longitude === null || latitude < -90 || latitude > 90 || longitude < -180 || longitude > 180) return;
+    setRouteOrigin((current) => (
+      Math.abs(current[0] - latitude) < 0.000001 && Math.abs(current[1] - longitude) < 0.000001
+        ? current
+        : [latitude, longitude]
+    ));
+    if (clearExistingRoute && (Math.abs(routeOrigin[0] - latitude) >= 0.000001 || Math.abs(routeOrigin[1] - longitude) >= 0.000001)) clearRoute();
+  }
+
+  function clearRoute() {
+    routeRequest.current += 1;
+    setRoute(null);
+    setRouteBusy(false);
+    setRouteError('');
+  }
+
+  async function showRoute() {
+    const destination = currentSelectedPoint;
+    if (!destination?.routeCoordinates) {
+      setRouteError('Este ponto ainda não tem coordenadas verificadas para traçar uma rota.');
+      return;
+    }
+
+    const [fromLat, fromLng] = routeOrigin;
+    const [toLat, toLng] = destination.routeCoordinates;
+    const requestId = ++routeRequest.current;
+    setRouteBusy(true);
+    setRouteError('');
+
+    try {
+      const result = await api.mapRoute({ fromLat, fromLng, toLat, toLng });
+      const routeData = result.route || result;
+      const positions = (routeData.geometry?.coordinates || [])
+        .map((coordinates) => {
+          const [longitude, latitude] = Array.isArray(coordinates) ? coordinates : [];
+          return [Number(latitude), Number(longitude)];
+        })
+        .filter(([latitude, longitude]) => Number.isFinite(latitude) && Number.isFinite(longitude));
+
+      if (positions.length < 2) throw new Error('Não foi possível encontrar uma rota para este ponto.');
+      if (requestId !== routeRequest.current) return;
+
+      setRoute({
+        positions,
+        origin: [fromLat, fromLng],
+        distance: routeData.distance,
+        duration: routeData.duration
+      });
+    } catch (error) {
+      if (requestId === routeRequest.current) {
+        setRoute(null);
+        setRouteError(error.message || 'Não foi possível traçar a rota agora.');
+      }
+    } finally {
+      if (requestId === routeRequest.current) setRouteBusy(false);
+    }
+  }
+
   async function searchPlace(event) {
     event.preventDefault();
     if (!search.trim()) return;
@@ -1309,7 +1407,9 @@ function MapScreen({ onSuggest }) {
       const response = await fetch(`https://nominatim.openstreetmap.org/search?format=jsonv2&limit=1&countrycodes=br&q=${encodeURIComponent(search)}`, { headers: { Accept: 'application/json' } });
       const places = await response.json();
       if (!places.length) throw new Error('Local não encontrado');
-      setMapCenter([Number(places[0].lat), Number(places[0].lon)]);
+      const center = [Number(places[0].lat), Number(places[0].lon)];
+      setMapCenter(center);
+      updateRouteOrigin(center, true);
     } catch (error) {
       alert(error.message);
     } finally {
@@ -1323,7 +1423,11 @@ function MapScreen({ onSuggest }) {
       return;
     }
     navigator.geolocation.getCurrentPosition(
-      (position) => setUserLocation([position.coords.latitude, position.coords.longitude]),
+      (position) => {
+        const location = [position.coords.latitude, position.coords.longitude];
+        setUserLocation(location);
+        updateRouteOrigin(location, true);
+      },
       () => alert('Não foi possível acessar sua localização.')
     );
   }
@@ -1335,29 +1439,43 @@ function MapScreen({ onSuggest }) {
         <MapContainer center={mapCenter} zoom={12} scrollWheelZoom className="live-map">
           <TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
           <MapViewport position={mapCenter} />
+          <MapCenterTracker onChange={(origin) => updateRouteOrigin(origin, true)} />
+          {route ? <>
+            <Polyline positions={route.positions} pathOptions={{ color: '#ffffff', weight: 8, opacity: 0.9, lineCap: 'round', lineJoin: 'round', interactive: false }} />
+            <Polyline positions={route.positions} pathOptions={{ color: '#078b52', weight: 5, opacity: 0.96, lineCap: 'round', lineJoin: 'round', interactive: false }} />
+            <CircleMarker center={route.origin} pathOptions={{ color: '#ffffff', fillColor: '#176f9c', fillOpacity: 1, weight: 2, interactive: false }} radius={6} />
+            <RouteViewport positions={route.positions} />
+          </> : null}
           {visiblePoints.map((point) => <Marker key={point.id} position={[point.latitude, point.longitude]} icon={collectionPointMarkerIcon(selectedPoint?.id === point.id)} title={point.name} alt={point.name} keyboard eventHandlers={{ click: () => setSelectedPoint(point) }}><Tooltip className="collection-point-tooltip" direction="top" offset={[0, -14]} opacity={1}>{point.name || 'Ponto de coleta'}</Tooltip></Marker>)}
           {userLocation ? <><CircleMarker center={userLocation} pathOptions={{ color: '#2459d6', fillColor: '#77a0ff', fillOpacity: 0.9 }} radius={8} /><RecenterMap position={userLocation} /></> : null}
         </MapContainer>
-        <form className="map-search" onSubmit={searchPlace}><span className="material-symbols-outlined">search</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar cidade ou endereço" /><button disabled={searchBusy} aria-label="Buscar local"><span className="material-symbols-outlined">arrow_forward</span></button></form>
+        <form className="map-search" onSubmit={searchPlace}><span className="material-symbols-outlined">search</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar cidade ou endereço" aria-label="Buscar cidade ou endereço" /><button disabled={searchBusy} aria-label="Buscar local"><span className="material-symbols-outlined">arrow_forward</span></button></form>
         <div className="map-chips">
           {['Todos', 'Eletrônicos', 'Pilhas', 'Óleo', 'Cooperativas'].map((item) => <button key={item} className={category === item ? 'pill pill-active' : 'pill'} onClick={() => setCategory(item)}>{item}</button>)}
         </div>
-        <button className="map-locate" onClick={locate} title="Usar minha localização"><span className="material-symbols-outlined">my_location</span></button>
-        {selectedPoint ? <div className="map-card">
+        <button className="map-locate" onClick={locate} title="Usar minha localização (opcional)" aria-label="Usar minha localização (opcional)"><span className="material-symbols-outlined">my_location</span></button>
+        {currentSelectedPoint ? <div className="map-card">
           <div className="map-card-head">
             <div>
               <span>Centro de coleta</span>
-              <h2>{selectedPoint?.name || 'EcoCentro Santarém'}</h2>
+              <h2>{currentSelectedPoint.name || 'EcoCentro Santarém'}</h2>
             </div>
             <button className="icon-btn" onClick={() => setSelectedPoint(null)} aria-label="Fechar informações"><span className="material-symbols-outlined">close</span></button>
           </div>
           <div className="map-card-body">
-            <div><span className="material-symbols-outlined">recycling</span><span>{(selectedPoint?.categories || ['Eletrônicos', 'plástico', 'metal']).join(', ')}</span></div>
-            <div><span className="material-symbols-outlined">schedule</span><span>{selectedPoint?.hours || '08:00 – 17:00'}</span></div>
-            <div><span className="material-symbols-outlined">location_on</span><span>{selectedPoint?.location || 'Localização não informada'}</span></div>
-            <div><span className="material-symbols-outlined">verified</span><span>{selectedPoint?.origin || selectedPoint?.source || 'Origem não informada'}{selectedPoint?.lastUpdated ? ` · atualizado em ${new Date(selectedPoint.lastUpdated).toLocaleDateString('pt-BR')}` : ''}</span></div>
+            <div><span className="material-symbols-outlined">recycling</span><span>{(currentSelectedPoint.categories || ['Eletrônicos', 'plástico', 'metal']).join(', ')}</span></div>
+            <div><span className="material-symbols-outlined">schedule</span><span>{currentSelectedPoint.hours || '08:00 – 17:00'}</span></div>
+            <div><span className="material-symbols-outlined">location_on</span><span>{currentSelectedPoint.location || 'Localização não informada'}</span></div>
+            <div><span className="material-symbols-outlined">verified</span><span>{currentSelectedPoint.origin || currentSelectedPoint.source || 'Origem não informada'}{currentSelectedPoint.lastUpdated ? ` · atualizado em ${new Date(currentSelectedPoint.lastUpdated).toLocaleDateString('pt-BR')}` : ''}</span></div>
           </div>
-          <a className="primary-btn full" href={directionsUrl} target="_blank" rel="noreferrer" title="Abrir rota no OpenStreetMap">Como chegar <span className="material-symbols-outlined">navigation</span></a>
+          {route ? <div className="map-route-summary" role="status">
+            <span className="material-symbols-outlined" aria-hidden="true">route</span>
+            <div><strong>Rota exibida no mapa</strong><small>{formatRouteDistance(route.distance)} · cerca de {formatRouteDuration(route.duration)}. A partida está marcada em azul.</small></div>
+            <button type="button" onClick={clearRoute} aria-label="Limpar rota" title="Limpar rota"><span className="material-symbols-outlined">close</span></button>
+          </div> : null}
+          {routeError ? <div className="map-route-error" role="alert"><span className="material-symbols-outlined" aria-hidden="true">error_outline</span><span>{routeError}</span><button type="button" onClick={showRoute}>Tentar novamente</button></div> : null}
+          {!canRouteToSelectedPoint ? <p className="map-route-hint">A rota estará disponível quando este ponto tiver coordenadas verificadas.</p> : !route ? <p className="map-route-hint">A saída será o centro atual do mapa; sua localização não será solicitada.</p> : null}
+          <button className="primary-btn full map-route-btn" type="button" onClick={showRoute} disabled={routeBusy || !canRouteToSelectedPoint} title={canRouteToSelectedPoint ? 'Exibir rota neste mapa' : 'Este ponto ainda não tem coordenadas verificadas'}>{routeBusy ? 'Traçando rota...' : route ? 'Atualizar rota' : 'Como chegar'} <span className="material-symbols-outlined">navigation</span></button>
         </div> : <div className="map-floating-actions"><button className="map-reopen" onClick={() => setSelectedPoint(visiblePoints[0] || null)}><span className="material-symbols-outlined">info</span>Mostrar ponto selecionado</button><button className="map-suggest" onClick={onSuggest}><span className="material-symbols-outlined">add_location_alt</span>Sugerir ponto</button></div>}
       </main>
     </Shell>
@@ -1446,6 +1564,29 @@ function MapViewport({ position }) {
   useEffect(() => {
     map.flyTo(position, 12);
   }, [map, position]);
+  return null;
+}
+
+function MapCenterTracker({ onChange }) {
+  useMapEvents({
+    dragend(event) {
+      const center = event.target.getCenter();
+      onChange([center.lat, center.lng]);
+    }
+  });
+  return null;
+}
+
+function RouteViewport({ positions }) {
+  const map = useMap();
+  useEffect(() => {
+    if (!positions?.length) return;
+    map.fitBounds(positions, {
+      paddingTopLeft: [28, 112],
+      paddingBottomRight: [28, 285],
+      maxZoom: 14
+    });
+  }, [map, positions]);
   return null;
 }
 

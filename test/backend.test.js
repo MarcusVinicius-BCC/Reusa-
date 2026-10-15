@@ -9,6 +9,9 @@ const path = require('node:path');
 let server;
 let baseUrl;
 let dataDir;
+let routingServer;
+let routingBaseUrl;
+let routingRequests = 0;
 
 function availablePort() {
   return new Promise((resolve, reject) => {
@@ -43,11 +46,38 @@ async function request(pathname, options = {}) {
 
 before(async () => {
   dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'reusa-test-'));
+  routingServer = http.createServer((req, res) => {
+    routingRequests += 1;
+    if (!req.url.startsWith('/route/v1/driving/')) {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ code: 'InvalidUrl' }));
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    return res.end(JSON.stringify({
+      code: 'Ok',
+      routes: [{
+        distance: 1234.56,
+        duration: 567.89,
+        geometry: {
+          type: 'LineString',
+          coordinates: [[-54.7083, -2.4431], [-54.7, -2.44]]
+        }
+      }]
+    }));
+  });
+  await new Promise((resolve, reject) => {
+    routingServer.once('error', reject);
+    routingServer.listen(0, '127.0.0.1', () => {
+      routingServer.off('error', reject);
+      resolve();
+    });
+  });
+  routingBaseUrl = `http://127.0.0.1:${routingServer.address().port}`;
   const port = await availablePort();
   baseUrl = `http://127.0.0.1:${port}`;
   server = spawn(process.execPath, ['backend.js'], {
     cwd: path.resolve(__dirname, '..'),
-    env: { ...process.env, PORT: String(port), DATA_DIR: dataDir, JWT_SECRET: 'test-secret-not-for-production' },
+    env: { ...process.env, NODE_ENV: 'test', PORT: String(port), DATA_DIR: dataDir, JWT_SECRET: 'test-secret-not-for-production', ROUTING_BASE_URL: routingBaseUrl },
     stdio: 'ignore'
   });
   await waitForServer();
@@ -55,6 +85,7 @@ before(async () => {
 
 after(() => {
   if (server && !server.killed) server.kill();
+  if (routingServer) routingServer.close();
   fs.rmSync(dataDir, { recursive: true, force: true });
 });
 
@@ -121,6 +152,29 @@ test('business registration stores public neighborhood without exposing protecte
 test('CNPJ lookup rejects malformed identifiers before contacting the external service', async () => {
   const lookup = await request('/api/businesses/cnpj/00000000000000');
   assert.equal(lookup.response.status, 400);
+});
+
+test('map route validates coordinates and returns a sanitized cached route', async () => {
+  routingRequests = 0;
+  const invalid = await request('/api/map-route?fromLat=91&fromLng=-54.7&toLat=-2.44&toLng=-54.6');
+  assert.equal(invalid.response.status, 400);
+  assert.equal(routingRequests, 0);
+
+  const path = '/api/map-route?fromLat=-2.4431&fromLng=-54.7083&toLat=-2.44&toLng=-54.7';
+  const first = await request(path);
+  assert.equal(first.response.status, 200);
+  assert.equal(first.payload.cached, false);
+  assert.deepEqual(first.payload.route, {
+    geometry: { type: 'LineString', coordinates: [[-54.7083, -2.4431], [-54.7, -2.44]] },
+    distance: 1235,
+    duration: 568
+  });
+  assert.equal(routingRequests, 1);
+
+  const second = await request(path);
+  assert.equal(second.response.status, 200);
+  assert.equal(second.payload.cached, true);
+  assert.equal(routingRequests, 1);
 });
 
 test('favorites, negotiation status and reviews persist with permission checks', async () => {
