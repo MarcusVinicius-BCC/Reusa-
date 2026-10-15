@@ -3,7 +3,8 @@ import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { api, clearToken, setToken } from './services/api';
 import { useAppStore } from './state/store';
 import { fallbackPosts } from './data/fallback-posts';
-import { CircleMarker, MapContainer, TileLayer, useMap } from 'react-leaflet';
+import { CircleMarker, MapContainer, Marker, TileLayer, Tooltip, useMap } from 'react-leaflet';
+import { divIcon } from 'leaflet';
 import 'leaflet/dist/leaflet.css';
 import feedLogo from './assets/reusa-logo.png';
 
@@ -47,6 +48,20 @@ const navRoutes = {
   mensagens: '/mensagens',
   inspiracoes: '/inspiracoes'
 };
+
+const collectionPointMarkerIcon = (selected = false) => divIcon({
+  className: selected ? 'collection-point-marker is-selected' : 'collection-point-marker',
+  html: '<span class="collection-point-marker-symbol material-symbols-outlined" aria-hidden="true">recycling</span>',
+  iconSize: [20, 20],
+  iconAnchor: [10, 10],
+  tooltipAnchor: [0, -14]
+});
+
+function collectionPointDirectionsUrl(point, origin) {
+  const params = new URLSearchParams({ to: `${point.latitude},${point.longitude}` });
+  if (origin) params.set('from', origin.join(','));
+  return `https://www.openstreetmap.org/directions?${params.toString()}`;
+}
 
 export function AppRoutes() {
   const location = useLocation();
@@ -1269,6 +1284,7 @@ function MapScreen({ onSuggest }) {
     longitude: point.longitude || { 'point-1': -54.7083, 'point-2': -48.4902 }[point.id] || [-54.7083, -48.4902, -60.0217, -44.3][index] || -54.7083
   }));
   const visiblePoints = mapPoints.filter((point) => category === 'Todos' || point.categories?.some((item) => item.toLowerCase().includes(category.toLowerCase())));
+  const directionsUrl = selectedPoint ? collectionPointDirectionsUrl(selectedPoint, userLocation) : '#';
 
   useEffect(() => {
     if (session?.city) {
@@ -1319,7 +1335,7 @@ function MapScreen({ onSuggest }) {
         <MapContainer center={mapCenter} zoom={12} scrollWheelZoom className="live-map">
           <TileLayer attribution='&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">OpenStreetMap</a> contributors' url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
           <MapViewport position={mapCenter} />
-          {visiblePoints.map((point) => <CircleMarker key={point.id} center={[point.latitude, point.longitude]} pathOptions={{ color: '#006d3d', fillColor: '#00d67d', fillOpacity: 0.9 }} radius={10} eventHandlers={{ click: () => setSelectedPoint(point) }} />)}
+          {visiblePoints.map((point) => <Marker key={point.id} position={[point.latitude, point.longitude]} icon={collectionPointMarkerIcon(selectedPoint?.id === point.id)} title={point.name} alt={point.name} keyboard eventHandlers={{ click: () => setSelectedPoint(point) }}><Tooltip className="collection-point-tooltip" direction="top" offset={[0, -14]} opacity={1}>{point.name || 'Ponto de coleta'}</Tooltip></Marker>)}
           {userLocation ? <><CircleMarker center={userLocation} pathOptions={{ color: '#2459d6', fillColor: '#77a0ff', fillOpacity: 0.9 }} radius={8} /><RecenterMap position={userLocation} /></> : null}
         </MapContainer>
         <form className="map-search" onSubmit={searchPlace}><span className="material-symbols-outlined">search</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Buscar cidade ou endereço" /><button disabled={searchBusy} aria-label="Buscar local"><span className="material-symbols-outlined">arrow_forward</span></button></form>
@@ -1341,10 +1357,7 @@ function MapScreen({ onSuggest }) {
             <div><span className="material-symbols-outlined">location_on</span><span>{selectedPoint?.location || 'Localização não informada'}</span></div>
             <div><span className="material-symbols-outlined">verified</span><span>{selectedPoint?.origin || selectedPoint?.source || 'Origem não informada'}{selectedPoint?.lastUpdated ? ` · atualizado em ${new Date(selectedPoint.lastUpdated).toLocaleDateString('pt-BR')}` : ''}</span></div>
           </div>
-          <div className="map-actions">
-            <button className="ghost-btn" onClick={() => selectedPoint && alert(`${selectedPoint.name}\n${selectedPoint.location}`)}>Ver detalhes</button>
-            <a className="primary-btn" href={selectedPoint ? `https://www.openstreetmap.org/directions?to=${selectedPoint.latitude}%2C${selectedPoint.longitude}` : '#'} target="_blank" rel="noreferrer">Como chegar <span className="material-symbols-outlined">navigation</span></a>
-          </div>
+          <a className="primary-btn full" href={directionsUrl} target="_blank" rel="noreferrer" title="Abrir rota no OpenStreetMap">Como chegar <span className="material-symbols-outlined">navigation</span></a>
         </div> : <div className="map-floating-actions"><button className="map-reopen" onClick={() => setSelectedPoint(visiblePoints[0] || null)}><span className="material-symbols-outlined">info</span>Mostrar ponto selecionado</button><button className="map-suggest" onClick={onSuggest}><span className="material-symbols-outlined">add_location_alt</span>Sugerir ponto</button></div>}
       </main>
     </Shell>
