@@ -1064,6 +1064,9 @@ function seedDatabase() {
   run(`UPDATE users SET avatar = '' WHERE id = 'user-ana'`);
   run('UPDATE users SET created_at = COALESCE(created_at, ?)', [new Date().toISOString()]);
 
+  run('DELETE FROM messages WHERE thread_id = ?', ['thread-ana-notebook']);
+  run('DELETE FROM threads WHERE id = ?', ['thread-ana-notebook']);
+
   const adminEmail = ADMIN_EMAIL || 'mariana@reusa.com';
   if (adminEmail) {
     run('UPDATE users SET role = ? WHERE lower(email) = lower(?)', ['admin', adminEmail]);
@@ -1200,18 +1203,6 @@ function seedDatabase() {
   });
 
   const seedThreads = [
-    {
-      id: 'thread-ana-notebook',
-      postId: 'post-ana-notebook',
-      participants: ['user-mariana', 'user-ana'],
-      unreadCount: 2,
-      lastMessageAt: '2026-08-26T10:45:00.000Z',
-      messages: [
-        { id: 'msg-1', senderId: 'user-mariana', text: 'Olá! Tenho interesse nesse aparelho. Ainda está disponível?', sentAt: '2026-08-26T10:42:00.000Z', status: 'read' },
-        { id: 'msg-2', senderId: 'user-ana', text: 'Sim, ainda está disponível.', sentAt: '2026-08-26T10:45:00.000Z', status: 'read' },
-        { id: 'msg-3', senderId: 'user-ana', text: 'Pode retirar comigo em um ponto público?', sentAt: '2026-08-26T10:45:00.000Z', status: 'read' }
-      ]
-    },
     {
       id: 'thread-carlos-chair',
       postId: 'post-carlos-chair',

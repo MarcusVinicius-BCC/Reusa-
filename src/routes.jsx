@@ -148,7 +148,7 @@ function ScreenRouter({ location, navigate }) {
     case '/notificacoes':
       return <NotificationsScreen onBack={() => navigate('/feed')} onNavigate={navigate} />;
     case '/mensagens':
-      return <MessagesScreen onOpenThread={(threadId) => navigate(`/mensagens/ana?thread=${threadId || 'thread-ana-notebook'}`)} />;
+      return <MessagesScreen onOpenThread={(threadId) => threadId && navigate(`/mensagens/ana?thread=${threadId}`)} />;
     case '/mensagens/ana':
       return <ChatScreen onBack={() => navigate('/mensagens')} />;
     case '/nova-publicacao':
@@ -811,7 +811,7 @@ function MessagesScreen({ onOpenThread }) {
         <section className="messages-intro"><span className="eyebrow">Sua caixa de entrada</span></section>
         <label className="search-shell messages-search"><span className="material-symbols-outlined">search</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Pesquisar por pessoa ou mensagem..." /></label>
         <div className="thread-list">
-          {(visibleThreads.length ? visibleThreads : threads.length ? [] : [{ title: 'Ana Costa', subtitle: 'Olá! Tenho interesse nesse aparelho...', time: '14:20', unreadCount: 2 }]).map((thread) => (
+          {visibleThreads.map((thread) => (
             <button key={thread.id || thread.title} className="thread-card" onClick={() => onOpenThread(thread.id)}>
               <div className="thread-avatar" aria-label={`Perfil de ${thread.title || 'usuário'}`}>{thread.avatar ? <img src={thread.avatar} alt="" /> : <span className="material-symbols-outlined">person</span>}</div>
               <div className="thread-content">
@@ -835,9 +835,10 @@ function ChatScreen({ onBack }) {
   const sendMessage = useAppStore((state) => state.sendMessage);
   const readThreadNotifications = useAppStore((state) => state.readThreadNotifications);
   const session = useAppStore((state) => state.session);
-  const threadId = new URLSearchParams(window.location.search).get('thread') || 'thread-ana-notebook';
+  const threadId = new URLSearchParams(window.location.search).get('thread');
 
   useEffect(() => {
+    if (!threadId) return undefined;
     let active = true;
     const refresh = async () => {
       try {
@@ -856,6 +857,7 @@ function ChatScreen({ onBack }) {
 
   async function send() {
     if (!text.trim()) return;
+    if (!threadId) return;
     if (!session) {
       alert('Entre na sua conta para enviar mensagens.');
       return;
@@ -876,7 +878,7 @@ function ChatScreen({ onBack }) {
   return (
     <div className="chat-screen">
       <UnifiedTopbar onBack={onBack} />
-      <div className="chat-banner">{thread?.avatar ? <img className="chat-person-avatar" src={thread.avatar} alt="" /> : <span className="chat-person-avatar material-symbols-outlined" aria-label={`Perfil de ${thread?.title || 'Ana Costa'}`}>person</span>}<div><strong>{thread?.title || 'Ana Costa'}</strong><span>Negocie com segurança e combine a retirada</span></div></div>
+      <div className="chat-banner">{thread?.avatar ? <img className="chat-person-avatar" src={thread.avatar} alt="" /> : <span className="chat-person-avatar material-symbols-outlined" aria-label={`Perfil de ${thread?.title || 'conversa'}`}>person</span>}<div><strong>{thread?.title || 'Conversa'}</strong><span>Negocie com segurança e combine a retirada</span></div></div>
       <main className="chat-body">{messages.map((message) => { const mine = message.sender_id === session?.id; return <div key={message.id} className={mine ? 'bubble mine' : 'bubble'}><p>{message.text}</p><span>{formatBrazilTime(message.sent_at)}</span></div>; })}</main>
       <footer className="chat-compose"><textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="Digite sua mensagem..." rows={1} /><button className="send-btn" onClick={send}><span className="material-symbols-outlined">send</span></button></footer>
     </div>
