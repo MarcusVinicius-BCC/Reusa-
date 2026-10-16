@@ -77,7 +77,7 @@ before(async () => {
   baseUrl = `http://127.0.0.1:${port}`;
   server = spawn(process.execPath, ['backend.js'], {
     cwd: path.resolve(__dirname, '..'),
-    env: { ...process.env, NODE_ENV: 'test', PORT: String(port), DATA_DIR: dataDir, JWT_SECRET: 'test-secret-not-for-production', ROUTING_BASE_URL: routingBaseUrl },
+    env: { ...process.env, NODE_ENV: 'test', PORT: String(port), DATA_DIR: dataDir, JWT_SECRET: 'test-secret-not-for-production', ROUTING_BASE_URL: routingBaseUrl, ADMIN_EMAILS: 'mariana@reusa.com, carlos@reusa.com' },
     stdio: 'ignore'
   });
   await waitForServer();
@@ -108,6 +108,18 @@ test('seeded user can authenticate and access protected data', async () => {
   const profile = await request('/api/profile', { headers: { Authorization: `Bearer ${login.payload.token}` } });
   assert.equal(profile.response.status, 200);
   assert.equal(profile.payload.user.id, 'user-mariana');
+});
+
+test('every configured administrator email receives administrator access', async () => {
+  const login = await request('/api/auth/login', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ email: 'carlos@reusa.com', password: '12345678' })
+  });
+  assert.equal(login.response.status, 200);
+
+  const dashboard = await request('/api/admin/dashboard', { headers: { Authorization: `Bearer ${login.payload.token}` } });
+  assert.equal(dashboard.response.status, 200);
 });
 
 test('registration validates data and persists a new account', async () => {

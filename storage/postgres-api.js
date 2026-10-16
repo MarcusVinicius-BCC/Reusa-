@@ -118,7 +118,7 @@ function verifyPassword(password, stored) {
   return expected.length === actual.length && crypto.timingSafeEqual(actual, expected);
 }
 
-function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publisher, upload, sendVerificationEmail, verificationToken, sha256 }) {
+function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publisher, upload, sendVerificationEmail, verificationToken, sha256, isConfiguredAdminEmail = () => false }) {
   const authenticate = async (req, res, next) => {
     const token = String(req.headers.authorization || '').replace(/^Bearer\s+/, '');
     if (!token) return res.status(401).json({ error: 'Authentication required' });
@@ -183,9 +183,10 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
   app.get('/api/auth/verify-email', async (req, res, next) => {
     try {
       const tokenHash = sha256(String(req.query.token || ''));
-      const user = await db.one('SELECT id FROM users WHERE email_verification_token_hash=$1 AND email_verification_expires_at > now()', [tokenHash]);
+      const user = await db.one('SELECT id,email FROM users WHERE email_verification_token_hash=$1 AND email_verification_expires_at > now()', [tokenHash]);
       if (!user) return res.status(400).send('Link de verificação inválido ou expirado. Solicite um novo link pelo aplicativo.');
       await db.query('UPDATE users SET email_verified=true,email_verification_token_hash=NULL,email_verification_expires_at=NULL WHERE id=$1', [user.id]);
+      if (isConfiguredAdminEmail(user.email)) await db.query("UPDATE users SET role='admin' WHERE id=$1", [user.id]);
       return res.redirect('/login#email_verified=1');
     } catch (error) { return next(error); }
   });

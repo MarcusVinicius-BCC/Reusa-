@@ -125,7 +125,7 @@ cp .env.example .env
 | `GOOGLE_CLIENT_ID` | Não | Client ID do login Google. |
 | `GOOGLE_CLIENT_SECRET` | Não | Client Secret do login Google. Nunca o envie ao Git. |
 | `GOOGLE_REDIRECT_URI` | Com Google | Callback OAuth, por exemplo `https://dominio/api/auth/google/callback`. |
-| `ADMIN_EMAIL` | Não | E-mail que receberá perfil de administrador automaticamente. |
+| `ADMIN_EMAILS` | Não | Lista de e-mails de administradores, separados por vírgula. `ADMIN_EMAIL` continua aceito para compatibilidade. |
 | `REDIS_URL`, `AMQP_URL`, `EVENT_EXCHANGE` | Não | Integrações distribuídas opcionais. |
 | Variáveis `S3_*` | Não | Persistência de imagens em um serviço compatível com S3. |
 
