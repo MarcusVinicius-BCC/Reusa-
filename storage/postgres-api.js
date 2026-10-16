@@ -3,6 +3,10 @@ const jwt = require('jsonwebtoken');
 const { isLikelyResidentialAddress } = require('./location-validation');
 const { buildCollectionPointAddress, geocodeCollectionPoint } = require('./collection-point-geocoding');
 
+const DONATION_GOAL = 'Doa\u00e7\u00e3o';
+const SALE_GOAL = 'Venda';
+const POST_GOALS = new Set([DONATION_GOAL, 'Troca', SALE_GOAL]);
+
 function id(prefix) {
   return `${prefix}-${crypto.randomUUID()}`;
 }
@@ -229,7 +233,9 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       const body = req.body || {};
       const imageUrl = req.files?.[0] ? (req.files[0].location || `/uploads/${req.files[0].filename}`) : String(body.imageUrl || '').trim();
       if (!String(body.title || '').trim() || !String(body.description || '').trim() || !String(body.category || '').trim() || !imageUrl) return res.status(400).json({ error: 'Missing required fields' });
-      const post = { id: id('post'), author_id: req.user.id, title: String(body.title).trim(), description: String(body.description).trim(), category: String(body.category).trim(), condition: String(body.condition || 'Bom estado'), goal: String(body.goal || 'Doação'), image_url: imageUrl, location: String(body.location || req.user.city), created_at: new Date().toISOString(), chip_icon: String(body.chipIcon || 'volunteer_activism'), chip_label: String(body.chipLabel || body.goal || 'Doação') };
+      const goal = String(body.goal || DONATION_GOAL).trim() || DONATION_GOAL;
+      if (!POST_GOALS.has(goal)) return res.status(400).json({ error: 'Goal must be Doação, Troca or Venda' });
+      const post = { id: id('post'), author_id: req.user.id, title: String(body.title).trim(), description: String(body.description).trim(), category: String(body.category).trim(), condition: String(body.condition || 'Bom estado'), goal, image_url: imageUrl, location: String(body.location || req.user.city), created_at: new Date().toISOString(), chip_icon: String(body.chipIcon || (goal === 'Troca' ? 'swap_horiz' : goal === SALE_GOAL ? 'sell' : 'volunteer_activism')), chip_label: String(body.chipLabel || goal) };
       if (isLikelyResidentialAddress(post.location)) return res.status(400).json({ error: 'Location must be a city or neighborhood, not an exact address' });
       const created = await db.transaction(async (client) => {
         await client.query('INSERT INTO posts(id,author_id,title,description,category,condition,goal,image_url,location,created_at,chip_icon,chip_label) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)', Object.values(post));
@@ -259,7 +265,7 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       const post = await db.one('SELECT * FROM posts WHERE id=$1', [req.params.id]);
       if (!post) return res.status(404).json({ error: 'Post not found' });
       if (post.author_id !== req.user.id) return res.status(403).json({ error: 'You can only edit your own posts' });
-      if (['Doado', 'Trocado', 'Encerrado'].includes(post.status)) return res.status(400).json({ error: 'Completed posts cannot be edited' });
+      if (['Doado', 'Trocado', 'Vendido', 'Encerrado'].includes(post.status)) return res.status(400).json({ error: 'Completed posts cannot be edited' });
       const value = (key, fallback) => typeof req.body?.[key] === 'string' ? req.body[key].trim() : fallback;
       const title = value('title', post.title);
       const description = value('description', post.description);
@@ -269,6 +275,7 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       const location = value('location', post.location);
       if (!title || !description || !category) return res.status(400).json({ error: 'Title, description and category are required' });
       if (title.length > 140 || description.length > 3000 || category.length > 60 || condition.length > 60 || goal.length > 40 || location.length > 160) return res.status(400).json({ error: 'One or more fields exceed the allowed length' });
+      if (!POST_GOALS.has(goal)) return res.status(400).json({ error: 'Goal must be Doação, Troca or Venda' });
       if (isLikelyResidentialAddress(location)) return res.status(400).json({ error: 'Location must be a city or neighborhood, not an exact address' });
       const imageUrl = req.files?.[0] ? (req.files[0].location || `/uploads/${req.files[0].filename}`) : post.image_url;
       const updated = await db.one('UPDATE posts SET title=$1,description=$2,category=$3,condition=$4,goal=$5,location=$6,image_url=$7,updated_at=now() WHERE id=$8 RETURNING *', [title, description, category, condition, goal, location, imageUrl, post.id]);
@@ -322,6 +329,8 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       if (negotiation.interested_id !== req.user.id) return res.status(403).json({ error: 'Only the interested user can send this proposal' });
       if (negotiation.proposal_status && negotiation.proposal_status !== 'none') return res.status(409).json({ error: 'Você já enviou uma oferta para este anúncio.' });
       if (negotiation.status !== 'interested') return res.status(400).json({ error: 'This negotiation is no longer accepting proposals' });
+      const post = await db.one('SELECT goal FROM posts WHERE id=$1', [negotiation.post_id]);
+      if (!post || post.goal !== SALE_GOAL) return res.status(400).json({ error: 'Money offers are only available for items marked for sale' });
       if (!Number.isSafeInteger(amountCents) || amountCents < 100 || amountCents > 100000000) return res.status(400).json({ error: 'Amount must be between R$ 1,00 and R$ 1.000.000,00' });
       if (!['pix', 'card', 'boleto'].includes(method)) return res.status(400).json({ error: 'Use pix, card or boleto' });
       const createdAt = new Date().toISOString();
@@ -361,6 +370,8 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
       if (negotiation.interested_id !== req.user.id) return res.status(403).json({ error: 'Only the interested user can make this payment' });
       if (negotiation.status !== 'reserved') return res.status(400).json({ error: 'The negotiation must be reserved before payment' });
+      const post = await db.one('SELECT goal FROM posts WHERE id=$1', [negotiation.post_id]);
+      if (!post || post.goal !== SALE_GOAL) return res.status(400).json({ error: 'Payments are only available for items marked for sale' });
       if (!Number.isSafeInteger(amountCents) || amountCents < 100 || amountCents > 100000000 || currency !== 'BRL' || !['pix', 'card', 'boleto'].includes(method)) return res.status(400).json({ error: 'Use a valid BRL amount and pix, card or boleto' });
       if (!/^[A-Za-z0-9._:-]{16,128}$/.test(idempotencyKey)) return res.status(400).json({ error: 'A valid idempotency key is required' });
       const result = await db.transaction(async (client) => {
@@ -444,21 +455,27 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
     try {
       const rows = await db.many(`SELECT t.id,t.post_id,t.last_message_at,t.unread_count,
         p.title AS post_title, u.id AS other_user_id,u.name AS other_user_name,u.avatar AS other_user_avatar,
-        last_message.text AS last_message_text
+        last_message.text AS last_message_text,last_message.sent_at AS last_message_sent_at
         FROM threads t
         JOIN posts p ON p.id=t.post_id
         JOIN LATERAL jsonb_array_elements_text(t.participants_json::jsonb) participant ON true
         JOIN users u ON u.id=participant AND u.id <> $1
-        LEFT JOIN LATERAL (SELECT text FROM messages WHERE thread_id=t.id ORDER BY sent_at DESC LIMIT 1) last_message ON true
+        LEFT JOIN message_clears cleared ON cleared.user_id=$1 AND cleared.thread_id=t.id
+        LEFT JOIN LATERAL (
+          SELECT text,sent_at FROM messages
+          WHERE thread_id=t.id AND (cleared.cleared_at IS NULL OR sent_at > cleared.cleared_at)
+          ORDER BY sent_at DESC LIMIT 1
+        ) last_message ON true
         WHERE t.participants_json::jsonb @> $2::jsonb
-        ORDER BY t.last_message_at DESC`, [req.user.id, JSON.stringify([req.user.id])]);
+          AND (cleared.cleared_at IS NULL OR last_message.sent_at IS NOT NULL)
+        ORDER BY COALESCE(last_message.sent_at, t.last_message_at) DESC`, [req.user.id, JSON.stringify([req.user.id])]);
       return res.json({ threads: rows.map((row) => ({
         id: row.id,
         postId: row.post_id,
         title: row.other_user_name,
         avatar: row.other_user_avatar || '',
         subtitle: row.last_message_text || row.post_title,
-        time: row.last_message_at,
+        time: row.last_message_sent_at || row.last_message_at,
         unreadCount: Number(row.unread_count || 0)
       })) });
     } catch (error) { return next(error); }
@@ -678,7 +695,8 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       if (post.author_id !== req.user.id) return res.status(403).json({ error: 'Only the owner can complete this post' });
       const outcome = String(req.body?.outcome || '').trim();
       if (!post.reserved_by || post.status !== 'Reservado') return res.status(400).json({ error: 'Reserve the item before completing the negotiation' });
-      if (!['Doado', 'Trocado'].includes(outcome)) return res.status(400).json({ error: 'Choose Doado or Trocado as the outcome' });
+      const allowedOutcomes = post.goal === SALE_GOAL ? ['Vendido'] : ['Doado', 'Trocado'];
+      if (!allowedOutcomes.includes(outcome)) return res.status(400).json({ error: post.goal === SALE_GOAL ? 'Choose Vendido as the outcome' : 'Choose Doado or Trocado as the outcome' });
       const negotiation = await db.one("SELECT * FROM negotiations WHERE post_id=$1 AND interested_id=$2 AND status='reserved'", [post.id, post.reserved_by]);
       if (!negotiation) return res.status(400).json({ error: 'Reserved negotiation not found' });
 

@@ -217,11 +217,17 @@ test('favorites, negotiation status and reviews persist with permission checks',
 
   const created = await request('/api/posts', {
     method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerToken}` },
-    body: JSON.stringify({ title: 'Mesa circular', description: 'Mesa em bom estado para doação.', category: 'Móveis', condition: 'Bom estado', goal: 'Doação', location: 'Centro, Sao Paulo, SP', imageUrl: 'https://images.example.test/mesa.jpg' })
+    body: JSON.stringify({ title: 'Mesa circular', description: 'Mesa em bom estado para doação.', category: 'Móveis', condition: 'Bom estado', goal: 'Doação', location: 'Belem, PA', imageUrl: 'https://images.example.test/mesa.jpg' })
   });
   assert.equal(created.response.status, 201);
   const postId = created.payload.post.id;
   assert.equal(created.payload.post.status, 'Disponível');
+  assert.equal(created.payload.post.location, 'Belem, PA');
+  assert.equal(created.payload.post.author.city, 'Sao Paulo, SP');
+  const feed = await request('/api/feed');
+  const feedPost = feed.payload.posts.find((post) => post.id === postId);
+  assert.equal(feedPost.location, 'Belem, PA');
+  assert.equal(feedPost.author.city, 'Sao Paulo, SP');
 
   const interestedRegistration = await request('/api/auth/register', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -240,9 +246,25 @@ test('favorites, negotiation status and reviews persist with permission checks',
   const thread = await request('/api/messages/threads', { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${interestedToken}` }, body: JSON.stringify({ postId }) });
   assert.equal(thread.response.status, 201);
 
+  const donationNegotiation = await request(`/api/posts/${postId}/negotiation`, { headers: { Authorization: `Bearer ${interestedToken}` } });
+  assert.equal(donationNegotiation.response.status, 200);
+  const donationProposal = await request(`/api/negotiations/${donationNegotiation.payload.negotiation.id}/proposal`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${interestedToken}` },
+    body: JSON.stringify({ amountCents: 2500, method: 'pix' })
+  });
+  assert.equal(donationProposal.response.status, 400);
+
   const reserve = await request(`/api/posts/${postId}/reserve`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerToken}` }, body: JSON.stringify({ interestedId }) });
   assert.equal(reserve.response.status, 200);
   assert.equal(reserve.payload.post.status, 'Reservado');
+
+  const donationPayment = await request(`/api/negotiations/${donationNegotiation.payload.negotiation.id}/payment`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${interestedToken}` },
+    body: JSON.stringify({ amountCents: 2500, currency: 'BRL', method: 'pix', idempotencyKey: `donation-${suffix}-payment` })
+  });
+  assert.equal(donationPayment.response.status, 400);
 
   const completed = await request(`/api/posts/${postId}/complete`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerToken}` }, body: JSON.stringify({ outcome: 'Doado' }) });
   assert.equal(completed.response.status, 200);
@@ -269,6 +291,128 @@ test('favorites, negotiation status and reviews persist with permission checks',
     headers: { Authorization: `Bearer ${ownerToken}` }
   });
   assert.equal(readThreadNotifications.response.status, 200);
+});
+
+test('sale posts allow money offers and are completed as sold', async () => {
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const headers = { 'Content-Type': 'application/json' };
+  const owner = await request('/api/auth/register', {
+    method: 'POST', headers,
+    body: JSON.stringify({ name: 'Vendedor de teste', email: `seller-${suffix}@example.test`, password: 'senha-segura-123', city: 'Sao Paulo, SP' })
+  });
+  const interested = await request('/api/auth/register', {
+    method: 'POST', headers,
+    body: JSON.stringify({ name: 'Comprador de teste', email: `buyer-${suffix}@example.test`, password: 'senha-segura-123', city: 'Belem, PA' })
+  });
+  assert.equal(owner.response.status, 201);
+  assert.equal(interested.response.status, 201);
+
+  const ownerAuth = { ...headers, Authorization: `Bearer ${owner.payload.token}` };
+  const interestedAuth = { ...headers, Authorization: `Bearer ${interested.payload.token}` };
+  const created = await request('/api/posts', {
+    method: 'POST', headers: ownerAuth,
+    body: JSON.stringify({ title: 'Luminária à venda', description: 'Luminária em ótimo estado.', category: 'Móveis', condition: 'Bom estado', goal: 'Venda', location: 'Belem, PA', imageUrl: 'https://images.example.test/luminaria.jpg' })
+  });
+  assert.equal(created.response.status, 201);
+  assert.equal(created.payload.post.goal, 'Venda');
+  assert.equal(created.payload.post.chipIcon, 'sell');
+  const postId = created.payload.post.id;
+
+  const thread = await request('/api/messages/threads', { method: 'POST', headers: interestedAuth, body: JSON.stringify({ postId }) });
+  assert.equal(thread.response.status, 201);
+  const negotiation = await request(`/api/posts/${postId}/negotiation`, { headers: interestedAuth });
+  assert.equal(negotiation.response.status, 200);
+
+  const proposal = await request(`/api/negotiations/${negotiation.payload.negotiation.id}/proposal`, {
+    method: 'POST', headers: interestedAuth,
+    body: JSON.stringify({ amountCents: 2500, method: 'pix' })
+  });
+  assert.equal(proposal.response.status, 201);
+  assert.equal(proposal.payload.proposal.status, 'pending');
+
+  const reserved = await request(`/api/posts/${postId}/reserve`, {
+    method: 'POST', headers: ownerAuth,
+    body: JSON.stringify({ interestedId: interested.payload.user.id })
+  });
+  assert.equal(reserved.response.status, 200);
+  assert.equal(reserved.payload.post.status, 'Reservado');
+
+  const payment = await request(`/api/negotiations/${negotiation.payload.negotiation.id}/payment`, {
+    method: 'POST', headers: interestedAuth,
+    body: JSON.stringify({ amountCents: 2500, currency: 'BRL', method: 'pix', idempotencyKey: `sale-${suffix}-payment` })
+  });
+  assert.equal(payment.response.status, 201);
+  assert.equal(payment.payload.payment.status, 'succeeded');
+
+  const completed = await request(`/api/posts/${postId}/complete`, {
+    method: 'POST', headers: ownerAuth,
+    body: JSON.stringify({ outcome: 'Vendido' })
+  });
+  assert.equal(completed.response.status, 200);
+  assert.equal(completed.payload.post.status, 'Vendido');
+});
+
+test('clearing messages hides the inbox only for that user until a new message arrives', async () => {
+  const suffix = `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+  const headers = { 'Content-Type': 'application/json' };
+  const owner = await request('/api/auth/register', {
+    method: 'POST', headers,
+    body: JSON.stringify({ name: 'Dono das mensagens', email: `messages-owner-${suffix}@example.test`, password: 'senha-segura-123', city: 'Sao Paulo, SP' })
+  });
+  const viewer = await request('/api/auth/register', {
+    method: 'POST', headers,
+    body: JSON.stringify({ name: 'Leitor das mensagens', email: `messages-viewer-${suffix}@example.test`, password: 'senha-segura-123', city: 'Sao Paulo, SP' })
+  });
+  assert.equal(owner.response.status, 201);
+  assert.equal(viewer.response.status, 201);
+
+  const ownerAuth = { ...headers, Authorization: `Bearer ${owner.payload.token}` };
+  const viewerAuth = { ...headers, Authorization: `Bearer ${viewer.payload.token}` };
+  const post = await request('/api/posts', {
+    method: 'POST', headers: ownerAuth,
+    body: JSON.stringify({ title: 'Cadeira para conversar', description: 'Item usado em teste de mensagens.', category: 'Móveis', condition: 'Bom estado', goal: 'Doação', location: 'Centro, Sao Paulo, SP', imageUrl: 'https://images.example.test/cadeira.jpg' })
+  });
+  assert.equal(post.response.status, 201);
+
+  const thread = await request('/api/messages/threads', {
+    method: 'POST', headers: viewerAuth, body: JSON.stringify({ postId: post.payload.post.id })
+  });
+  assert.equal(thread.response.status, 201);
+  const threadId = thread.payload.thread.id;
+
+  const firstMessage = await request(`/api/messages/threads/${threadId}/messages`, {
+    method: 'POST', headers: ownerAuth, body: JSON.stringify({ text: 'Olá, a cadeira ainda está disponível.' })
+  });
+  assert.equal(firstMessage.response.status, 201);
+
+  const beforeClear = await request('/api/messages/threads', { headers: viewerAuth });
+  assert.equal(beforeClear.payload.threads.length, 1);
+  const cleared = await request('/api/messages/threads', { method: 'DELETE', headers: viewerAuth });
+  assert.equal(cleared.response.status, 200);
+  assert.equal(cleared.payload.ok, true);
+
+  const viewerInbox = await request('/api/messages/threads', { headers: viewerAuth });
+  assert.deepEqual(viewerInbox.payload.threads, []);
+  const viewerThread = await request(`/api/messages/threads/${threadId}`, { headers: viewerAuth });
+  assert.deepEqual(viewerThread.payload.messages, []);
+
+  const ownerInbox = await request('/api/messages/threads', { headers: ownerAuth });
+  assert.ok(ownerInbox.payload.threads.some((item) => item.id === threadId));
+  const ownerThread = await request(`/api/messages/threads/${threadId}`, { headers: ownerAuth });
+  assert.equal(ownerThread.payload.messages.length, 1);
+
+  await new Promise((resolve) => setTimeout(resolve, 5));
+  const nextMessage = await request(`/api/messages/threads/${threadId}/messages`, {
+    method: 'POST', headers: ownerAuth, body: JSON.stringify({ text: 'Posso entregar amanhã.' })
+  });
+  assert.equal(nextMessage.response.status, 201);
+
+  const restoredInbox = await request('/api/messages/threads', { headers: viewerAuth });
+  assert.equal(restoredInbox.payload.threads.length, 1);
+  assert.equal(restoredInbox.payload.threads[0].id, threadId);
+  assert.equal(restoredInbox.payload.threads[0].subtitle, 'Posso entregar amanhã.');
+  const restoredThread = await request(`/api/messages/threads/${threadId}`, { headers: viewerAuth });
+  assert.deepEqual(restoredThread.payload.messages.map((message) => message.text), ['Posso entregar amanhã.']);
 });
 
 test('public listing location rejects exact residential addresses', async () => {

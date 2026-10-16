@@ -46,6 +46,9 @@ const IMAGE_EXTENSIONS = new Map([
   ['image/webp', '.webp'],
   ['image/avif', '.avif']
 ]);
+const DONATION_GOAL = 'Doa\u00e7\u00e3o';
+const SALE_GOAL = 'Venda';
+const POST_GOALS = new Set([DONATION_GOAL, 'Troca', SALE_GOAL]);
 
 let db;
 let postgres;
@@ -710,7 +713,7 @@ function publicPost(row, viewerId = null) {
   };
 }
 
-function threadSummary(row, currentUserId) {
+function threadSummary(row, currentUserId, { hideCleared = false } = {}) {
   const participants = JSON.parse(row.participants_json || '[]');
   const otherParticipantId = participants.find((participantId) => participantId !== currentUserId) || participants[0];
   const otherUser = otherParticipantId ? get('SELECT id, name, avatar FROM users WHERE id = ?', [otherParticipantId]) : null;
@@ -719,6 +722,8 @@ function threadSummary(row, currentUserId) {
     ? get('SELECT text, sent_at FROM messages WHERE thread_id = ? AND sent_at > ? ORDER BY sent_at DESC LIMIT 1', [row.id, clear.cleared_at])
     : get('SELECT text, sent_at FROM messages WHERE thread_id = ? ORDER BY sent_at DESC LIMIT 1', [row.id]);
   const post = get('SELECT title FROM posts WHERE id = ?', [row.post_id]);
+
+  if (hideCleared && clear && !lastMessage) return null;
 
   return {
     id: row.id,
@@ -2010,7 +2015,7 @@ async function start() {
     const post = get('SELECT * FROM posts WHERE id = ?', [req.params.id]);
     if (!post) return res.status(404).json({ error: 'Post not found' });
     if (post.author_id !== req.user.id) return res.status(403).json({ error: 'You can only edit your own posts' });
-    if (['Doado', 'Trocado', 'Encerrado'].includes(post.status)) return res.status(400).json({ error: 'Completed posts cannot be edited' });
+    if (['Doado', 'Trocado', 'Vendido', 'Encerrado'].includes(post.status)) return res.status(400).json({ error: 'Completed posts cannot be edited' });
     const title = typeof req.body?.title === 'string' ? req.body.title.trim() : post.title;
     const description = typeof req.body?.description === 'string' ? req.body.description.trim() : post.description;
     const category = typeof req.body?.category === 'string' ? req.body.category.trim() : post.category;
@@ -2019,6 +2024,7 @@ async function start() {
     const location = typeof req.body?.location === 'string' ? req.body.location.trim() : post.location;
     if (!title || !description || !category) return res.status(400).json({ error: 'Title, description and category are required' });
     if (title.length > 140 || description.length > 3000 || category.length > 60 || condition.length > 60 || goal.length > 40 || location.length > 160) return res.status(400).json({ error: 'One or more fields exceed the allowed length' });
+    if (!POST_GOALS.has(goal)) return res.status(400).json({ error: 'Goal must be Doação, Troca or Venda' });
     if (isLikelyResidentialAddress(location)) return res.status(400).json({ error: 'Location must be a city or neighborhood, not an exact address' });
     const files = req.files || [];
     let requestedImages = null;
@@ -2070,6 +2076,8 @@ async function start() {
     if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
     if (negotiation.interested_id !== req.user.id) return res.status(403).json({ error: 'Only the interested user can send this proposal' });
     if (negotiation.status !== 'interested') return res.status(400).json({ error: 'This negotiation is no longer accepting proposals' });
+    const post = get('SELECT goal FROM posts WHERE id = ?', [negotiation.post_id]);
+    if (!post || post.goal !== SALE_GOAL) return res.status(400).json({ error: 'Money offers are only available for items marked for sale' });
     if (negotiation.proposal_status && negotiation.proposal_status !== 'none') return res.status(409).json({ error: 'Você já enviou uma oferta para este anúncio.' });
     if (!Number.isSafeInteger(amountCents) || amountCents < 100 || amountCents > 100000000) return res.status(400).json({ error: 'Amount must be between R$ 1,00 and R$ 1.000.000,00' });
     if (!['pix', 'card', 'boleto'].includes(method)) return res.status(400).json({ error: 'Use pix, card or boleto' });
@@ -2126,6 +2134,8 @@ async function start() {
     if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
     if (negotiation.interested_id !== req.user.id) return res.status(403).json({ error: 'Only the interested user can make this payment' });
     if (negotiation.status !== 'reserved') return res.status(400).json({ error: 'The negotiation must be reserved before payment' });
+    const post = get('SELECT goal FROM posts WHERE id = ?', [negotiation.post_id]);
+    if (!post || post.goal !== SALE_GOAL) return res.status(400).json({ error: 'Payments are only available for items marked for sale' });
     if (!Number.isSafeInteger(amountCents) || amountCents < 100 || amountCents > 100000000) return res.status(400).json({ error: 'Amount must be between R$ 1,00 and R$ 1.000.000,00' });
     if (currency !== 'BRL' || !['pix', 'card', 'boleto'].includes(method)) return res.status(400).json({ error: 'Use BRL and pix, card or boleto' });
     if (!/^[A-Za-z0-9._:-]{16,128}$/.test(idempotencyKey)) return res.status(400).json({ error: 'A valid idempotency key is required' });
@@ -2218,7 +2228,8 @@ async function start() {
     if (!post) return res.status(404).json({ error: 'Post not found' });
     if (post.author_id !== req.user.id) return res.status(403).json({ error: 'Only the owner can complete this post' });
     if (!post.reserved_by || post.status !== 'Reservado') return res.status(400).json({ error: 'Reserve the item before completing the negotiation' });
-    if (!['Doado', 'Trocado'].includes(outcome)) return res.status(400).json({ error: 'Choose Doado or Trocado as the outcome' });
+    const allowedOutcomes = post.goal === SALE_GOAL ? ['Vendido'] : ['Doado', 'Trocado'];
+    if (!allowedOutcomes.includes(outcome)) return res.status(400).json({ error: post.goal === SALE_GOAL ? 'Choose Vendido as the outcome' : 'Choose Doado or Trocado as the outcome' });
     const negotiation = get("SELECT * FROM negotiations WHERE post_id = ? AND interested_id = ? AND status = 'reserved'", [post.id, post.reserved_by]);
     if (!negotiation) return res.status(400).json({ error: 'Reserved negotiation not found' });
     const now = new Date().toISOString();
@@ -2347,6 +2358,11 @@ async function start() {
       return res.status(400).json({ error: 'One or more fields exceed the allowed length' });
     }
 
+    const normalizedGoal = String(goal || DONATION_GOAL).trim() || DONATION_GOAL;
+    if (!POST_GOALS.has(normalizedGoal)) {
+      return res.status(400).json({ error: 'Goal must be Doação, Troca or Venda' });
+    }
+
     const imageUrl = req.files?.[0] ? (req.files[0].location || `/uploads/${req.files[0].filename}`) : safeImageUrl(req.body.imageUrl, '');
     const createdAt = new Date().toISOString();
     const post = {
@@ -2356,14 +2372,14 @@ async function start() {
       description: normalizedDescription,
       category: normalizedCategory,
       condition: condition || 'Bom estado',
-      goal: goal || 'Doação',
+      goal: normalizedGoal,
       image_url: imageUrl,
       likes: 0,
       comments: 0,
       location: location || req.user.city,
       created_at: createdAt,
-      chip_icon: chipIcon || (goal === 'Troca' ? 'swap_horiz' : 'volunteer_activism'),
-      chip_label: chipLabel || goal || 'Disponível'
+      chip_icon: chipIcon || (normalizedGoal === 'Troca' ? 'swap_horiz' : normalizedGoal === SALE_GOAL ? 'sell' : 'volunteer_activism'),
+      chip_label: chipLabel || normalizedGoal
     };
     if (isLikelyResidentialAddress(post.location)) {
       return res.status(400).json({ error: 'Location must be a city or neighborhood, not an exact address' });
@@ -2415,7 +2431,7 @@ async function start() {
 
   app.get('/api/messages/threads', authMiddleware, (req, res) => {
     const rows = all('SELECT * FROM threads ORDER BY last_message_at DESC').filter((row) => JSON.parse(row.participants_json || '[]').includes(req.user.id));
-    const threads = rows.map((row) => threadSummary(row, req.user.id));
+    const threads = rows.map((row) => threadSummary(row, req.user.id, { hideCleared: true })).filter(Boolean);
     res.json({ threads });
   });
 

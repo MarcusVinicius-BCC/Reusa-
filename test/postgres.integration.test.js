@@ -51,14 +51,55 @@ test('PostgreSQL provider persists a post, thread, reservation and outbox event'
     assert.equal(owner.response.status, 201);
     assert.equal(interested.response.status, 201);
     const auth = (token) => ({ ...headers, Authorization: `Bearer ${token}` });
-    const created = await request(baseUrl, '/api/posts', { method: 'POST', headers: auth(owner.payload.token), body: JSON.stringify({ title: 'Post PostgreSQL', description: 'Item de integração.', category: 'Móveis', imageUrl: 'https://example.test/item.jpg' }) });
+    const created = await request(baseUrl, '/api/posts', { method: 'POST', headers: auth(owner.payload.token), body: JSON.stringify({ title: 'Post PostgreSQL', description: 'Item de integração.', category: 'Móveis', goal: 'Venda', location: 'Belem, PA', imageUrl: 'https://example.test/item.jpg' }) });
     assert.equal(created.response.status, 201);
     const postId = created.payload.post.id;
+    assert.equal(created.payload.post.goal, 'Venda');
+    assert.equal(created.payload.post.chipIcon, 'sell');
+    assert.equal(created.payload.post.location, 'Belem, PA');
+    assert.equal(created.payload.post.author.city, 'Sao Paulo, SP');
+    const feed = await request(baseUrl, '/api/feed');
+    const feedPost = feed.payload.posts.find((post) => post.id === postId);
+    assert.equal(feedPost.location, 'Belem, PA');
+    assert.equal(feedPost.author.city, 'Sao Paulo, SP');
     const thread = await request(baseUrl, '/api/messages/threads', { method: 'POST', headers: auth(interested.payload.token), body: JSON.stringify({ postId }) });
     assert.equal(thread.response.status, 201);
+    const threadId = thread.payload.thread.id;
+    const negotiation = await request(baseUrl, `/api/posts/${postId}/negotiation`, { headers: auth(interested.payload.token) });
+    assert.equal(negotiation.response.status, 200);
+    const proposal = await request(baseUrl, `/api/negotiations/${negotiation.payload.negotiation.id}/proposal`, {
+      method: 'POST', headers: auth(interested.payload.token), body: JSON.stringify({ amountCents: 2500, method: 'pix' })
+    });
+    assert.equal(proposal.response.status, 201);
+    const firstMessage = await request(baseUrl, `/api/messages/threads/${threadId}/messages`, { method: 'POST', headers: auth(owner.payload.token), body: JSON.stringify({ text: 'Mensagem antes da limpeza.' }) });
+    assert.equal(firstMessage.response.status, 201);
+
+    const clear = await request(baseUrl, '/api/messages/threads', { method: 'DELETE', headers: auth(interested.payload.token) });
+    assert.equal(clear.response.status, 200);
+    assert.equal(clear.payload.ok, true);
+    const clearedInbox = await request(baseUrl, '/api/messages/threads', { headers: auth(interested.payload.token) });
+    assert.deepEqual(clearedInbox.payload.threads, []);
+    const clearedThread = await request(baseUrl, `/api/messages/threads/${threadId}`, { headers: auth(interested.payload.token) });
+    assert.deepEqual(clearedThread.payload.messages, []);
+    const ownerThread = await request(baseUrl, `/api/messages/threads/${threadId}`, { headers: auth(owner.payload.token) });
+    assert.equal(ownerThread.payload.messages.length, 1);
+
+    await new Promise((resolve) => setTimeout(resolve, 5));
+    const nextMessage = await request(baseUrl, `/api/messages/threads/${threadId}/messages`, { method: 'POST', headers: auth(owner.payload.token), body: JSON.stringify({ text: 'Mensagem após a limpeza.' }) });
+    assert.equal(nextMessage.response.status, 201);
+    const restoredInbox = await request(baseUrl, '/api/messages/threads', { headers: auth(interested.payload.token) });
+    assert.equal(restoredInbox.payload.threads.length, 1);
+    assert.equal(restoredInbox.payload.threads[0].id, threadId);
     const reserved = await request(baseUrl, `/api/posts/${postId}/reserve`, { method: 'POST', headers: auth(owner.payload.token), body: JSON.stringify({ interestedId: interested.payload.user.id }) });
     assert.equal(reserved.response.status, 200);
     assert.equal(reserved.payload.post.status, 'Reservado');
+    const payment = await request(baseUrl, `/api/negotiations/${negotiation.payload.negotiation.id}/payment`, {
+      method: 'POST', headers: auth(interested.payload.token), body: JSON.stringify({ amountCents: 2500, currency: 'BRL', method: 'pix', idempotencyKey: `postgres-${suffix}-payment` })
+    });
+    assert.equal(payment.response.status, 201);
+    const completed = await request(baseUrl, `/api/posts/${postId}/complete`, { method: 'POST', headers: auth(owner.payload.token), body: JSON.stringify({ outcome: 'Vendido' }) });
+    assert.equal(completed.response.status, 200);
+    assert.equal(completed.payload.post.status, 'Vendido');
     const outbox = await request(baseUrl, '/api/distributed/status');
     assert.equal(outbox.response.status, 200);
     assert.ok(outbox.payload.pendingEvents >= 2);
