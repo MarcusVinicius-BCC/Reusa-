@@ -16,6 +16,33 @@ function json(value, fallback = []) {
   }
 }
 
+function parseMoneyToCents(value) {
+  const normalized = String(value ?? '').trim().replace(/^R\$\s*/i, '').replace(/\./g, '').replace(',', '.');
+  if (!/^\d+(?:\.\d{1,2})?$/.test(normalized)) return null;
+  const amount = Number(normalized);
+  return Number.isFinite(amount) ? Math.round(amount * 100) : null;
+}
+
+async function requestedPostImages(db, postId, fallbackImage, imageOrder, files) {
+  const existing = new Set((await db.many('SELECT image_url FROM post_images WHERE post_id=$1', [postId])).map((row) => row.image_url));
+  if (fallbackImage) existing.add(fallbackImage);
+  const uploaded = files || [];
+  const order = Array.isArray(imageOrder) ? imageOrder : uploaded.map((_file, index) => `new:${index}`);
+  const urls = order.map((entry) => {
+    const token = String(entry || '');
+    if (token.startsWith('existing:')) {
+      const url = token.slice('existing:'.length);
+      return existing.has(url) ? url : null;
+    }
+    if (token.startsWith('new:')) {
+      const file = uploaded[Number(token.slice('new:'.length))];
+      return file ? (file.location || `/uploads/${file.filename}`) : null;
+    }
+    return null;
+  }).filter(Boolean);
+  return urls.length <= 8 ? urls : null;
+}
+
 function userView(row) {
   if (!row) return null;
   return {
@@ -50,19 +77,20 @@ function paymentView(payment) {
 }
 
 async function postView(db, row, viewerId) {
-  const [author, interest, reputation, saved, liked, offer] = await Promise.all([
+  const [author, interest, reputation, saved, liked, offer, images] = await Promise.all([
     db.one('SELECT id,name,city,neighborhood,account_type,business_name,avatar FROM users WHERE id=$1', [row.author_id]),
     db.one("SELECT COUNT(*)::int AS count FROM negotiations WHERE post_id=$1 AND status IN ('interested','reserved','completed')", [row.id]),
     db.one('SELECT COALESCE(ROUND(AVG(rating),1),0)::float AS average, COUNT(*)::int AS count FROM reviews WHERE reviewee_id=$1', [row.author_id]),
     viewerId ? db.one('SELECT 1 FROM favorites WHERE user_id=$1 AND post_id=$2', [viewerId, row.id]) : null,
     viewerId ? db.one('SELECT 1 FROM post_likes WHERE user_id=$1 AND post_id=$2', [viewerId, row.id]) : null,
-    viewerId ? db.one('SELECT proposal_status,proposal_amount_cents,proposal_method FROM negotiations WHERE post_id=$1 AND interested_id=$2 ORDER BY updated_at DESC LIMIT 1', [row.id, viewerId]) : null
+    viewerId ? db.one('SELECT proposal_status,proposal_amount_cents,proposal_method FROM negotiations WHERE post_id=$1 AND interested_id=$2 ORDER BY updated_at DESC LIMIT 1', [row.id, viewerId]) : null,
+    db.many('SELECT image_url FROM post_images WHERE post_id=$1 ORDER BY sort_order,created_at', [row.id])
   ]);
   return {
     id: row.id, authorId: row.author_id,
     author: author && { id: author.id, name: author.name, city: author.city, neighborhood: author.neighborhood || '', accountType: author.account_type, businessName: author.business_name || '', avatar: author.avatar || '' },
     title: row.title, description: row.description, category: row.category, condition: row.condition,
-    goal: row.goal, imageUrl: row.image_url, likes: Number(row.likes), comments: Number(row.comments),
+    goal: row.goal, imageUrl: row.image_url, imageUrls: images.length ? images.map((image) => image.image_url) : [row.image_url], likes: Number(row.likes), comments: Number(row.comments),
     location: row.location, createdAt: row.created_at, chipIcon: row.chip_icon, chipLabel: row.chip_label,
     status: row.status, views: Number(row.views || 0), interestedCount: Number(interest?.count || 0),
     saved: Boolean(saved), liked: Boolean(liked), updatedAt: row.updated_at || row.created_at,
@@ -196,14 +224,20 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       return res.json(result);
     } catch (error) { return next(error); }
   });
-  app.post('/api/posts', authenticate, upload.single('image'), async (req, res, next) => {
+  app.post('/api/posts', authenticate, upload.array('images', 8), async (req, res, next) => {
     try {
       const body = req.body || {};
-      const imageUrl = req.file ? (req.file.location || `/uploads/${req.file.filename}`) : String(body.imageUrl || '').trim();
+      const imageUrl = req.files?.[0] ? (req.files[0].location || `/uploads/${req.files[0].filename}`) : String(body.imageUrl || '').trim();
       if (!String(body.title || '').trim() || !String(body.description || '').trim() || !String(body.category || '').trim() || !imageUrl) return res.status(400).json({ error: 'Missing required fields' });
       const post = { id: id('post'), author_id: req.user.id, title: String(body.title).trim(), description: String(body.description).trim(), category: String(body.category).trim(), condition: String(body.condition || 'Bom estado'), goal: String(body.goal || 'Doação'), image_url: imageUrl, location: String(body.location || req.user.city), created_at: new Date().toISOString(), chip_icon: String(body.chipIcon || 'volunteer_activism'), chip_label: String(body.chipLabel || body.goal || 'Doação') };
       if (isLikelyResidentialAddress(post.location)) return res.status(400).json({ error: 'Location must be a city or neighborhood, not an exact address' });
-      const created = await db.transaction(async (client) => { await client.query('INSERT INTO posts(id,author_id,title,description,category,condition,goal,image_url,location,created_at,chip_icon,chip_label) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)', Object.values(post)); await client.query('INSERT INTO threads(id,post_id,participants_json,last_message_at) VALUES($1,$2,$3,$4)', [id('thread'), post.id, JSON.stringify([req.user.id]), post.created_at]); return client.query('SELECT * FROM posts WHERE id=$1', [post.id]).then((r) => r.rows[0]); });
+      const created = await db.transaction(async (client) => {
+        await client.query('INSERT INTO posts(id,author_id,title,description,category,condition,goal,image_url,location,created_at,chip_icon,chip_label) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)', Object.values(post));
+        const files = req.files?.length ? req.files : [{ location: imageUrl }];
+        for (const [index, file] of files.entries()) await client.query('INSERT INTO post_images(id,post_id,image_url,sort_order) VALUES($1,$2,$3,$4)', [id('post-image'), post.id, file.location || `/uploads/${file.filename}`, index]);
+        await client.query('INSERT INTO threads(id,post_id,participants_json,last_message_at) VALUES($1,$2,$3,$4)', [id('thread'), post.id, JSON.stringify([req.user.id]), post.created_at]);
+        return client.query('SELECT * FROM posts WHERE id=$1', [post.id]).then((r) => r.rows[0]);
+      });
       return res.status(201).json({ post: await postView(db, created, req.user.id) });
     } catch (error) { return next(error); }
   });
@@ -220,7 +254,7 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       return res.json({ ok: true });
     } catch (error) { return next(error); }
   });
-  app.put('/api/posts/:id', authenticate, upload.single('image'), async (req, res, next) => {
+  app.put('/api/posts/:id', authenticate, upload.array('images', 8), async (req, res, next) => {
     try {
       const post = await db.one('SELECT * FROM posts WHERE id=$1', [req.params.id]);
       if (!post) return res.status(404).json({ error: 'Post not found' });
@@ -236,9 +270,28 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       if (!title || !description || !category) return res.status(400).json({ error: 'Title, description and category are required' });
       if (title.length > 140 || description.length > 3000 || category.length > 60 || condition.length > 60 || goal.length > 40 || location.length > 160) return res.status(400).json({ error: 'One or more fields exceed the allowed length' });
       if (isLikelyResidentialAddress(location)) return res.status(400).json({ error: 'Location must be a city or neighborhood, not an exact address' });
-      const imageUrl = req.file ? (req.file.location || `/uploads/${req.file.filename}`) : post.image_url;
+      const imageUrl = req.files?.[0] ? (req.files[0].location || `/uploads/${req.files[0].filename}`) : post.image_url;
       const updated = await db.one('UPDATE posts SET title=$1,description=$2,category=$3,condition=$4,goal=$5,location=$6,image_url=$7,updated_at=now() WHERE id=$8 RETURNING *', [title, description, category, condition, goal, location, imageUrl, post.id]);
-      return res.json({ post: await postView(db, updated, req.user.id) });
+      let requestedImages = null;
+      if (req.body?.imageOrder !== undefined || req.files?.length) {
+        let imageOrder;
+        try {
+          imageOrder = req.body?.imageOrder ? JSON.parse(req.body.imageOrder) : undefined;
+        } catch {
+          return res.status(400).json({ error: 'Invalid image order' });
+        }
+        requestedImages = await requestedPostImages(db, post.id, post.image_url, imageOrder, req.files);
+        if (!requestedImages?.length) return res.status(400).json({ error: 'An image is required for every post' });
+      }
+      if (requestedImages) {
+        await db.transaction(async (client) => {
+          await client.query('DELETE FROM post_images WHERE post_id=$1', [post.id]);
+          for (const [index, url] of requestedImages.entries()) await client.query('INSERT INTO post_images(id,post_id,image_url,sort_order) VALUES($1,$2,$3,$4)', [id('post-image'), post.id, url, index]);
+          await client.query('UPDATE posts SET image_url=$1 WHERE id=$2', [requestedImages[0], post.id]);
+        });
+      }
+      const refreshed = requestedImages ? await db.one('SELECT * FROM posts WHERE id=$1', [post.id]) : updated;
+      return res.json({ post: await postView(db, refreshed, req.user.id) });
     } catch (error) { return next(error); }
   });
   app.get('/api/posts/:id/interested', authenticate, async (req, res, next) => {
@@ -261,10 +314,13 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
   app.post('/api/negotiations/:id/proposal', authenticate, async (req, res, next) => {
     try {
       const negotiation = await db.one('SELECT * FROM negotiations WHERE id=$1', [req.params.id]);
-      const amountCents = Number(req.body?.amountCents);
+      const amountCents = req.body?.amountCents !== undefined
+        ? Number(req.body.amountCents)
+        : parseMoneyToCents(req.body?.amount);
       const method = String(req.body?.method || '').trim().toLowerCase();
       if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
       if (negotiation.interested_id !== req.user.id) return res.status(403).json({ error: 'Only the interested user can send this proposal' });
+      if (negotiation.proposal_status && negotiation.proposal_status !== 'none') return res.status(409).json({ error: 'Você já enviou uma oferta para este anúncio.' });
       if (negotiation.status !== 'interested') return res.status(400).json({ error: 'This negotiation is no longer accepting proposals' });
       if (!Number.isSafeInteger(amountCents) || amountCents < 100 || amountCents > 100000000) return res.status(400).json({ error: 'Amount must be between R$ 1,00 and R$ 1.000.000,00' });
       if (!['pix', 'card', 'boleto'].includes(method)) return res.status(400).json({ error: 'Use pix, card or boleto' });
@@ -411,11 +467,32 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
     try {
       const thread = await db.one('SELECT * FROM threads WHERE id=$1 AND participants_json::jsonb @> $2::jsonb', [req.params.id, JSON.stringify([req.user.id])]);
       if (!thread) return res.status(404).json({ error: 'Thread not found' });
-      const messages = await db.many('SELECT * FROM messages WHERE thread_id=$1 ORDER BY sent_at ASC', [thread.id]);
+      const clear = await db.one('SELECT cleared_at FROM message_clears WHERE user_id=$1 AND thread_id=$2', [req.user.id, thread.id]);
+      const messages = clear
+        ? await db.many('SELECT * FROM messages WHERE thread_id=$1 AND sent_at > $2 ORDER BY sent_at ASC', [thread.id, clear.cleared_at])
+        : await db.many('SELECT * FROM messages WHERE thread_id=$1 ORDER BY sent_at ASC', [thread.id]);
       await db.query('UPDATE threads SET unread_count=0 WHERE id=$1', [thread.id]);
       const otherUserId = json(thread.participants_json).find((item) => item !== req.user.id);
       const otherUser = otherUserId ? await db.one('SELECT id,name,avatar FROM users WHERE id=$1', [otherUserId]) : null;
       return res.json({ thread: { ...thread, title: otherUser?.name || 'Conversa', avatar: otherUser?.avatar || '' }, participants: json(thread.participants_json), messages });
+    } catch (error) { return next(error); }
+  });
+  app.delete('/api/messages/threads/:id/messages', authenticate, async (req, res, next) => {
+    try {
+      const thread = await db.one('SELECT id FROM threads WHERE id=$1 AND participants_json::jsonb @> $2::jsonb', [req.params.id, JSON.stringify([req.user.id])]);
+      if (!thread) return res.status(404).json({ error: 'Thread not found' });
+      await db.query(`INSERT INTO message_clears(user_id,thread_id,cleared_at) VALUES($1,$2,now())
+        ON CONFLICT(user_id,thread_id) DO UPDATE SET cleared_at=EXCLUDED.cleared_at`, [req.user.id, thread.id]);
+      return res.json({ ok: true });
+    } catch (error) { return next(error); }
+  });
+  app.delete('/api/messages/threads', authenticate, async (req, res, next) => {
+    try {
+      await db.query(`INSERT INTO message_clears(user_id,thread_id,cleared_at)
+        SELECT $1,t.id,now() FROM threads t
+        WHERE t.participants_json::jsonb @> $2::jsonb
+        ON CONFLICT(user_id,thread_id) DO UPDATE SET cleared_at=EXCLUDED.cleared_at`, [req.user.id, JSON.stringify([req.user.id])]);
+      return res.json({ ok: true });
     } catch (error) { return next(error); }
   });
   app.post('/api/messages/threads/:id/messages', authenticate, async (req, res, next) => {

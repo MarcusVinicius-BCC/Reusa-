@@ -131,7 +131,8 @@ test('registration validates data and persists a new account', async () => {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ email, password: 'senha-segura-123' })
   });
-  assert.equal(login.response.status, 200);
+  assert.equal(login.response.status, 403);
+  assert.equal(login.payload.error, 'Confirme seu e-mail antes de entrar');
 });
 
 test('business registration stores public neighborhood without exposing protected address', async () => {

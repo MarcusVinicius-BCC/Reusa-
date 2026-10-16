@@ -116,11 +116,12 @@ export const useAppStore = create((set, get) => ({
     return result.user;
   },
   createPost: async (payload) => {
-    const body = payload.image instanceof File ? Object.entries(payload).reduce((formData, [key, value]) => {
-      if (key !== 'image' && value !== undefined) formData.append(key, value);
+    const images = Array.isArray(payload.images) ? payload.images : payload.image instanceof File ? [payload.image] : [];
+    const body = images.length ? Object.entries(payload).reduce((formData, [key, value]) => {
+      if (key !== 'image' && key !== 'images' && value !== undefined) formData.append(key, value);
       return formData;
     }, new FormData()) : payload;
-    if (payload.image instanceof File) body.append('image', payload.image);
+    images.forEach((image) => body.append('images', image));
     const result = await api.createPost(body);
     set((state) => ({ posts: [result.post, ...state.posts] }));
     return result.post;
@@ -147,7 +148,14 @@ export const useAppStore = create((set, get) => ({
     return result;
   },
   updatePost: async (postId, payload) => {
-    const result = await api.updatePost(postId, payload);
+    const body = Array.isArray(payload.images)
+      ? Object.entries(payload).reduce((formData, [key, value]) => {
+        if (key !== 'images' && value !== undefined) formData.append(key, Array.isArray(value) ? JSON.stringify(value) : value);
+        return formData;
+      }, new FormData())
+      : payload;
+    if (Array.isArray(payload.images)) payload.images.forEach((image) => body.append('images', image));
+    const result = await api.updatePost(postId, body);
     set((state) => ({ posts: state.posts.map((post) => post.id === postId ? result.post : post) }));
     return result.post;
   },

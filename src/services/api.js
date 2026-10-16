@@ -88,6 +88,8 @@ export const api = {
   threads: () => request('/messages/threads'),
   thread: (id) => request(`/messages/threads/${id}`),
   sendMessage: (id, body) => request(`/messages/threads/${id}/messages`, { method: 'POST', body: JSON.stringify(body) }),
+  clearThreadMessages: (id) => request(`/messages/threads/${id}/messages`, { method: 'DELETE' }),
+  clearAllMessages: () => request('/messages/threads', { method: 'DELETE' }),
   collectionPoints: () => request('/collection-points'),
   collectionPointsNearby: (city) => request(`/collection-points/nearby?city=${encodeURIComponent(city || '')}`),
   mapRoute: ({ fromLat, fromLng, toLat, toLng }) => request(`/map-route?fromLat=${encodeURIComponent(fromLat)}&fromLng=${encodeURIComponent(fromLng)}&toLat=${encodeURIComponent(toLat)}&toLng=${encodeURIComponent(toLng)}`),

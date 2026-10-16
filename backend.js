@@ -204,6 +204,47 @@ function uid(prefix) {
   return `${prefix}-${crypto.randomUUID()}`;
 }
 
+function parseMoneyToCents(value) {
+  if (typeof value === 'number') {
+    return Number.isSafeInteger(value) ? value : Math.round(value * 100);
+  }
+  const normalized = String(value ?? '').trim().replace(/^R\$\s*/i, '');
+  if (!normalized) return null;
+  const brazilian = normalized.replace(/\./g, '').replace(',', '.');
+  if (!/^\d+(?:\.\d{1,2})?$/.test(brazilian)) return null;
+  const amount = Number(brazilian);
+  if (!Number.isFinite(amount)) return null;
+  return Math.round(amount * 100);
+}
+
+function formatMoney(cents) {
+  return (Number(cents) / 100).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+}
+
+function postImages(postId, fallbackImage) {
+  const images = all('SELECT image_url FROM post_images WHERE post_id = ? ORDER BY sort_order, created_at', [postId]).map((item) => item.image_url);
+  return images.length ? images : (fallbackImage ? [fallbackImage] : []);
+}
+
+function requestedPostImages(postId, fallbackImage, imageOrder, files) {
+  const existing = new Set(postImages(postId, fallbackImage));
+  const uploaded = files || [];
+  const order = Array.isArray(imageOrder) ? imageOrder : uploaded.map((_file, index) => `new:${index}`);
+  const urls = order.map((entry) => {
+    const token = String(entry || '');
+    if (token.startsWith('existing:')) {
+      const url = token.slice('existing:'.length);
+      return existing.has(url) ? url : null;
+    }
+    if (token.startsWith('new:')) {
+      const file = uploaded[Number(token.slice('new:'.length))];
+      return file ? (file.location || `/uploads/${file.filename}`) : null;
+    }
+    return null;
+  }).filter(Boolean);
+  return urls.length <= 8 ? urls : null;
+}
+
 function googleOauthEnabled() {
   return Boolean(GOOGLE_CLIENT_ID && GOOGLE_CLIENT_SECRET);
 }
@@ -648,6 +689,7 @@ function publicPost(row, viewerId = null) {
     condition: row.condition,
     goal: row.goal,
     imageUrl: row.image_url,
+    imageUrls: postImages(row.id, row.image_url),
     likes: row.likes,
     comments: row.comments,
     location: approximateLocation(row.location),
@@ -672,7 +714,10 @@ function threadSummary(row, currentUserId) {
   const participants = JSON.parse(row.participants_json || '[]');
   const otherParticipantId = participants.find((participantId) => participantId !== currentUserId) || participants[0];
   const otherUser = otherParticipantId ? get('SELECT id, name, avatar FROM users WHERE id = ?', [otherParticipantId]) : null;
-  const lastMessage = get('SELECT text, sent_at FROM messages WHERE thread_id = ? ORDER BY sent_at DESC LIMIT 1', [row.id]);
+  const clear = get('SELECT cleared_at FROM message_clears WHERE user_id = ? AND thread_id = ?', [currentUserId, row.id]);
+  const lastMessage = clear
+    ? get('SELECT text, sent_at FROM messages WHERE thread_id = ? AND sent_at > ? ORDER BY sent_at DESC LIMIT 1', [row.id, clear.cleared_at])
+    : get('SELECT text, sent_at FROM messages WHERE thread_id = ? ORDER BY sent_at DESC LIMIT 1', [row.id]);
   const post = get('SELECT title FROM posts WHERE id = ?', [row.post_id]);
 
   return {
@@ -681,7 +726,7 @@ function threadSummary(row, currentUserId) {
     unreadCount: row.unread_count,
     title: otherUser ? otherUser.name : 'Conversa',
     subtitle: lastMessage ? lastMessage.text : post ? post.title : 'Sem mensagens',
-    time: lastMessage ? new Date(lastMessage.sent_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '',
+    time: lastMessage ? lastMessage.sent_at : '',
     avatar: otherUser ? otherUser.avatar : null,
     route: '/mensagens/ana'
   };
@@ -746,6 +791,26 @@ function seedDatabase() {
       email_verification_token_hash TEXT,
       email_verification_expires_at TEXT,
       created_at TEXT
+    );
+  `);
+  run(`
+    CREATE TABLE IF NOT EXISTS message_clears (
+      user_id TEXT NOT NULL,
+      thread_id TEXT NOT NULL,
+      cleared_at TEXT NOT NULL,
+      PRIMARY KEY (user_id, thread_id),
+      FOREIGN KEY(user_id) REFERENCES users(id),
+      FOREIGN KEY(thread_id) REFERENCES threads(id)
+    );
+  `);
+  run(`
+    CREATE TABLE IF NOT EXISTS post_images (
+      id TEXT PRIMARY KEY,
+      post_id TEXT NOT NULL,
+      image_url TEXT NOT NULL,
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(post_id) REFERENCES posts(id)
     );
   `);
   const userColumns = new Set(all('PRAGMA table_info(users)').map((column) => column.name));
@@ -1442,7 +1507,7 @@ async function start() {
 
   const upload = multer({
     storage: objectUploadStorage,
-    limits: { fileSize: 5 * 1024 * 1024, files: 1 },
+    limits: { fileSize: 5 * 1024 * 1024, files: 8 },
     fileFilter: (_req, file, callback) => {
       if (IMAGE_EXTENSIONS.has(file.mimetype)) {
         return callback(null, true);
@@ -1935,12 +2000,13 @@ async function start() {
     negotiationIds.forEach((id) => run('DELETE FROM reviews WHERE negotiation_id = ?', [id]));
     run('DELETE FROM negotiations WHERE post_id = ?', [req.params.id]);
     run('DELETE FROM reports WHERE target_type = ? AND target_id = ?', ['post', req.params.id]);
+    run('DELETE FROM post_images WHERE post_id = ?', [req.params.id]);
     run('DELETE FROM posts WHERE id = ?', [req.params.id]);
     persistDb();
     res.json({ ok: true });
   });
 
-  app.put('/api/posts/:id', authMiddleware, upload.single('image'), (req, res) => {
+  app.put('/api/posts/:id', authMiddleware, upload.array('images', 8), (req, res) => {
     const post = get('SELECT * FROM posts WHERE id = ?', [req.params.id]);
     if (!post) return res.status(404).json({ error: 'Post not found' });
     if (post.author_id !== req.user.id) return res.status(403).json({ error: 'You can only edit your own posts' });
@@ -1954,9 +2020,25 @@ async function start() {
     if (!title || !description || !category) return res.status(400).json({ error: 'Title, description and category are required' });
     if (title.length > 140 || description.length > 3000 || category.length > 60 || condition.length > 60 || goal.length > 40 || location.length > 160) return res.status(400).json({ error: 'One or more fields exceed the allowed length' });
     if (isLikelyResidentialAddress(location)) return res.status(400).json({ error: 'Location must be a city or neighborhood, not an exact address' });
-    const imageUrl = req.file ? (req.file.location || `/uploads/${req.file.filename}`) : post.image_url;
+    const files = req.files || [];
+    let requestedImages = null;
+    if (req.body?.imageOrder !== undefined || files.length) {
+      try {
+        const imageOrder = req.body?.imageOrder ? JSON.parse(req.body.imageOrder) : undefined;
+        requestedImages = requestedPostImages(post.id, post.image_url, imageOrder, files);
+      } catch {
+        return res.status(400).json({ error: 'Invalid image order' });
+      }
+      if (!requestedImages?.length) return res.status(400).json({ error: 'An image is required for every post' });
+    }
+    const imageUrl = files[0] ? (files[0].location || `/uploads/${files[0].filename}`) : post.image_url;
     const updatedAt = new Date().toISOString();
     run('UPDATE posts SET title = ?, description = ?, category = ?, condition = ?, goal = ?, location = ?, image_url = ?, updated_at = ? WHERE id = ?', [title, description, category, condition, goal, location, imageUrl, updatedAt, post.id]);
+    if (requestedImages) {
+      run('DELETE FROM post_images WHERE post_id = ?', [post.id]);
+      requestedImages.forEach((url, index) => run('INSERT INTO post_images (id, post_id, image_url, sort_order, created_at) VALUES (?, ?, ?, ?, ?)', [uid('post-image'), post.id, url, index, updatedAt]));
+      run('UPDATE posts SET image_url = ? WHERE id = ?', [requestedImages[0], post.id]);
+    }
     persistDb();
     return res.json({ post: publicPost(get('SELECT * FROM posts WHERE id = ?', [post.id]), req.user.id) });
   });
@@ -1981,16 +2063,19 @@ async function start() {
 
   app.post('/api/negotiations/:id/proposal', authMiddleware, (req, res) => {
     const negotiation = get('SELECT * FROM negotiations WHERE id = ?', [req.params.id]);
-    const amountCents = Number(req.body?.amountCents);
+    const amountCents = req.body?.amountCents !== undefined
+      ? Number(req.body.amountCents)
+      : parseMoneyToCents(req.body?.amount);
     const method = String(req.body?.method || '').trim().toLowerCase();
     if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
     if (negotiation.interested_id !== req.user.id) return res.status(403).json({ error: 'Only the interested user can send this proposal' });
     if (negotiation.status !== 'interested') return res.status(400).json({ error: 'This negotiation is no longer accepting proposals' });
+    if (negotiation.proposal_status && negotiation.proposal_status !== 'none') return res.status(409).json({ error: 'Você já enviou uma oferta para este anúncio.' });
     if (!Number.isSafeInteger(amountCents) || amountCents < 100 || amountCents > 100000000) return res.status(400).json({ error: 'Amount must be between R$ 1,00 and R$ 1.000.000,00' });
     if (!['pix', 'card', 'boleto'].includes(method)) return res.status(400).json({ error: 'Use pix, card or boleto' });
     const now = new Date().toISOString();
     run("UPDATE negotiations SET proposal_status = 'pending', proposal_amount_cents = ?, proposal_method = ?, proposal_created_at = ?, updated_at = ? WHERE id = ?", [amountCents, method, now, now, negotiation.id]);
-    if (!eventPublisher.enabled()) notification(negotiation.owner_id, 'negotiation', 'Nova proposta recebida', `Uma proposta de R$ ${(amountCents / 100).toFixed(2).replace('.', ',')} foi enviada.`, `/anuncios/${negotiation.post_id}`);
+    if (!eventPublisher.enabled()) notification(negotiation.owner_id, 'negotiation', 'Nova proposta recebida', `Uma proposta de ${formatMoney(amountCents)} foi enviada.`, `/anuncios/${negotiation.post_id}`);
     persistDb();
     return res.status(201).json({ proposal: { negotiationId: negotiation.id, status: 'pending', amountCents, method, createdAt: now } });
   });
@@ -2244,7 +2329,7 @@ async function start() {
     res.status(201).json({ comment: { ...comment, name: req.user.name, avatar: req.user.avatar }, comments: get('SELECT comments FROM posts WHERE id = ?', [req.params.id]).comments });
   });
 
-  app.post('/api/posts', authMiddleware, upload.single('image'), (req, res) => {
+  app.post('/api/posts', authMiddleware, upload.array('images', 8), (req, res) => {
     const { title, description, category, condition, goal, location, chipLabel, chipIcon } = req.body || {};
     const normalizedTitle = String(title || '').trim();
     const normalizedDescription = String(description || '').trim();
@@ -2254,7 +2339,7 @@ async function start() {
       return res.status(400).json({ error: 'Missing required fields' });
     }
 
-    if (!req.file && !String(req.body?.imageUrl || '').trim()) {
+    if (!req.files?.length && !String(req.body?.imageUrl || '').trim()) {
       return res.status(400).json({ error: 'An image is required for every post' });
     }
 
@@ -2262,7 +2347,7 @@ async function start() {
       return res.status(400).json({ error: 'One or more fields exceed the allowed length' });
     }
 
-    const imageUrl = req.file ? (req.file.location || `/uploads/${req.file.filename}`) : safeImageUrl(req.body.imageUrl, '');
+    const imageUrl = req.files?.[0] ? (req.files[0].location || `/uploads/${req.files[0].filename}`) : safeImageUrl(req.body.imageUrl, '');
     const createdAt = new Date().toISOString();
     const post = {
       id: uid('post'),
@@ -2289,6 +2374,10 @@ async function start() {
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [post.id, post.author_id, post.title, post.description, post.category, post.condition, post.goal, post.image_url, post.likes, post.comments, post.location, post.created_at, post.chip_icon, post.chip_label]
     );
+    const imageRows = req.files?.length
+      ? req.files.map((file, index) => [uid('post-image'), post.id, file.location || `/uploads/${file.filename}`, index, createdAt])
+      : [[uid('post-image'), post.id, imageUrl, 0, createdAt]];
+    imageRows.forEach((values) => run('INSERT INTO post_images (id, post_id, image_url, sort_order, created_at) VALUES (?, ?, ?, ?, ?)', values));
 
     const threadId = uid('thread');
     run(
@@ -2338,8 +2427,35 @@ async function start() {
 
     const participants = JSON.parse(row.participants_json || '[]');
     if (!participants.includes(req.user.id)) return res.status(403).json({ error: 'Thread access denied' });
-    const messages = all('SELECT * FROM messages WHERE thread_id = ? ORDER BY sent_at ASC', [row.id]);
+    const clear = get('SELECT cleared_at FROM message_clears WHERE user_id = ? AND thread_id = ?', [req.user.id, row.id]);
+    const messages = clear
+      ? all('SELECT * FROM messages WHERE thread_id = ? AND sent_at > ? ORDER BY sent_at ASC', [row.id, clear.cleared_at])
+      : all('SELECT * FROM messages WHERE thread_id = ? ORDER BY sent_at ASC', [row.id]);
     res.json({ thread: row, participants: JSON.parse(row.participants_json || '[]'), messages });
+  });
+
+  app.delete('/api/messages/threads/:id/messages', authMiddleware, (req, res) => {
+    const thread = get('SELECT id, participants_json FROM threads WHERE id = ?', [req.params.id]);
+    if (!thread) return res.status(404).json({ error: 'Thread not found' });
+    if (!JSON.parse(thread.participants_json || '[]').includes(req.user.id)) return res.status(403).json({ error: 'Thread access denied' });
+    const clearedAt = new Date().toISOString();
+    run(
+      'INSERT INTO message_clears (user_id, thread_id, cleared_at) VALUES (?, ?, ?) ON CONFLICT(user_id, thread_id) DO UPDATE SET cleared_at = excluded.cleared_at',
+      [req.user.id, thread.id, clearedAt]
+    );
+    persistDb();
+    return res.json({ ok: true, clearedAt });
+  });
+
+  app.delete('/api/messages/threads', authMiddleware, (req, res) => {
+    const now = new Date().toISOString();
+    const threads = all('SELECT id, participants_json FROM threads').filter((thread) => JSON.parse(thread.participants_json || '[]').includes(req.user.id));
+    threads.forEach((thread) => run(
+      'INSERT INTO message_clears (user_id, thread_id, cleared_at) VALUES (?, ?, ?) ON CONFLICT(user_id, thread_id) DO UPDATE SET cleared_at = excluded.cleared_at',
+      [req.user.id, thread.id, now]
+    ));
+    persistDb();
+    return res.json({ ok: true, clearedAt: now });
   });
 
   app.post('/api/messages/threads/:id/messages', authMiddleware, (req, res) => {

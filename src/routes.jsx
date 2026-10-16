@@ -21,6 +21,27 @@ const formatBrazilDate = (value) => {
   const date = validDate(value);
   return date ? new Intl.DateTimeFormat('pt-BR', { timeZone: BRAZIL_TIME_ZONE, day: '2-digit', month: '2-digit', year: 'numeric' }).format(date) : '--/--/----';
 };
+const formatRelativeTime = (value, now = Date.now()) => {
+  const timestamp = validDate(value)?.getTime();
+  if (!timestamp) return 'Data desconhecida';
+  const seconds = Math.max(0, Math.floor((now - timestamp) / 1000));
+  if (seconds < 60) return 'Há alguns segundos';
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `Há ${minutes} minuto${minutes === 1 ? '' : 's'}`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `Há ${hours} hora${hours === 1 ? '' : 's'}`;
+  const days = Math.floor(hours / 24);
+  if (days < 30) return `Há ${days} dia${days === 1 ? '' : 's'}`;
+  const months = Math.floor(days / 30);
+  if (months < 12) return `Há ${months} mês${months === 1 ? '' : 'es'}`;
+  const years = Math.floor(months / 12);
+  return `Há ${years} ano${years === 1 ? '' : 's'}`;
+};
+const formatMoneyInput = (value) => {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (!digits) return '';
+  return (Number(digits) / 100).toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
 function showBrowserNotification(notification) {
   if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
   const browserNotification = new Notification(notification.title, {
@@ -530,6 +551,7 @@ function FeedScreen({ onNavigate }) {
       </header>
       <div className="feed-category-popover">{categoriesOpen ? <CategoryBar selected={category} onChange={(value) => { setCategory(value); setCategoriesOpen(false); }} showSaved={Boolean(session)} savedCount={favorites.length} /> : null}</div>
       <main className="feed-page">
+        <section className="feed-intro"><div><span className="eyebrow">Economia circular local</span><h1>Encontre um novo ciclo</h1><p>Itens compartilhados pela comunidade para doar, trocar e reaproveitar.</p></div><span className="feed-count">{filteredPosts.length} {filteredPosts.length === 1 ? 'anúncio' : 'anúncios'}</span></section>
         <div className="feed-list">
           {filteredPosts.length ? filteredPosts.map((post) => <FeedCard key={post.id} post={post} onNavigate={onNavigate} onOpenChat={async () => { try { const thread = await useAppStore.getState().createThread(post.id); onNavigate(`/mensagens/ana?thread=${thread.id}`); } catch (error) { alert(error.message); } }} onOpenPayment={async () => useAppStore.getState().createThread(post.id)} />) : <div className="empty-state"><span className="material-symbols-outlined">{category === 'Salvos' ? 'bookmark_border' : 'search_off'}</span><h2>{category === 'Salvos' ? 'Nenhum item salvo' : 'Nada encontrado'}</h2><p>{category === 'Salvos' ? 'Toque no marcador de um anúncio para encontrá-lo aqui.' : 'Tente outra busca ou categoria.'}</p></div>}
         </div>
@@ -655,6 +677,12 @@ function FeedCard({ post, onNavigate, onOpenChat, onOpenPayment }) {
   const [proposalBusy, setProposalBusy] = useState(false);
   const [proposalSent, setProposalSent] = useState(false);
   const [offerStatus, setOfferStatus] = useState(post.offerStatus || 'none');
+  const [now, setNow] = useState(Date.now());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 30000);
+    return () => window.clearInterval(timer);
+  }, []);
 
   async function like() {
     try {
@@ -727,6 +755,10 @@ function FeedCard({ post, onNavigate, onOpenChat, onOpenPayment }) {
   }
 
   async function openProposal() {
+    if (offerStatus !== 'none') {
+      alert('Você já enviou uma oferta para este anúncio.');
+      return;
+    }
     setInterestOptionsOpen(false);
     setProposalOpen(true);
     setProposalSent(false);
@@ -749,11 +781,12 @@ function FeedCard({ post, onNavigate, onOpenChat, onOpenPayment }) {
   async function submitProposal(event) {
     event.preventDefault();
     if (!proposalNegotiation || proposalBusy) return;
-    const amount = Number(String(proposalForm.amount).replace(',', '.'));
-    if (!Number.isFinite(amount) || amount < 1) return alert('Informe um valor válido a partir de R$ 1,00.');
+    const digits = String(proposalForm.amount).replace(/\D/g, '');
+    const amountCents = Number(digits);
+    if (!Number.isSafeInteger(amountCents) || amountCents < 100) return alert('Informe um valor válido a partir de R$ 1,00.');
     setProposalBusy(true);
     try {
-      await api.createProposal(proposalNegotiation.id, { amountCents: Math.round(amount * 100), method: proposalForm.method });
+      await api.createProposal(proposalNegotiation.id, { amountCents, method: proposalForm.method });
       setOfferStatus('pending');
       setProposalSent(true);
     } catch (error) {
@@ -768,11 +801,12 @@ function FeedCard({ post, onNavigate, onOpenChat, onOpenPayment }) {
       <div className="post-head">
         <button className={saved ? 'icon-btn saved-btn' : 'icon-btn'} onClick={favorite} aria-label={saved ? 'Remover dos salvos' : 'Salvar anúncio'}><span key={saveAnimationKey} className={saved ? 'material-symbols-outlined save-icon saved-bookmark' : 'material-symbols-outlined save-icon'}>{saved ? 'bookmark' : 'bookmark_border'}</span></button>
         {post.author.avatar ? <img className="avatar" src={post.author.avatar} alt={post.author.name} /> : <span className="avatar avatar-placeholder material-symbols-outlined" aria-label={`Perfil de ${post.author.name}`}>person</span>}
-        <div className="post-meta"><strong>{post.author.name}</strong><span>Há 2 horas • {post.author.city}</span></div>
+        <div className="post-meta"><strong>{post.author.name}</strong><span>{formatRelativeTime(post.createdAt, now)} • {post.author.city}</span></div>
         {post.authorId === session?.id ? <button className="icon-btn" onClick={removePost} title="Excluir anúncio" aria-label="Excluir anúncio"><span className="material-symbols-outlined">delete</span></button> : null}
       </div>
-      <div className="post-image-wrap">
+      <div className="post-image-wrap post-card-clickable" onClick={() => onNavigate(`/anuncios/${post.id}`)} role="link" tabIndex="0" onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onNavigate(`/anuncios/${post.id}`); }}>
         <img className="post-image" src={post.imageUrl} alt={post.title} />
+        {post.imageUrls?.length > 1 ? <span className="post-image-count"><span className="material-symbols-outlined">photo_library</span>{post.imageUrls.length}</span> : null}
         <div className="chip-float"><span className="material-symbols-outlined">{post.chipIcon}</span>{post.chipLabel}</div>
       </div>
       <div className="post-body">
@@ -783,11 +817,11 @@ function FeedCard({ post, onNavigate, onOpenChat, onOpenPayment }) {
       {post.offerStatus && post.offerStatus !== 'none' ? <div className={`offer-status offer-status-${post.offerStatus}`}><span className="material-symbols-outlined">{post.offerStatus === 'accepted' ? 'check_circle' : post.offerStatus === 'rejected' ? 'cancel' : 'schedule'}</span>{post.offerStatus === 'accepted' ? 'Oferta aceita' : post.offerStatus === 'rejected' ? 'Oferta recusada' : 'Proposta aguardando resposta'}</div> : null}
       <div className="post-actions">
         <div className="post-stats"><button className={liked ? 'ghost-inline liked' : 'ghost-inline'} onClick={like}><span key={heartAnimationKey} className={liked ? 'material-symbols-outlined like-icon liked-heart' : 'material-symbols-outlined like-icon'}>{liked ? 'favorite' : 'favorite_border'}</span>{likes}</button><button className="ghost-inline" onClick={toggleComments}><span className="material-symbols-outlined">chat_bubble</span>{commentCount}</button></div>
-        {post.authorId !== session?.id ? <button className="primary-btn compact" onClick={() => setInterestOptionsOpen(true)}><span className="material-symbols-outlined">handshake</span>Tenho interesse</button> : <span className="post-owner-label">Seu anúncio</span>}
+        {post.authorId !== session?.id ? <button className="primary-btn compact" disabled={offerStatus !== 'none'} onClick={() => setInterestOptionsOpen(true)}><span className="material-symbols-outlined">handshake</span>{offerStatus !== 'none' ? 'Oferta enviada' : 'Tenho interesse'}</button> : <span className="post-owner-label">Seu anúncio</span>}
       </div>
       {commentsOpen ? <section className="comments-panel"><div className="comments-list">{comments.length ? comments.map((comment) => <div className="comment" key={comment.id}>{comment.avatar ? <img src={comment.avatar} alt="" /> : <span className="avatar-placeholder material-symbols-outlined" aria-hidden="true">person</span>}<div><strong>{comment.name}</strong><p>{comment.text}</p></div></div>) : commentCount === 0 ? <p className="comments-empty">Ainda não há comentários. Seja o primeiro.</p> : null}</div><form className="comment-form" onSubmit={addComment}><input value={commentText} maxLength="500" onChange={(event) => setCommentText(event.target.value)} placeholder="Escreva um comentário..." /><button className="send-btn" disabled={commentBusy} aria-label="Publicar comentário"><span className="material-symbols-outlined">send</span></button></form></section> : null}
       {interestOptionsOpen ? <div className="interest-modal-backdrop" role="presentation" onClick={() => setInterestOptionsOpen(false)}><section className="interest-modal" role="dialog" aria-modal="true" aria-labelledby={`interest-title-${post.id}`} onClick={(event) => event.stopPropagation()}><button type="button" className="interest-modal-close" onClick={() => setInterestOptionsOpen(false)} aria-label="Fechar opções"><span className="material-symbols-outlined">close</span></button><div className="interest-modal-heading"><span className="interest-modal-badge"><span className="material-symbols-outlined">handshake</span></span><span className="eyebrow">Tenho interesse</span></div><h2 id={`interest-title-${post.id}`}>Como você quer continuar?</h2><p>Escolha uma forma de iniciar sua negociação com o anunciante.</p><div className="interest-modal-actions"><button type="button" className="interest-choice interest-choice-message" onClick={() => { setInterestOptionsOpen(false); onOpenChat(); }}><span className="interest-choice-icon"><span className="material-symbols-outlined">chat_bubble</span></span><span className="interest-choice-copy"><strong>Conversar por mensagem</strong><small>Combine os detalhes pelo chat</small></span><span className="material-symbols-outlined interest-choice-arrow">arrow_forward</span></button><button type="button" className="interest-choice interest-choice-payment" onClick={openProposal}><span className="interest-choice-icon"><span className="material-symbols-outlined">payments</span></span><span className="interest-choice-copy"><strong>Fazer oferta com pagamento</strong><small>Pagamento simulado após a reserva</small></span><span className="material-symbols-outlined interest-choice-arrow">arrow_forward</span></button></div><small className="interest-modal-note"><span className="material-symbols-outlined">info</span>O pagamento só será liberado depois que o vendedor reservar o item para você.</small></section></div> : null}
-      {proposalOpen ? <div className="interest-modal-backdrop" role="presentation" onClick={() => setProposalOpen(false)}><section className="interest-modal proposal-modal" role="dialog" aria-modal="true" aria-labelledby={`proposal-title-${post.id}`} onClick={(event) => event.stopPropagation()}><button type="button" className="interest-modal-close" onClick={() => setProposalOpen(false)} aria-label="Fechar proposta"><span className="material-symbols-outlined">close</span></button><div className="interest-modal-heading"><span className="interest-modal-badge proposal-modal-badge"><span className="material-symbols-outlined">payments</span></span><span className="eyebrow">Oferta de pagamento</span></div>{proposalSent ? <><h2 id={`proposal-title-${post.id}`}>Proposta enviada!</h2><p>Sua oferta foi enviada e aguarda a resposta do vendedor.</p><div className="proposal-success"><span className="material-symbols-outlined">schedule</span><strong>Você poderá pagar depois que o vendedor aceitar e reservar o anúncio.</strong></div><button type="button" className="primary-btn proposal-close-action" onClick={() => setProposalOpen(false)}>Voltar ao feed</button></> : <><h2 id={`proposal-title-${post.id}`}>Envie sua proposta</h2><p>Informe o valor e a forma de pagamento para o vendedor analisar.</p>{proposalNegotiation ? <form className="proposal-modal-form" onSubmit={submitProposal}><label>Valor da oferta (R$)<input type="number" min="1" step="0.01" value={proposalForm.amount} onChange={(event) => setProposalForm((current) => ({ ...current, amount: event.target.value }))} placeholder="10,00" required /></label><label>Forma de pagamento<select value={proposalForm.method} onChange={(event) => setProposalForm((current) => ({ ...current, method: event.target.value }))}><option value="pix">PIX simulado</option><option value="card">Cartão simulado</option><option value="boleto">Boleto simulado</option></select></label><button className="primary-btn" disabled={proposalBusy}>{proposalBusy ? 'Enviando...' : 'Enviar proposta'}<span className="material-symbols-outlined">send</span></button></form> : <div className="proposal-loading"><span className="material-symbols-outlined">progress_activity</span>Preparando sua proposta...</div>}</>}</section></div> : null}
+      {proposalOpen ? <div className="interest-modal-backdrop" role="presentation" onClick={() => setProposalOpen(false)}><section className="interest-modal proposal-modal" role="dialog" aria-modal="true" aria-labelledby={`proposal-title-${post.id}`} onClick={(event) => event.stopPropagation()}><button type="button" className="interest-modal-close" onClick={() => setProposalOpen(false)} aria-label="Fechar proposta"><span className="material-symbols-outlined">close</span></button><div className="interest-modal-heading"><span className="interest-modal-badge proposal-modal-badge"><span className="material-symbols-outlined">payments</span></span><span className="eyebrow">Oferta de pagamento</span></div>{proposalSent ? <><h2 id={`proposal-title-${post.id}`}>Proposta enviada!</h2><p>Sua oferta foi enviada e aguarda a resposta do vendedor.</p><div className="proposal-success"><span className="material-symbols-outlined">schedule</span><strong>Você poderá pagar depois que o vendedor aceitar e reservar o anúncio.</strong></div><button type="button" className="primary-btn proposal-close-action" onClick={() => setProposalOpen(false)}>Voltar ao feed</button></> : <><h2 id={`proposal-title-${post.id}`}>Envie sua proposta</h2><p>Informe o valor e a forma de pagamento para o vendedor analisar.</p>{proposalNegotiation ? <form className="proposal-modal-form" onSubmit={submitProposal}><label>Valor da oferta (R$)<input inputMode="decimal" value={proposalForm.amount} onChange={(event) => setProposalForm((current) => ({ ...current, amount: formatMoneyInput(event.target.value) }))} placeholder="10,00" required /></label><label>Forma de pagamento<select value={proposalForm.method} onChange={(event) => setProposalForm((current) => ({ ...current, method: event.target.value }))}><option value="pix">PIX simulado</option><option value="card">Cartão simulado</option><option value="boleto">Boleto simulado</option></select></label><button className="primary-btn" disabled={proposalBusy}>{proposalBusy ? 'Enviando...' : 'Enviar proposta'}<span className="material-symbols-outlined">send</span></button></form> : <div className="proposal-loading"><span className="material-symbols-outlined">progress_activity</span>Preparando sua proposta...</div>}</>}</section></div> : null}
     </article>
   );
 }
@@ -804,11 +838,20 @@ function MessagesScreen({ onOpenThread }) {
   }, [loadThreads]);
 
   const visibleThreads = threads.filter((thread) => `${thread.title} ${thread.subtitle}`.toLowerCase().includes(search.toLowerCase()));
+  async function clearAll() {
+    if (!threads.length || !window.confirm('Limpar todas as conversas deste dispositivo? O histórico dos outros participantes será preservado.')) return;
+    try {
+      await api.clearAllMessages();
+      await loadThreads();
+    } catch (error) {
+      alert(error.message);
+    }
+  }
   return (
     <Shell nav={navRoutes} active="/mensagens">
       <UnifiedTopbar />
       <main className="page messages-page">
-        <section className="messages-intro"><span className="eyebrow">Sua caixa de entrada</span></section>
+        <section className="messages-intro"><span className="eyebrow">Sua caixa de entrada</span><button className="ghost-btn" type="button" onClick={clearAll} disabled={!threads.length}><span className="material-symbols-outlined">delete_sweep</span>Limpar todas</button></section>
         <label className="search-shell messages-search"><span className="material-symbols-outlined">search</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Pesquisar por pessoa ou mensagem..." /></label>
         <div className="thread-list">
           {visibleThreads.map((thread) => (
@@ -862,6 +905,17 @@ function ChatScreen({ onBack }) {
       alert('Entre na sua conta para enviar mensagens.');
       return;
     }
+
+    async function clearConversation() {
+      if (!threadId || !window.confirm('Limpar esta conversa? O histórico dos outros participantes será preservado.')) return;
+      try {
+        await api.clearThreadMessages(threadId);
+        setMessages([]);
+        setThread((current) => current ? { ...current, last_message_at: null } : current);
+      } catch (error) {
+        alert(error.message);
+      }
+    }
     const messageText = text.trim();
     try {
       await sendMessage(threadId, { text: messageText });
@@ -878,7 +932,7 @@ function ChatScreen({ onBack }) {
   return (
     <div className="chat-screen">
       <UnifiedTopbar onBack={onBack} />
-      <div className="chat-banner">{thread?.avatar ? <img className="chat-person-avatar" src={thread.avatar} alt="" /> : <span className="chat-person-avatar material-symbols-outlined" aria-label={`Perfil de ${thread?.title || 'conversa'}`}>person</span>}<div><strong>{thread?.title || 'Conversa'}</strong><span>Negocie com segurança e combine a retirada</span></div></div>
+      <div className="chat-banner">{thread?.avatar ? <img className="chat-person-avatar" src={thread.avatar} alt="" /> : <span className="chat-person-avatar material-symbols-outlined" aria-label={`Perfil de ${thread?.title || 'conversa'}`}>person</span>}<div><strong>{thread?.title || 'Conversa'}</strong><span>Negocie com segurança e combine a retirada</span></div><button className="icon-btn" type="button" onClick={clearConversation} aria-label="Limpar conversa" title="Limpar conversa"><span className="material-symbols-outlined">delete_sweep</span></button></div>
       <main className="chat-body">{messages.map((message) => { const mine = message.sender_id === session?.id; return <div key={message.id} className={mine ? 'bubble mine' : 'bubble'}><p>{message.text}</p><span>{formatBrazilTime(message.sent_at)}</span></div>; })}</main>
       <footer className="chat-compose"><textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="Digite sua mensagem..." rows={1} /><button className="send-btn" onClick={send}><span className="material-symbols-outlined">send</span></button></footer>
     </div>
@@ -890,8 +944,10 @@ function CreatePostScreen({ onBack, onSuccess }) {
   const postForm = useAppStore((state) => state.postForm);
   const setPostForm = useAppStore((state) => state.setPostForm);
   const session = useAppStore((state) => state.session);
-  const [image, setImage] = useState(null);
-  const [imagePreview, setImagePreview] = useState('');
+  const [images, setImages] = useState([]);
+  const imagePreviews = useMemo(() => images.map((image) => URL.createObjectURL(image)), [images]);
+
+  useEffect(() => () => imagePreviews.forEach((preview) => URL.revokeObjectURL(preview)), [imagePreviews]);
   const categories = [
     ['moveis', 'chair', 'Móveis'],
     ['eletronicos', 'devices', 'Eletrônicos'],
@@ -902,19 +958,12 @@ function CreatePostScreen({ onBack, onSuccess }) {
   ];
 
   useEffect(() => {
-    if (!image) {
-      setImagePreview('');
-      return undefined;
-    }
-    const previewUrl = URL.createObjectURL(image);
-    setImagePreview(previewUrl);
-    return () => URL.revokeObjectURL(previewUrl);
-  }, [image]);
+  }, []);
 
   async function submit(event) {
     event.preventDefault();
     if (!postForm.title?.trim() || !postForm.description?.trim()) return;
-    if (!image) {
+    if (!images.length) {
       alert('Adicione uma foto do item para publicar o anúncio.');
       return;
     }
@@ -930,9 +979,9 @@ function CreatePostScreen({ onBack, onSuccess }) {
     }
     try {
       const { customCategory: ignoredCustomCategory, ...postPayload } = postForm;
-      await createPost({ ...postPayload, category, image });
+      await createPost({ ...postPayload, category, images });
       setPostForm({});
-      setImage(null);
+      setImages([]);
       onSuccess();
     } catch (error) {
       alert(error.message);
@@ -950,9 +999,9 @@ function CreatePostScreen({ onBack, onSuccess }) {
         <form onSubmit={submit} className="publish-form">
           <section className="publish-section publish-photo-section">
             <div className="publish-section-head"><div><span className="publish-step">01</span><h3>Mostre seu item</h3></div><span>Uma boa foto faz diferença</span></div>
-            <label className={imagePreview ? 'publish-image-picker has-image' : 'publish-image-picker'}>
-              {imagePreview ? <><img src={imagePreview} alt="Prévia do item" /><span className="publish-change-photo"><span className="material-symbols-outlined">edit</span>Trocar foto</span></> : <><span className="publish-image-icon material-symbols-outlined">add_a_photo</span><strong>Adicionar foto</strong><small>JPG, PNG, WebP ou GIF • até 5 MB</small></>}
-              <input type="file" accept="image/jpeg,image/png,image/gif,image/webp,image/avif" onChange={(event) => setImage(event.target.files?.[0] || null)} />
+            <label className={images.length ? 'publish-image-picker has-image' : 'publish-image-picker'}>
+              {images.length ? <div className="publish-image-previews">{images.map((image, index) => <span key={`${image.name}-${index}`}><img src={imagePreviews[index]} alt={`Prévia ${index + 1}`} /><button type="button" onClick={(event) => { event.preventDefault(); setImages((current) => current.filter((_, imageIndex) => imageIndex !== index)); }} aria-label={`Remover foto ${index + 1}`}>×</button></span>)}</div> : <><span className="publish-image-icon material-symbols-outlined">add_a_photo</span><strong>Adicionar fotos</strong><small>Até 8 imagens • JPG, PNG, WebP ou GIF • até 5 MB cada</small></>}
+              <input type="file" multiple accept="image/jpeg,image/png,image/gif,image/webp,image/avif" onChange={(event) => setImages((current) => [...current, ...Array.from(event.target.files || [])].slice(0, 8))} />
             </label>
           </section>
 
@@ -1015,6 +1064,8 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
   const [proposalBusy, setProposalBusy] = useState(false);
   const [editing, setEditing] = useState(false);
   const [editForm, setEditForm] = useState({});
+  const [editImages, setEditImages] = useState([]);
+  const [editImagePreviews, setEditImagePreviews] = useState([]);
   const [reviewForm, setReviewForm] = useState({ rating: 5, comment: '' });
   const [reviewed, setReviewed] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
@@ -1030,6 +1081,7 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
     Promise.all([api.post(postId), api.comments(postId)]).then(([postResult, commentResult]) => {
       setPost(postResult.post);
       setEditForm({ title: postResult.post.title, description: postResult.post.description, category: postResult.post.category, condition: postResult.post.condition, goal: postResult.post.goal, location: postResult.post.location });
+      setEditImages((postResult.post.imageUrls || [postResult.post.imageUrl]).map((url) => ({ url })));
       setComments(commentResult.comments || []);
     }).catch((error) => alert(error.message)).finally(() => setBusy(false));
     if (session) api.negotiation(postId).then(async (result) => {
@@ -1040,6 +1092,14 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
       }
     }).catch(() => {});
   }, [postId, session?.id]);
+
+  useEffect(() => {
+    const previews = editImages.map((image) => image.file ? URL.createObjectURL(image.file) : image.url);
+    setEditImagePreviews(previews);
+    return () => previews.forEach((preview, index) => {
+      if (editImages[index]?.file) URL.revokeObjectURL(preview);
+    });
+  }, [editImages]);
 
   async function refreshPost() {
     const result = await api.post(postId);
@@ -1057,12 +1117,12 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
   async function submitPayment(event) {
     event.preventDefault();
     if (!negotiation || paymentBusy) return;
-    const amount = Number(String(paymentForm.amount).replace(',', '.'));
-    if (!Number.isFinite(amount) || amount < 1) return alert('Informe um valor válido a partir de R$ 1,00.');
+    const amountCents = Number(String(paymentForm.amount).replace(/\D/g, ''));
+    if (!Number.isSafeInteger(amountCents) || amountCents < 100) return alert('Informe um valor válido a partir de R$ 1,00.');
     setPaymentBusy(true);
     try {
       const result = await api.createPayment(negotiation.id, {
-        amountCents: Math.round(amount * 100),
+        amountCents,
         method: paymentForm.method,
         idempotencyKey: `web-${session.id}-${negotiation.id}-${Date.now()}`
       });
@@ -1078,11 +1138,11 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
   async function submitProposal(event) {
       event.preventDefault();
       if (!negotiation || proposalBusy) return;
-      const amount = Number(String(proposalForm.amount).replace(',', '.'));
-      if (!Number.isFinite(amount) || amount < 1) return alert('Informe um valor válido a partir de R$ 1,00.');
+      const amountCents = Number(String(proposalForm.amount).replace(/\D/g, ''));
+      if (!Number.isSafeInteger(amountCents) || amountCents < 100) return alert('Informe um valor válido a partir de R$ 1,00.');
       setProposalBusy(true);
       try {
-        const result = await api.createProposal(negotiation.id, { amountCents: Math.round(amount * 100), method: proposalForm.method });
+        const result = await api.createProposal(negotiation.id, { amountCents, method: proposalForm.method });
         setNegotiation((current) => ({ ...current, proposalStatus: result.proposal.status, proposalAmountCents: result.proposal.amountCents, proposalMethod: result.proposal.method, proposalCreatedAt: result.proposal.createdAt }));
         alert('Proposta enviada. Aguarde a resposta do vendedor.');
       } catch (error) {
@@ -1154,8 +1214,16 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
 
   async function saveEdit(event) {
     event.preventDefault();
+    if (!editImages.length) {
+      alert('O anúncio precisa ter pelo menos uma foto.');
+      return;
+    }
     try {
-      const updated = await useAppStore.getState().updatePost(post.id, editForm);
+      const newFiles = editImages.filter((image) => image.file).map((image) => image.file);
+      const imageOrder = editImages.map((image) => image.file
+        ? `new:${newFiles.indexOf(image.file)}`
+        : `existing:${image.url}`);
+      const updated = await useAppStore.getState().updatePost(post.id, { ...editForm, images: newFiles, imageOrder });
       setPost(updated); setEditing(false);
     } catch (error) { alert(error.message); }
   }
@@ -1176,13 +1244,13 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
   if (busy || !post) return <div className="loading-stage"><span className="material-symbols-outlined">recycling</span><p>Carregando anúncio...</p></div>;
 
   return <div className="detail-screen"><UnifiedTopbar onBack={onBack} /><main className="detail-page">
-    <section className="detail-image"><img src={post.imageUrl} alt={post.title} /><span className={`status-tag status-${String(post.status || 'Disponível').toLowerCase().replace(/\s+/g, '-')}`}>{post.status || 'Disponível'}</span></section>
+    <section className="detail-image"><img src={post.imageUrl} alt={post.title} /><span className={`status-tag status-${String(post.status || 'Disponível').toLowerCase().replace(/\s+/g, '-')}`}>{post.status || 'Disponível'}</span>{post.imageUrls?.length > 1 ? <div className="detail-gallery-thumbs">{post.imageUrls.map((imageUrl) => <button type="button" key={imageUrl} onClick={() => setPost((current) => ({ ...current, imageUrl }))}><img src={imageUrl} alt="" /></button>)}</div> : null}</section>
     <section className="detail-summary"><div className="detail-kicker"><span>{post.category}</span><span>{post.condition}</span></div><h1>{post.title}</h1><p>{post.description}</p><div className="detail-info"><span><i className="material-symbols-outlined">swap_horiz</i>{post.goal}</span><span><i className="material-symbols-outlined">location_on</i>{post.location}</span><span><i className="material-symbols-outlined">schedule</i>{formatBrazilDate(post.createdAt)} às {formatBrazilTime(post.createdAt)}</span></div><div className="detail-actions"><button className={post.saved ? 'secondary-btn saved-btn' : 'secondary-btn'} onClick={save} title={post.saved ? 'Remover dos salvos' : 'Salvar anúncio'} aria-label={post.saved ? 'Remover dos salvos' : 'Salvar anúncio'}><span className="material-symbols-outlined">{post.saved ? 'bookmark' : 'bookmark_border'}</span>{post.saved ? 'Salvo' : 'Salvar'}</button><button className="secondary-btn" onClick={share} title="Compartilhar anúncio" aria-label="Compartilhar anúncio"><span className="material-symbols-outlined">share</span>Compartilhar</button>{!ownPost ? <button className="primary-btn" disabled={post.status !== 'Disponível'} onClick={startConversation}><span className="material-symbols-outlined">handshake</span>Tenho interesse</button> : null}</div></section>
     <section className="detail-owner"><div>{post.author.avatar ? <img src={post.author.avatar} alt={post.author.name} /> : <span className="avatar-placeholder material-symbols-outlined">person</span>}</div><div><span>Anunciante</span><h2>{post.author.name}</h2><p>{post.author.city} · {post.authorReputation ? `⭐ ${post.authorReputation.toFixed(1)} (${post.authorReviewCount})` : 'Novo na comunidade'}</p></div>{!ownPost ? <div className="owner-actions"><button className="text-btn" onClick={blockAuthor} title="Bloquear anunciante" aria-label="Bloquear anunciante">Bloquear</button><button className="text-btn" onClick={() => openReport('user', post.authorId)} title="Denunciar anunciante" aria-label="Denunciar anunciante">Denunciar</button></div> : null}</section>
-    {ownPost ? <section className="owner-management"><div className="section-title"><div><span className="eyebrow">Gerenciar anúncio</span><h2>Negociação e status</h2></div><div><button className="text-btn" onClick={() => setEditing((value) => !value)}>Editar</button><button className="secondary-btn" onClick={loadInterested}>Interessados ({post.interestedCount || 0})</button><button className="text-btn danger-text" onClick={removeOwnedPost}>Excluir</button></div></div>{editing ? <form className="edit-post-form" onSubmit={saveEdit}><Field label="Título" icon="title" value={editForm.title || ''} onChange={(value) => setEditForm((current) => ({ ...current, title: value }))} /><Field label="Descrição" icon="description" multiline value={editForm.description || ''} onChange={(value) => setEditForm((current) => ({ ...current, description: value }))} /><Field label="Categoria" icon="category" value={editForm.category || ''} onChange={(value) => setEditForm((current) => ({ ...current, category: value }))} /><Field label="Localização aproximada" icon="location_on" value={editForm.location || ''} onChange={(value) => setEditForm((current) => ({ ...current, location: value }))} /><button className="primary-btn">Salvar edição</button></form> : null}<div className="status-controls"><button onClick={() => useAppStore.getState().updatePostStatus(post.id, 'Disponível').then(setPost).catch((error) => alert(error.message))}>Disponível</button><button onClick={() => useAppStore.getState().updatePostStatus(post.id, 'Encerrado').then(setPost).catch((error) => alert(error.message))}>Encerrar</button>{post.status === 'Reservado' ? <><button onClick={() => complete('Doado')}>Marcar doado</button><button onClick={() => complete('Trocado')}>Marcar trocado</button></> : null}</div>{interested.length ? <div className="interested-list">{interested.map((item) => <article key={item.id}><span className="avatar-placeholder material-symbols-outlined">person</span><div><strong>{item.user?.name || 'Usuário'}</strong><small>{item.user?.city} · {item.status}</small>{item.proposalStatus !== 'none' ? <small>Proposta: R$ {((item.proposalAmountCents || 0) / 100).toFixed(2).replace('.', ',')} · {item.proposalStatus}</small> : null}</div>{item.proposalStatus === 'pending' ? <><button className="secondary-btn" onClick={() => api.decideProposal(item.id, 'rejected').then(loadInterested).catch((error) => alert(error.message))}>Recusar</button><button className="primary-btn" onClick={() => api.decideProposal(item.id, 'accepted').then(loadInterested).catch((error) => alert(error.message))}>Aceitar</button></> : null}{(post.status === 'Disponível' || post.status === 'Reservado') && item.proposalStatus !== 'rejected' ? <button className="secondary-btn" onClick={() => reserve(item.user.id)}>Reservar</button> : null}</article>)}</div> : null}</section> : null}
-    {!ownPost && negotiation?.status === 'interested' && negotiation.proposalStatus !== 'pending' ? <section className="review-form-card proposal-card"><span className="eyebrow">Oferta com pagamento</span><h2>Envie sua proposta</h2><p>Informe o valor e a forma de pagamento. O vendedor receberá sua proposta para análise.</p><form onSubmit={submitProposal}><label>Valor da oferta (R$)<input type="number" min="1" step="0.01" value={proposalForm.amount} onChange={(event) => setProposalForm((current) => ({ ...current, amount: event.target.value }))} placeholder="10,00" required /></label><label>Forma de pagamento<select value={proposalForm.method} onChange={(event) => setProposalForm((current) => ({ ...current, method: event.target.value }))}><option value="pix">PIX simulado</option><option value="card">Cartão simulado</option><option value="boleto">Boleto simulado</option></select></label><button className="primary-btn" disabled={proposalBusy}>{proposalBusy ? 'Enviando...' : 'Enviar proposta'}<span className="material-symbols-outlined">send</span></button></form></section> : null}
+    {ownPost ? <section className="owner-management"><div className="section-title"><div><span className="eyebrow">Gerenciar anúncio</span><h2>Negociação e status</h2></div><div><button className="text-btn" onClick={() => { setEditImages((post.imageUrls || [post.imageUrl]).map((url) => ({ url }))); setEditing((value) => !value); }}>Editar</button><button className="secondary-btn" onClick={loadInterested}>Interessados ({post.interestedCount || 0})</button><button className="text-btn danger-text" onClick={removeOwnedPost}>Excluir</button></div></div>{editing ?     <form className="edit-post-form" onSubmit={saveEdit}><div className="edit-gallery"><div className="edit-gallery-heading"><div><span className="eyebrow">Fotos do anúncio</span><p>Use os controles para remover ou reordenar. A primeira foto será a principal.</p></div><label className="secondary-btn edit-gallery-add"><span className="material-symbols-outlined">add_photo_alternate</span>Adicionar fotos<input type="file" multiple accept="image/jpeg,image/png,image/gif,image/webp,image/avif" onChange={(event) => setEditImages((current) => [...current, ...Array.from(event.target.files || []).map((file) => ({ file }))].slice(0, 8))} /></label></div><div className="edit-gallery-grid">{editImages.map((image, index) => <article className={index === 0 ? 'edit-gallery-item is-primary' : 'edit-gallery-item'} key={image.file ? `${image.file.name}-${index}` : image.url}><img src={editImagePreviews[index]} alt={`Foto ${index + 1}`} /><div><strong>{index === 0 ? 'Principal' : `Foto ${index + 1}`}</strong><div className="edit-gallery-controls"><button type="button" disabled={index === 0} onClick={() => setEditImages((current) => { const next = [...current]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; return next; })} aria-label="Mover foto para a esquerda"><span className="material-symbols-outlined">arrow_back</span></button><button type="button" disabled={index === editImages.length - 1} onClick={() => setEditImages((current) => { const next = [...current]; [next[index], next[index + 1]] = [next[index + 1], next[index]]; return next; })} aria-label="Mover foto para a direita"><span className="material-symbols-outlined">arrow_forward</span></button><button type="button" disabled={editImages.length === 1} onClick={() => setEditImages((current) => current.filter((_, imageIndex) => imageIndex !== index))} aria-label="Remover foto"><span className="material-symbols-outlined">delete</span></button></div></div></article>)}</div></div><Field label="Título" icon="title" value={editForm.title || ''} onChange={(value) => setEditForm((current) => ({ ...current, title: value }))} /><Field label="Descrição" icon="description" multiline value={editForm.description || ''} onChange={(value) => setEditForm((current) => ({ ...current, description: value }))} /><Field label="Categoria" icon="category" value={editForm.category || ''} onChange={(value) => setEditForm((current) => ({ ...current, category: value }))} /><Field label="Localização aproximada" icon="location_on" value={editForm.location || ''} onChange={(value) => setEditForm((current) => ({ ...current, location: value }))} /><button className="primary-btn">Salvar edição</button></form> : null}<div className="status-controls"><button onClick={() => useAppStore.getState().updatePostStatus(post.id, 'Disponível').then(setPost).catch((error) => alert(error.message))}>Disponível</button><button onClick={() => useAppStore.getState().updatePostStatus(post.id, 'Encerrado').then(setPost).catch((error) => alert(error.message))}>Encerrar</button>{post.status === 'Reservado' ? <><button onClick={() => complete('Doado')}>Marcar doado</button><button onClick={() => complete('Trocado')}>Marcar trocado</button></> : null}</div>{interested.length ? <div className="interested-list">{interested.map((item) => <article key={item.id}><span className="avatar-placeholder material-symbols-outlined">person</span><div><strong>{item.user?.name || 'Usuário'}</strong><small>{item.user?.city} · {item.status}</small>{item.proposalStatus !== 'none' ? <small>Proposta: R$ {((item.proposalAmountCents || 0) / 100).toFixed(2).replace('.', ',')} · {item.proposalStatus}</small> : null}</div>{item.proposalStatus === 'pending' ? <><button className="secondary-btn" onClick={() => api.decideProposal(item.id, 'rejected').then(loadInterested).catch((error) => alert(error.message))}>Recusar</button><button className="primary-btn" onClick={() => api.decideProposal(item.id, 'accepted').then(loadInterested).catch((error) => alert(error.message))}>Aceitar</button></> : null}{(post.status === 'Disponível' || post.status === 'Reservado') && item.proposalStatus !== 'rejected' ? <button className="secondary-btn" onClick={() => reserve(item.user.id)}>Reservar</button> : null}</article>)}</div> : null}</section> : null}
+    {!ownPost && negotiation?.status === 'interested' && negotiation.proposalStatus === 'none' ? <section className="review-form-card proposal-card"><span className="eyebrow">Oferta com pagamento</span><h2>Envie sua proposta</h2><p>Informe o valor e a forma de pagamento. O vendedor receberá sua proposta para análise.</p><form onSubmit={submitProposal}><label>Valor da oferta (R$)<input inputMode="decimal" value={proposalForm.amount} onChange={(event) => setProposalForm((current) => ({ ...current, amount: formatMoneyInput(event.target.value) }))} placeholder="10,00" required /></label><label>Forma de pagamento<select value={proposalForm.method} onChange={(event) => setProposalForm((current) => ({ ...current, method: event.target.value }))}><option value="pix">PIX simulado</option><option value="card">Cartão simulado</option><option value="boleto">Boleto simulado</option></select></label><button className="primary-btn" disabled={proposalBusy}>{proposalBusy ? 'Enviando...' : 'Enviar proposta'}<span className="material-symbols-outlined">send</span></button></form></section> : null}
     {!ownPost && negotiation?.status === 'interested' && negotiation.proposalStatus === 'pending' ? <section className="payment-waiting-card"><div className="payment-waiting-icon"><span className="material-symbols-outlined">hourglass_top</span></div><div><span className="eyebrow">Proposta enviada</span><h2>Aguardando resposta do vendedor</h2><p>Sua oferta de R$ {((negotiation.proposalAmountCents || 0) / 100).toFixed(2).replace('.', ',')} foi enviada. O pagamento ficará disponível depois que o vendedor aceitar e reservar o item.</p></div><button className="secondary-btn" onClick={startConversation}><span className="material-symbols-outlined">chat_bubble</span>Conversar com o anunciante</button></section> : null}
-    {!ownPost && negotiation?.status === 'reserved' && !payment ? <section className="review-form-card proposal-card"><span className="eyebrow">Pagamento liberado</span><h2>Finalize sua contribuição</h2><p>O vendedor reservou este anúncio para você. Escolha a forma de pagamento simulado para concluir.</p><form onSubmit={submitPayment}><label>Valor do pagamento (R$)<input type="number" min="1" step="0.01" value={paymentForm.amount || (negotiation.proposalAmountCents ? (negotiation.proposalAmountCents / 100).toFixed(2) : '')} onChange={(event) => setPaymentForm((current) => ({ ...current, amount: event.target.value }))} placeholder="10,00" required /></label><label>Forma de pagamento<select value={paymentForm.method} onChange={(event) => setPaymentForm((current) => ({ ...current, method: event.target.value }))}><option value="pix">PIX simulado</option><option value="card">Cartão simulado</option><option value="boleto">Boleto simulado</option></select></label><button className="primary-btn" disabled={paymentBusy}>{paymentBusy ? 'Processando...' : 'Pagar simulação'}<span className="material-symbols-outlined">payments</span></button></form></section> : null}
+    {!ownPost && negotiation?.status === 'reserved' && !payment ? <section className="review-form-card proposal-card"><span className="eyebrow">Pagamento liberado</span><h2>Finalize sua contribuição</h2><p>O vendedor reservou este anúncio para você. Escolha a forma de pagamento simulado para concluir.</p><form onSubmit={submitPayment}><label>Valor do pagamento (R$)<input inputMode="decimal" value={paymentForm.amount || (negotiation.proposalAmountCents ? formatMoneyInput(String(negotiation.proposalAmountCents)) : '')} onChange={(event) => setPaymentForm((current) => ({ ...current, amount: formatMoneyInput(event.target.value) }))} placeholder="10,00" required /></label><label>Forma de pagamento<select value={paymentForm.method} onChange={(event) => setPaymentForm((current) => ({ ...current, method: event.target.value }))}><option value="pix">PIX simulado</option><option value="card">Cartão simulado</option><option value="boleto">Boleto simulado</option></select></label><button className="primary-btn" disabled={paymentBusy}>{paymentBusy ? 'Processando...' : 'Pagar simulação'}<span className="material-symbols-outlined">payments</span></button></form></section> : null}
     {!ownPost && payment ? <section className="payment-waiting-card"><div className="payment-waiting-icon"><span className="material-symbols-outlined">{payment.status === 'succeeded' ? 'check_circle' : 'error'}</span></div><div><span className="eyebrow">Pagamento simulado</span><h2>{payment.status === 'succeeded' ? 'Pagamento confirmado' : 'Pagamento não aprovado'}</h2><p>Valor: R$ {(payment.amountCents / 100).toFixed(2).replace('.', ',')} · Método: {payment.method.toUpperCase()}</p></div></section> : null}
     {negotiation?.status === 'completed' && !reviewed ? <section className="review-form-card"><span className="eyebrow">Negociação concluída</span><h2>Como foi a experiência?</h2><form onSubmit={submitReview}><label>Nota<select value={reviewForm.rating} onChange={(event) => setReviewForm((current) => ({ ...current, rating: Number(event.target.value) }))}>{[5, 4, 3, 2, 1].map((rating) => <option key={rating} value={rating}>{'⭐'.repeat(rating)} ({rating})</option>)}</select></label><textarea value={reviewForm.comment} onChange={(event) => setReviewForm((current) => ({ ...current, comment: event.target.value }))} maxLength="500" placeholder="Comentário opcional" /><button className="primary-btn">Enviar avaliação</button></form></section> : null}
     <section className="detail-comments"><div className="section-title"><h2>Comentários ({post.comments || 0})</h2></div>{comments.length ? comments.map((comment) => <article className="detail-comment" key={comment.id}><span className="avatar-placeholder material-symbols-outlined">person</span><div><strong>{comment.name}</strong><p>{comment.text}</p></div><button className="text-btn" onClick={() => openReport('comment', comment.id)}>Denunciar</button></article>) : <EmptyState icon="chat_bubble" title="Ainda não há comentários" text="Seja a primeira pessoa a conversar sobre este item." /> }<form className="comment-form" onSubmit={submitComment}><input value={commentText} onChange={(event) => setCommentText(event.target.value)} maxLength="500" placeholder="Escreva um comentário..." /><button className="send-btn" aria-label="Enviar comentário"><span className="material-symbols-outlined">send</span></button></form></section>
