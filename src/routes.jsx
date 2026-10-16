@@ -1127,6 +1127,7 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
   const [editForm, setEditForm] = useState({});
   const [editImages, setEditImages] = useState([]);
   const [editImagePreviews, setEditImagePreviews] = useState([]);
+  const [editSaving, setEditSaving] = useState(false);
   const [reviewForm, setReviewForm] = useState({ rating: 5, comment: '' });
   const [reviewed, setReviewed] = useState(false);
   const [reportOpen, setReportOpen] = useState(false);
@@ -1166,6 +1167,29 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
       if (editImages[index]?.file) URL.revokeObjectURL(preview);
     });
   }, [editImages]);
+
+  function resetEditDraft(source = post) {
+    if (!source) return;
+    setEditForm({ title: source.title || '', description: source.description || '', category: source.category || '', condition: source.condition || '', goal: source.goal || '', location: source.location || '' });
+    setEditImages((source.imageUrls?.length ? source.imageUrls : [source.imageUrl]).filter(Boolean).map((url) => ({ url })));
+  }
+
+  function openEdit() {
+    resetEditDraft();
+    setEditing(true);
+  }
+
+  function cancelEdit() {
+    resetEditDraft();
+    setEditing(false);
+  }
+
+  function addEditImages(event) {
+    const files = Array.from(event.target.files || []);
+    event.target.value = '';
+    if (!files.length) return;
+    setEditImages((current) => [...current, ...files.map((file) => ({ file }))].slice(0, 8));
+  }
 
   async function refreshPost() {
     const result = await api.post(postId);
@@ -1296,10 +1320,12 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
 
   async function saveEdit(event) {
     event.preventDefault();
+    if (editSaving) return;
     if (!editImages.length) {
       alert('O anúncio precisa ter pelo menos uma foto.');
       return;
     }
+    setEditSaving(true);
     try {
       const newFiles = editImages.filter((image) => image.file).map((image) => image.file);
       const imageOrder = editImages.map((image) => image.file
@@ -1307,7 +1333,7 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
         : `existing:${image.url}`);
       const updated = await useAppStore.getState().updatePost(post.id, { ...editForm, images: newFiles, imageOrder });
       setPost(updated); setEditing(false);
-    } catch (error) { alert(error.message); }
+    } catch (error) { alert(error.message); } finally { setEditSaving(false); }
   }
 
   async function removeOwnedPost() {
@@ -1329,7 +1355,75 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
     <section className="detail-image"><img src={post.imageUrl} alt={post.title} /><span className={`status-tag status-${String(post.status || 'Disponível').toLowerCase().replace(/\s+/g, '-')}`}>{post.status || 'Disponível'}</span>{post.imageUrls?.length > 1 ? <div className="detail-gallery-thumbs">{post.imageUrls.map((imageUrl) => <button type="button" key={imageUrl} onClick={() => setPost((current) => ({ ...current, imageUrl }))}><img src={imageUrl} alt="" /></button>)}</div> : null}</section>
     <section className="detail-summary"><div className="detail-kicker"><span>{post.category}</span><span>{post.condition}</span></div><h1>{post.title}</h1><p>{post.description}</p><div className="detail-info"><span><i className="material-symbols-outlined">{post.goal === 'Venda' ? 'sell' : post.goal === 'Troca' ? 'swap_horiz' : 'volunteer_activism'}</i>{post.goal}</span><span><i className="material-symbols-outlined">location_on</i>{post.location}</span><span><i className="material-symbols-outlined">schedule</i>{formatBrazilDate(post.createdAt)} às {formatBrazilTime(post.createdAt)}</span></div><div className="detail-actions"><button className={post.saved ? 'secondary-btn saved-btn' : 'secondary-btn'} onClick={save} title={post.saved ? 'Remover dos salvos' : 'Salvar anúncio'} aria-label={post.saved ? 'Remover dos salvos' : 'Salvar anúncio'}><span className="material-symbols-outlined">{post.saved ? 'bookmark' : 'bookmark_border'}</span>{post.saved ? 'Salvo' : 'Salvar'}</button><button className="secondary-btn" onClick={share} title="Compartilhar anúncio" aria-label="Compartilhar anúncio"><span className="material-symbols-outlined">share</span>Compartilhar</button>{!ownPost ? <button className="primary-btn" disabled={post.status !== 'Disponível'} onClick={startConversation}><span className="material-symbols-outlined">handshake</span>Tenho interesse</button> : null}</div></section>
     <section className="detail-owner"><div>{post.author.avatar ? <img src={post.author.avatar} alt={post.author.name} /> : <span className="avatar-placeholder material-symbols-outlined">person</span>}</div><div><span>Anunciante</span><h2>{post.author.name}</h2><p>{post.author.city} · {post.authorReputation ? `⭐ ${post.authorReputation.toFixed(1)} (${post.authorReviewCount})` : 'Novo na comunidade'}</p></div>{!ownPost ? <div className="owner-actions"><button className="text-btn" onClick={blockAuthor} title="Bloquear anunciante" aria-label="Bloquear anunciante">Bloquear</button><button className="text-btn" onClick={() => openReport('user', post.authorId)} title="Denunciar anunciante" aria-label="Denunciar anunciante">Denunciar</button></div> : null}</section>
-    {ownPost ? <section className="owner-management"><div className="section-title"><div><span className="eyebrow">Gerenciar anúncio</span><h2>Negociação e status</h2></div><div><button className="text-btn" onClick={() => { setEditImages((post.imageUrls || [post.imageUrl]).map((url) => ({ url }))); setEditing((value) => !value); }}>Editar</button><button className="secondary-btn" onClick={loadInterested}>Interessados ({post.interestedCount || 0})</button><button className="text-btn danger-text" onClick={removeOwnedPost}>Excluir</button></div></div>{editing ?     <form className="edit-post-form" onSubmit={saveEdit}><div className="edit-gallery"><div className="edit-gallery-heading"><div><span className="eyebrow">Fotos do anúncio</span><p>Use os controles para remover ou reordenar. A primeira foto será a principal.</p></div><label className="secondary-btn edit-gallery-add"><span className="material-symbols-outlined">add_photo_alternate</span>Adicionar fotos<input type="file" multiple accept="image/jpeg,image/png,image/gif,image/webp,image/avif" onChange={(event) => setEditImages((current) => [...current, ...Array.from(event.target.files || []).map((file) => ({ file }))].slice(0, 8))} /></label></div><div className="edit-gallery-grid">{editImages.map((image, index) => <article className={index === 0 ? 'edit-gallery-item is-primary' : 'edit-gallery-item'} key={image.file ? `${image.file.name}-${index}` : image.url}><img src={editImagePreviews[index]} alt={`Foto ${index + 1}`} /><div><strong>{index === 0 ? 'Principal' : `Foto ${index + 1}`}</strong><div className="edit-gallery-controls"><button type="button" disabled={index === 0} onClick={() => setEditImages((current) => { const next = [...current]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; return next; })} aria-label="Mover foto para a esquerda"><span className="material-symbols-outlined">arrow_back</span></button><button type="button" disabled={index === editImages.length - 1} onClick={() => setEditImages((current) => { const next = [...current]; [next[index], next[index + 1]] = [next[index + 1], next[index]]; return next; })} aria-label="Mover foto para a direita"><span className="material-symbols-outlined">arrow_forward</span></button><button type="button" disabled={editImages.length === 1} onClick={() => setEditImages((current) => current.filter((_, imageIndex) => imageIndex !== index))} aria-label="Remover foto"><span className="material-symbols-outlined">delete</span></button></div></div></article>)}</div></div><Field label="Título" icon="title" value={editForm.title || ''} onChange={(value) => setEditForm((current) => ({ ...current, title: value }))} /><Field label="Descrição" icon="description" multiline value={editForm.description || ''} onChange={(value) => setEditForm((current) => ({ ...current, description: value }))} /><Field label="Categoria" icon="category" value={editForm.category || ''} onChange={(value) => setEditForm((current) => ({ ...current, category: value }))} /><Field label="Localização aproximada" icon="location_on" value={editForm.location || ''} onChange={(value) => setEditForm((current) => ({ ...current, location: value }))} /><button className="primary-btn">Salvar edição</button></form> : null}<PostStatusControls post={post} isSale={isSale} statusUpdating={statusUpdating} statusMessage={statusMessage} onChange={updateStatus} onComplete={complete} />{interested.length ? <div className="interested-list">{interested.map((item) => <article key={item.id}><span className="avatar-placeholder material-symbols-outlined">person</span><div><strong>{item.user?.name || 'Usuário'}</strong><small>{item.user?.city} · {item.status}</small>{item.proposalStatus !== 'none' ? <small>Proposta: R$ {((item.proposalAmountCents || 0) / 100).toFixed(2).replace('.', ',')} · {item.proposalStatus}</small> : null}</div>{item.proposalStatus === 'pending' ? <><button className="secondary-btn" onClick={() => api.decideProposal(item.id, 'rejected').then(loadInterested).catch((error) => alert(error.message))}>Recusar</button><button className="primary-btn" onClick={() => api.decideProposal(item.id, 'accepted').then(loadInterested).catch((error) => alert(error.message))}>Aceitar</button></> : null}{(post.status === 'Disponível' || post.status === 'Reservado') && item.proposalStatus !== 'rejected' ? <button className="secondary-btn" onClick={() => reserve(item.user.id)}>Reservar</button> : null}</article>)}</div> : null}</section> : null}
+    {ownPost ? (
+      <section className="owner-management">
+        <div className="section-title">
+          <div><span className="eyebrow">Gerenciar anúncio</span><h2>Negociação e status</h2></div>
+          <div className="owner-management-actions">
+            <button type="button" className="text-btn" onClick={editing ? cancelEdit : openEdit}>{editing ? 'Cancelar edição' : 'Editar'}</button>
+            <button type="button" className="secondary-btn" onClick={loadInterested}>Interessados ({post.interestedCount || 0})</button>
+            <button type="button" className="text-btn danger-text" onClick={removeOwnedPost}>Excluir</button>
+          </div>
+        </div>
+        {editing ? (
+          <form className="edit-post-form" onSubmit={saveEdit}>
+            <header className="edit-post-form-header">
+              <div>
+                <span className="eyebrow">Edição do anúncio</span>
+                <h3>Atualize seu anúncio</h3>
+                <p>Revise fotos e informações antes de salvar as alterações.</p>
+              </div>
+              <button type="button" className="edit-close-btn" onClick={cancelEdit} disabled={editSaving} aria-label="Cancelar edição" title="Cancelar edição"><span className="material-symbols-outlined">close</span></button>
+            </header>
+            <section className="edit-form-section edit-media-section">
+              <div className="edit-section-heading">
+                <span className="edit-section-icon material-symbols-outlined">photo_library</span>
+                <div><span className="eyebrow">Fotos</span><h3>Mostre o item por todos os ângulos</h3><p>A primeira foto será a capa do anúncio.</p></div>
+              </div>
+              <div className="edit-media-tools">
+                <span className="edit-photo-counter"><span className="material-symbols-outlined">collections</span>{editImages.length}/8 fotos</span>
+                <label className="secondary-btn edit-gallery-add"><span className="material-symbols-outlined">add_photo_alternate</span>Adicionar foto<input type="file" multiple accept="image/jpeg,image/png,image/gif,image/webp,image/avif" onChange={addEditImages} disabled={editImages.length >= 8} /></label>
+              </div>
+              <div className="edit-gallery-grid">
+                {editImages.map((image, index) => (
+                  <article className={index === 0 ? 'edit-gallery-item is-primary' : 'edit-gallery-item'} key={image.file ? `${image.file.name}-${index}` : image.url}>
+                    <img src={editImagePreviews[index] || image.url} alt={index === 0 ? 'Foto principal' : `Foto ${index + 1}`} />
+                    <span className="edit-image-order">{index + 1}</span>
+                    <div className="edit-gallery-item-footer">
+                      <strong>{index === 0 ? 'Foto principal' : `Foto ${index + 1}`}</strong>
+                      <div className="edit-gallery-controls">
+                        <button type="button" disabled={index === 0} onClick={() => setEditImages((current) => { const next = [...current]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; return next; })} aria-label="Mover foto para a esquerda" title="Mover para a esquerda"><span className="material-symbols-outlined">arrow_back</span></button>
+                        <button type="button" disabled={index === editImages.length - 1} onClick={() => setEditImages((current) => { const next = [...current]; [next[index], next[index + 1]] = [next[index + 1], next[index]]; return next; })} aria-label="Mover foto para a direita" title="Mover para a direita"><span className="material-symbols-outlined">arrow_forward</span></button>
+                        <button type="button" disabled={editImages.length === 1} onClick={() => setEditImages((current) => current.filter((_, imageIndex) => imageIndex !== index))} aria-label="Remover foto" title="Remover foto"><span className="material-symbols-outlined">delete</span></button>
+                      </div>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            </section>
+            <section className="edit-form-section edit-details-section">
+              <div className="edit-section-heading">
+                <span className="edit-section-icon material-symbols-outlined">edit_note</span>
+                <div><span className="eyebrow">Informações</span><h3>Conte sobre o item</h3><p>Informações claras ajudam a comunidade a decidir.</p></div>
+              </div>
+              <div className="edit-fields-grid">
+                <div className="edit-field-wide"><Field label="Título" icon="title" value={editForm.title || ''} maxLength={140} onChange={(value) => setEditForm((current) => ({ ...current, title: value }))} /></div>
+                <div className="edit-field-wide"><Field label="Descrição" icon="description" multiline value={editForm.description || ''} maxLength={3000} onChange={(value) => setEditForm((current) => ({ ...current, description: value }))} /></div>
+                <Field label="Categoria" icon="category" value={editForm.category || ''} maxLength={60} onChange={(value) => setEditForm((current) => ({ ...current, category: value }))} />
+                <Field label="Localização aproximada" icon="location_on" value={editForm.location || ''} maxLength={160} onChange={(value) => setEditForm((current) => ({ ...current, location: value }))} />
+              </div>
+              <p className="edit-form-hint"><span className="material-symbols-outlined">info</span>Use uma localização aproximada para preservar sua privacidade.</p>
+            </section>
+            <footer className="edit-form-actions">
+              <button type="button" className="ghost-btn" onClick={cancelEdit} disabled={editSaving}>Cancelar</button>
+              <button className="primary-btn" disabled={editSaving}><span className="material-symbols-outlined">save</span>{editSaving ? 'Salvando alterações...' : 'Salvar alterações'}</button>
+            </footer>
+          </form>
+        ) : null}
+        <PostStatusControls post={post} isSale={isSale} statusUpdating={statusUpdating} statusMessage={statusMessage} onChange={updateStatus} onComplete={complete} />
+        {interested.length ? <div className="interested-list">{interested.map((item) => <article key={item.id}><span className="avatar-placeholder material-symbols-outlined">person</span><div><strong>{item.user?.name || 'Usuário'}</strong><small>{item.user?.city} · {item.status}</small>{item.proposalStatus !== 'none' ? <small>Proposta: R$ {((item.proposalAmountCents || 0) / 100).toFixed(2).replace('.', ',')} · {item.proposalStatus}</small> : null}</div>{item.proposalStatus === 'pending' ? <><button className="secondary-btn" onClick={() => api.decideProposal(item.id, 'rejected').then(loadInterested).catch((error) => alert(error.message))}>Recusar</button><button className="primary-btn" onClick={() => api.decideProposal(item.id, 'accepted').then(loadInterested).catch((error) => alert(error.message))}>Aceitar</button></> : null}{(post.status === 'Disponível' || post.status === 'Reservado') && item.proposalStatus !== 'rejected' ? <button className="secondary-btn" onClick={() => reserve(item.user.id)}>Reservar</button> : null}</article>)}</div> : null}
+      </section>
+    ) : null}
     {!ownPost && isSale && negotiation?.status === 'interested' && negotiation.proposalStatus === 'none' ? <section className="review-form-card proposal-card"><span className="eyebrow">Oferta com pagamento</span><h2>Envie sua proposta</h2><p>Informe o valor e a forma de pagamento. O vendedor receberá sua proposta para análise.</p><form onSubmit={submitProposal}><label>Valor da oferta (R$)<input inputMode="decimal" value={proposalForm.amount} onChange={(event) => setProposalForm((current) => ({ ...current, amount: formatMoneyInput(event.target.value) }))} placeholder="10,00" required /></label><label>Forma de pagamento<select value={proposalForm.method} onChange={(event) => setProposalForm((current) => ({ ...current, method: event.target.value }))}><option value="pix">PIX simulado</option><option value="card">Cartão simulado</option><option value="boleto">Boleto simulado</option></select></label><button className="primary-btn" disabled={proposalBusy}>{proposalBusy ? 'Enviando...' : 'Enviar proposta'}<span className="material-symbols-outlined">send</span></button></form></section> : null}
     {!ownPost && isSale && negotiation?.status === 'interested' && negotiation.proposalStatus === 'pending' ? <section className="payment-waiting-card"><div className="payment-waiting-icon"><span className="material-symbols-outlined">hourglass_top</span></div><div><span className="eyebrow">Proposta enviada</span><h2>Aguardando resposta do vendedor</h2><p>Sua oferta de R$ {((negotiation.proposalAmountCents || 0) / 100).toFixed(2).replace('.', ',')} foi enviada. O pagamento ficará disponível depois que o vendedor aceitar e reservar o item.</p></div><button className="secondary-btn" onClick={startConversation}><span className="material-symbols-outlined">chat_bubble</span>Conversar com o anunciante</button></section> : null}
     {!ownPost && isSale && negotiation?.status === 'reserved' && !payment ? <section className="review-form-card proposal-card"><span className="eyebrow">Pagamento liberado</span><h2>Finalize sua contribuição</h2><p>O vendedor reservou este anúncio para você. Escolha a forma de pagamento simulado para concluir.</p><form onSubmit={submitPayment}><label>Valor do pagamento (R$)<input inputMode="decimal" value={paymentForm.amount || (negotiation.proposalAmountCents ? formatMoneyInput(String(negotiation.proposalAmountCents)) : '')} onChange={(event) => setPaymentForm((current) => ({ ...current, amount: formatMoneyInput(event.target.value) }))} placeholder="10,00" required /></label><label>Forma de pagamento<select value={paymentForm.method} onChange={(event) => setPaymentForm((current) => ({ ...current, method: event.target.value }))}><option value="pix">PIX simulado</option><option value="card">Cartão simulado</option><option value="boleto">Boleto simulado</option></select></label><button className="primary-btn" disabled={paymentBusy}>{paymentBusy ? 'Processando...' : 'Pagar simulação'}<span className="material-symbols-outlined">payments</span></button></form></section> : null}
