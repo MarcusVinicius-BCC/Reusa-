@@ -175,7 +175,7 @@ function ScreenRouter({ location, navigate }) {
     case '/nova-publicacao':
       return <CreatePostScreen onBack={() => navigate('/feed')} onSuccess={() => navigate('/feed')} />;
     case '/perfil':
-      return <ProfileScreen onGoToFeed={() => navigate('/feed')} onSettings={() => navigate('/configuracoes')} onSaved={() => navigate('/itens-salvos')} onMyPosts={() => navigate('/meus-anuncios')} onAdmin={() => navigate('/admin')} />;
+      return <ProfileScreen onGoToFeed={() => navigate('/feed')} onSettings={() => navigate('/configuracoes')} onOpenPost={(id) => navigate(`/anuncios/${id}`)} onAdmin={() => navigate('/admin')} />;
     case '/mapa':
       return <MapScreen onSuggest={() => navigate('/sugerir-ponto')} />;
     case '/itens-salvos':
@@ -882,7 +882,7 @@ function MessagesScreen({ onOpenThread }) {
   }
   return (
     <Shell nav={navRoutes} active="/mensagens">
-      <UnifiedTopbar action={<button className="icon-btn messages-clear-action" type="button" onClick={clearAll} disabled={!threads.length || clearing} aria-label="Limpar todas as mensagens" title="Limpar todas as mensagens"><span className="material-symbols-outlined">{clearing ? 'progress_activity' : 'delete_sweep'}</span></button>} />
+      <UnifiedTopbar action={<div className="messages-header-actions"><button className="icon-btn messages-clear-action" type="button" onClick={clearAll} disabled={!threads.length || clearing} aria-busy={clearing} aria-label="Limpar todas as mensagens" title="Limpar todas as mensagens"><span className="material-symbols-outlined">delete_sweep</span></button><HeaderProfileButton /></div>} />
       <main className="page messages-page">
         <label className="search-shell messages-search"><span className="material-symbols-outlined">search</span><input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Pesquisar por pessoa ou mensagem..." /></label>
         <div className="thread-list">
@@ -972,7 +972,7 @@ function ChatScreen({ onBack }) {
   return (
     <div className="chat-screen">
       <UnifiedTopbar onBack={onBack} />
-      <div className="chat-banner">{thread?.avatar ? <img className="chat-person-avatar" src={thread.avatar} alt="" /> : <span className="chat-person-avatar material-symbols-outlined" aria-label={`Perfil de ${thread?.title || 'conversa'}`}>person</span>}<div><strong>{thread?.title || 'Conversa'}</strong><span>Negocie com segurança e combine a retirada</span></div><button className="icon-btn" type="button" onClick={clearConversation} disabled={clearingConversation} aria-label="Limpar conversa" title="Limpar conversa"><span className="material-symbols-outlined">{clearingConversation ? 'progress_activity' : 'delete_sweep'}</span></button></div>
+      <div className="chat-banner">{thread?.avatar ? <img className="chat-person-avatar" src={thread.avatar} alt="" /> : <span className="chat-person-avatar material-symbols-outlined" aria-label={`Perfil de ${thread?.title || 'conversa'}`}>person</span>}<div><strong>{thread?.title || 'Conversa'}</strong><span>Negocie com segurança e combine a retirada</span></div><button className="icon-btn" type="button" onClick={clearConversation} disabled={clearingConversation} aria-busy={clearingConversation} aria-label="Limpar conversa" title="Limpar conversa"><span className="material-symbols-outlined">delete_sweep</span></button></div>
       <main className="chat-body">{messages.map((message) => { const mine = message.sender_id === session?.id; return <div key={message.id} className={mine ? 'bubble mine' : 'bubble'}><p>{message.text}</p><span>{formatBrazilTime(message.sent_at)}</span></div>; })}</main>
       <footer className="chat-compose"><textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="Digite sua mensagem..." rows={1} /><button className="send-btn" onClick={send}><span className="material-symbols-outlined">send</span></button></footer>
     </div>
@@ -1360,11 +1360,13 @@ function MyPostsScreen({ onBack, onOpenPost }) {
   return <div className="subpage"><UnifiedTopbar onBack={onBack} /><main className="page my-posts-page"><div className="segmented-tabs">{['Ativos', 'Reservados', 'Concluídos'].map((item) => <button className={tab === item ? 'active' : ''} key={item} onClick={() => setTab(item)}>{item}</button>)}</div>{visible.length ? <div className="saved-list">{visible.map((post) => <article className="saved-item" key={post.id}><img src={post.imageUrl} alt={post.title} /><div><span className={`status-tag status-${String(post.status).toLowerCase()}`}>{post.status}</span><h2>{post.title}</h2><p>{post.likes} curtidas · {post.comments} comentários · {post.views || 0} visualizações</p><button className="text-btn" onClick={() => onOpenPost(post.id)}>Gerenciar anúncio</button></div></article>)}</div> : <EmptyState icon="inventory_2" title="Você ainda não possui anúncios nesta seção" text="Publique um item e encontre quem pode dar a ele uma nova história." action="Criar publicação" onAction={() => window.location.assign('/nova-publicacao')} />}</main></div>;
 }
 
-function ProfileScreen({ onGoToFeed, onSettings, onSaved, onMyPosts, onAdmin }) {
+function ProfileScreen({ onGoToFeed, onSettings, onOpenPost, onAdmin }) {
   const data = useAppStore((state) => state.profile);
-  const posts = useAppStore((state) => state.posts);
   const session = useAppStore((state) => state.session);
   const loadProfile = useAppStore((state) => state.loadProfile);
+  const favorites = useAppStore((state) => state.favorites);
+  const loadFavorites = useAppStore((state) => state.loadFavorites);
+  const toggleFavorite = useAppStore((state) => state.toggleFavorite);
   const user = data?.user || session || { name: 'Seu perfil', city: 'Sua cidade', avatar: '' };
   const stats = data?.stats || { donations: 0, received: 0, rating: 0, carbonSavedPercent: 0 };
   const achievements = data?.achievements || user.achievements || [];
@@ -1374,10 +1376,23 @@ function ProfileScreen({ onGoToFeed, onSettings, onSaved, onMyPosts, onAdmin }) 
   const updateAvatar = useAppStore((state) => state.updateAvatar);
   const avatarInput = useRef(null);
   const [avatarBusy, setAvatarBusy] = useState(false);
+  const [listingTab, setListingTab] = useState('mine');
+  const [favoritesLoading, setFavoritesLoading] = useState(false);
+  const listingPosts = listingTab === 'mine' ? data?.posts || [] : favorites;
 
   useEffect(() => {
     loadProfile().catch(() => {});
   }, [loadProfile]);
+
+  useEffect(() => {
+    if (listingTab !== 'saved') return undefined;
+    let active = true;
+    setFavoritesLoading(true);
+    loadFavorites()
+      .catch((error) => { if (active) alert(error.message); })
+      .finally(() => { if (active) setFavoritesLoading(false); });
+    return () => { active = false; };
+  }, [listingTab, loadFavorites]);
 
   useEffect(() => { api.communityImpact().then((result) => setCommunityImpact(result.impact)).catch(() => {}); }, []);
 
@@ -1422,15 +1437,22 @@ function ProfileScreen({ onGoToFeed, onSettings, onSaved, onMyPosts, onAdmin }) 
         {communityImpact ? <section className="community-impact-card"><span className="eyebrow">Comunidade ReUsa+</span><div><MiniImpact icon="recycling" value={communityImpact.itemsReused} label="Reaproveitados" layout="centered" /><MiniImpact icon="diversity_3" value={communityImpact.beneficiaries} label="Beneficiados" layout="centered" /><MiniImpact icon="swap_horiz" value={communityImpact.exchanges} label="Trocas" layout="centered" /></div></section> : null}
         <section className="reputation-card"><div><span className="eyebrow">Reputação</span><h2>{reputation.rating ? `⭐ ${reputation.rating.toFixed(1)}` : 'Sem avaliações'}</h2><p>{reputation.count} avaliações</p></div>{data?.reviews?.length ? <div className="review-preview">{data.reviews.slice(0, 2).map((review) => <p key={review.id}><strong>⭐ {review.rating} · {review.reviewerName}</strong>{review.comment ? ` — ${review.comment}` : ''}</p>)}</div> : null}</section>
         {achievements.length ? <section className="badge-row">{achievements.map((achievement, index) => <Badge key={achievement} tone={['mint', 'coral', 'stone'][index % 3]} icon="workspace_premium" label={achievement} />)}</section> : null}
-        <section className="profile-toolbar"><h2>Meus anúncios</h2><div><button className="profile-icon-action active" onClick={onMyPosts} aria-label="Meus anúncios" title="Meus anúncios"><span className="material-symbols-outlined">grid_view</span></button><button className="profile-icon-action" onClick={onSaved} aria-label="Itens salvos" title="Itens salvos"><span className="material-symbols-outlined">bookmark</span></button></div></section>
-        <section className="profile-grid">
-          {posts.filter((post) => post.authorId === user.id || post.author?.id === user.id).map((post) => (
-            <div key={post.id} className="mini-post">
-              <div className="mini-post-thumb"><img src={post.imageUrl} alt={post.title} /><span>{post.category}</span></div>
+        <section className="profile-toolbar">
+          <h2 id="profile-listing-title">{listingTab === 'mine' ? 'Meus anúncios' : 'Itens salvos'}</h2>
+          <div role="tablist" aria-label="Anúncios do perfil">
+            <button id="profile-mine-tab" className={`profile-icon-action ${listingTab === 'mine' ? 'active' : ''}`} onClick={() => setListingTab('mine')} role="tab" aria-selected={listingTab === 'mine'} aria-controls="profile-listing-panel" aria-label="Meus anúncios" title="Meus anúncios"><span className="material-symbols-outlined">grid_view</span></button>
+            <button id="profile-saved-tab" className={`profile-icon-action ${listingTab === 'saved' ? 'active' : ''}`} onClick={() => setListingTab('saved')} role="tab" aria-selected={listingTab === 'saved'} aria-controls="profile-listing-panel" aria-label="Itens salvos" title="Itens salvos"><span className="material-symbols-outlined">bookmark</span></button>
+          </div>
+        </section>
+        <section className="profile-grid" id="profile-listing-panel" role="tabpanel" aria-labelledby={listingTab === 'mine' ? 'profile-mine-tab' : 'profile-saved-tab'} aria-live="polite">
+          {favoritesLoading ? <div className="profile-listing-loading"><span className="material-symbols-outlined">progress_activity</span><span>Carregando itens salvos...</span></div> : listingPosts.length ? listingPosts.map((post) => (
+            <article key={post.id} className="mini-post">
+              <div className="mini-post-thumb"><img src={post.imageUrl} alt={post.title} /><span>{post.category || 'Anúncio'}</span></div>
               <strong>{post.title}</strong>
-              <p>Doado há 2 dias</p>
-            </div>
-          ))}
+              <p>{[post.location, post.status].filter(Boolean).join(' · ') || formatRelativeTime(post.createdAt)}</p>
+              <div className="profile-post-actions"><button type="button" className="text-btn" onClick={() => onOpenPost(post.id)}>Ver anúncio</button>{listingTab === 'saved' ? <button type="button" className="text-btn" onClick={() => toggleFavorite(post.id).catch((error) => alert(error.message))}>Remover</button> : null}</div>
+            </article>
+          )) : <EmptyState icon={listingTab === 'mine' ? 'inventory_2' : 'bookmark_border'} title={listingTab === 'mine' ? 'Você ainda não publicou anúncios' : 'Nenhum item salvo'} text={listingTab === 'mine' ? 'Seus próximos anúncios aparecerão aqui.' : 'Salve anúncios para encontrá-los rapidamente aqui.'} action={listingTab === 'saved' ? 'Explorar anúncios' : undefined} onAction={onGoToFeed} />}
         </section>
       </main>
     </Shell>

@@ -436,6 +436,11 @@ img { display: block; max-width: 100%; }
 .mini-post-thumb span { position: absolute; top: 8px; left: 8px; background: var(--primary-container); color: var(--on-primary-container); border-radius: 999px; padding: 4px 8px; font-size: 10px; text-transform: uppercase; font-weight: 700; }
 .mini-post strong { display: block; margin: 10px 4px 2px; font-family: 'Hanken Grotesk', sans-serif; }
 .mini-post p { margin: 0 4px 6px; font-size: 12px; color: var(--text-variant); }
+.profile-post-actions { display: flex; gap: 12px; margin: 8px 4px 4px; }
+.profile-grid > .empty-state, .profile-listing-loading { grid-column: 1 / -1; }
+.profile-listing-loading { display: flex; align-items: center; justify-content: center; gap: 9px; min-height: 150px; color: var(--text-variant); }
+.profile-listing-loading .material-symbols-outlined { color: var(--primary); animation: profile-listing-spin 1s linear infinite; }
+@keyframes profile-listing-spin { to { transform: rotate(360deg); } }
 
 .map-page { position: relative; min-height: calc(100vh - 84px); overflow: hidden; }
 .live-map { position: absolute; inset: 0; z-index: 0; min-height: 100%; }
@@ -1792,8 +1797,8 @@ button, input, select, textarea { max-width: 100%; }
 
 /* Mensagens: base mobile-first, preparada para telas estreitas, grandes e em paisagem. */
 .messages-page { width: min(100%, 760px); min-height: calc(100dvh - 152px); margin: 0 auto; padding: clamp(12px, 4vw, 20px) clamp(12px, 4vw, 20px) calc(96px + env(safe-area-inset-bottom, 0px)); }
-.messages-clear-action:disabled { cursor: wait; opacity: .65; }
-.messages-clear-action:disabled .material-symbols-outlined, .chat-banner .icon-btn:disabled .material-symbols-outlined { animation: landing-spin 1s linear infinite; }
+.messages-header-actions { display: flex; align-items: center; gap: 6px; }
+.messages-clear-action:disabled, .chat-banner .icon-btn:disabled { cursor: not-allowed; opacity: .65; }
 .messages-search { width: 100%; min-height: 48px; padding: 0 clamp(12px, 3.5vw, 16px); }
 .messages-search { border: 1px solid rgba(186,203,188,.7); background: var(--surface-lowest); box-shadow: 0 8px 18px rgba(42,75,54,.05); }
 .messages-search input { min-width: 0; font-size: 16px; }
