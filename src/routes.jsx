@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
 import { api, clearToken, setToken } from './services/api';
 import { useAppStore } from './state/store';
@@ -254,22 +254,40 @@ function HeaderProfileButton() {
 function LandingScreen({ onCreateAccount, onLogin, onAbout }) {
   const [featuredPosts, setFeaturedPosts] = useState([]);
   const [postsLoading, setPostsLoading] = useState(true);
+  const featuredPostsCursor = useRef(0);
+  const featuredPostsRequest = useRef(false);
 
-  async function loadFeaturedPosts(showLoading = true) {
+  const loadFeaturedPosts = useCallback(async (showLoading = true) => {
+    if (featuredPostsRequest.current) return;
+    featuredPostsRequest.current = true;
     if (showLoading) setPostsLoading(true);
     try {
       const result = await api.feed();
-      setFeaturedPosts((result.posts || []).filter((post) => post.status === 'Disponível').slice(0, 2));
+      const availablePosts = (result.posts || []).filter((post) => post.status === 'Disponível');
+      if (!availablePosts.length) {
+        featuredPostsCursor.current = 0;
+        setFeaturedPosts([]);
+        return;
+      }
+
+      const cardsToShow = Math.min(2, availablePosts.length);
+      const start = featuredPostsCursor.current % availablePosts.length;
+      const nextPosts = Array.from({ length: cardsToShow }, (_value, index) => availablePosts[(start + index) % availablePosts.length]);
+      featuredPostsCursor.current = (start + cardsToShow) % availablePosts.length;
+      setFeaturedPosts(nextPosts);
     } catch (error) {
       console.error('Não foi possível atualizar os anúncios da splash', error);
     } finally {
       setPostsLoading(false);
+      featuredPostsRequest.current = false;
     }
-  }
+  }, []);
 
   useEffect(() => {
     loadFeaturedPosts(false);
-  }, []);
+    const rotation = window.setInterval(() => loadFeaturedPosts(false), 60_000);
+    return () => window.clearInterval(rotation);
+  }, [loadFeaturedPosts]);
 
   return (
     <main className="landing-screen">
@@ -282,7 +300,6 @@ function LandingScreen({ onCreateAccount, onLogin, onAbout }) {
         <div className="landing-flow" id="categorias" aria-label="Exemplo de um item ganhando novo ciclo">
           <article className="listing-card listing-card-one"><div className="listing-photo chair-photo"><span>Doação</span></div><div className="listing-content"><small><i />Disponível agora</small><h2>Cadeira Escandinava</h2><p>Madeira nobre · Pinheiros, SP</p><footer>Por Mariana R. <b>Grátis</b></footer></div></article>
           {postsLoading ? <div className="landing-listings-loading"><span className="material-symbols-outlined">progress_activity</span>Carregando anúncios...</div> : featuredPosts.length ? <div className="landing-listings">{featuredPosts.map((post, index) => <React.Fragment key={post.id}><article className={`listing-card ${index === 0 ? 'listing-card-one' : 'listing-card-two'}`}><div className="listing-photo"><img src={post.imageUrl} alt={post.title} /><span>{post.goal || 'Anúncio'}</span></div><div className="listing-content"><small><i />Disponível agora</small><h2>{post.title}</h2><p>{post.category} · {post.location}</p><footer>Por {post.author?.name || 'Membro da comunidade'} <b>{post.goal || 'Grátis'}</b></footer></div></article>{index === 0 && featuredPosts.length > 1 ? <button type="button" className="landing-cycle" onClick={() => loadFeaturedPosts()} disabled={postsLoading} aria-label="Atualizar anúncios exibidos"><span className="material-symbols-outlined">sync</span></button> : null}</React.Fragment>)}</div> : <div className="landing-listings-empty"><span className="material-symbols-outlined">inventory_2</span><strong>A comunidade ainda não publicou anúncios.</strong><small>Seja a primeira pessoa a dar um novo ciclo a um item.</small></div>}
-          <button type="button" className="landing-cycle landing-cycle-legacy" onClick={() => loadFeaturedPosts()} disabled={postsLoading} aria-label="Atualizar anúncios exibidos"><span className="material-symbols-outlined">sync</span></button>
           <article className="listing-card listing-card-two"><div className="listing-photo plant-photo"><span>Recebido</span></div><div className="listing-content"><small><i />Novo lar encontrado</small><h2>Monstera com Cachepot</h2><p>Planta viva · Vila Mariana, SP</p><footer>Adotado por Lucas T. <b>Com carinho</b></footer></div></article>
           <div className="landing-steps"><div><span className="material-symbols-outlined">add_box</span><strong>Publique</strong><small>o que não usa</small></div><div><span className="material-symbols-outlined">forum</span><strong>Converse</strong><small>com interessados</small></div><div><span className="material-symbols-outlined">group</span><strong>Transforme</strong><small>o descarte</small></div></div>
           <div className="landing-conversion"><button onClick={onCreateAccount}>Criar minha conta</button></div>
@@ -678,12 +695,18 @@ function FeedCard({ post, onNavigate, onOpenChat, onOpenPayment }) {
   const [offerStatus, setOfferStatus] = useState(post.offerStatus || 'none');
   const listingLocation = post.location || post.author?.city || '';
   const isSale = post.goal === 'Venda';
+  const offerStatusLabel = offerStatus === 'accepted' ? 'Oferta aceita' : offerStatus === 'rejected' ? 'Oferta recusada' : 'Proposta aguardando resposta';
+  const offerStatusIcon = offerStatus === 'accepted' ? 'check_circle' : offerStatus === 'rejected' ? 'cancel' : 'schedule';
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 30000);
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    setOfferStatus(post.offerStatus || 'none');
+  }, [post.offerStatus]);
 
   async function like() {
     try {
@@ -805,6 +828,7 @@ function FeedCard({ post, onNavigate, onOpenChat, onOpenPayment }) {
         {post.author.avatar ? <img className="avatar" src={post.author.avatar} alt={post.author.name} /> : <span className="avatar avatar-placeholder material-symbols-outlined" aria-label={`Perfil de ${post.author.name}`}>person</span>}
         <div className="post-meta"><strong>{post.author.name}</strong><span>{formatRelativeTime(post.createdAt, now)}{listingLocation ? ` • ${listingLocation}` : ''}</span></div>
         {post.authorId === session?.id ? <button className="icon-btn" onClick={removePost} title="Excluir anúncio" aria-label="Excluir anúncio"><span className="material-symbols-outlined">delete</span></button> : null}
+        {offerStatus !== 'none' ? <div className={`offer-status post-offer-status offer-status-${offerStatus}`} role="status" title={offerStatusLabel}><span className="material-symbols-outlined" aria-hidden="true">{offerStatusIcon}</span><span className="offer-status-label">{offerStatusLabel}</span></div> : null}
       </div>
       <div className="post-image-wrap post-card-clickable" onClick={() => onNavigate(`/anuncios/${post.id}`)} role="link" tabIndex="0" onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onNavigate(`/anuncios/${post.id}`); }}>
         <img className="post-image" src={post.imageUrl} alt={post.title} />
@@ -816,7 +840,6 @@ function FeedCard({ post, onNavigate, onOpenChat, onOpenPayment }) {
         <p>{post.description}</p>
       </div>
       <div className="tag-row feed-post-tags"><span>{post.category}</span><span>{post.condition}</span><span className={`status-tag status-${String(post.status || 'Disponível').toLowerCase().replace(/\s+/g, '-')}`}>{post.status || 'Disponível'}</span></div>
-      {post.offerStatus && post.offerStatus !== 'none' ? <div className={`offer-status offer-status-${post.offerStatus}`}><span className="material-symbols-outlined">{post.offerStatus === 'accepted' ? 'check_circle' : post.offerStatus === 'rejected' ? 'cancel' : 'schedule'}</span>{post.offerStatus === 'accepted' ? 'Oferta aceita' : post.offerStatus === 'rejected' ? 'Oferta recusada' : 'Proposta aguardando resposta'}</div> : null}
       <div className="post-actions">
         <div className="post-stats"><button className={liked ? 'ghost-inline liked' : 'ghost-inline'} onClick={like}><span key={heartAnimationKey} className={liked ? 'material-symbols-outlined like-icon liked-heart' : 'material-symbols-outlined like-icon'}>{liked ? 'favorite' : 'favorite_border'}</span>{likes}</button><button className="ghost-inline" onClick={toggleComments}><span className="material-symbols-outlined">chat_bubble</span>{commentCount}</button></div>
         <div className="post-action-ctas">
@@ -1068,6 +1091,25 @@ function CreatePostScreen({ onBack, onSuccess }) {
   );
 }
 
+function PostStatusControls({ post, isSale, statusUpdating, statusMessage, onChange, onComplete }) {
+  const isAvailable = post.status === 'Disponível';
+  const isClosed = post.status === 'Encerrado';
+  const isUpdating = Boolean(statusUpdating);
+
+  return <div className="status-controls" aria-label="Status do anúncio">
+    <button type="button" className={isAvailable ? 'status-control status-control-available is-active' : 'status-control status-control-available'} onClick={() => onChange('Disponível')} disabled={isUpdating || isAvailable} aria-pressed={isAvailable} aria-busy={statusUpdating === 'Disponível'}>
+      <span className="material-symbols-outlined">{statusUpdating === 'Disponível' ? 'progress_activity' : 'check_circle'}</span>
+      {statusUpdating === 'Disponível' ? 'Reabrindo...' : isAvailable ? 'Disponível' : isClosed ? 'Reabrir' : 'Disponível'}
+    </button>
+    <button type="button" className={isClosed ? 'status-control status-control-closed is-active' : 'status-control status-control-closed'} onClick={() => onChange('Encerrado')} disabled={isUpdating || isClosed} aria-pressed={isClosed} aria-busy={statusUpdating === 'Encerrado'}>
+      <span className="material-symbols-outlined">{statusUpdating === 'Encerrado' ? 'progress_activity' : 'cancel'}</span>
+      {statusUpdating === 'Encerrado' ? 'Encerrando...' : isClosed ? 'Encerrado' : 'Encerrar'}
+    </button>
+    {post.status === 'Reservado' ? isSale ? <button type="button" onClick={() => onComplete('Vendido')}>Marcar vendido</button> : <><button type="button" onClick={() => onComplete('Doado')}>Marcar doado</button><button type="button" onClick={() => onComplete('Trocado')}>Marcar trocado</button></> : null}
+    {statusMessage ? <p className="status-feedback" role="status" aria-live="polite"><span className="material-symbols-outlined">check_circle</span>{statusMessage}</p> : null}
+  </div>;
+}
+
 function PostDetailScreen({ postId, onBack, onNavigate }) {
   const session = useAppStore((state) => state.session);
   const toggleFavorite = useAppStore((state) => state.toggleFavorite);
@@ -1092,11 +1134,15 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
   const [reportReason, setReportReason] = useState('Spam');
   const [reportDetails, setReportDetails] = useState('');
   const [busy, setBusy] = useState(false);
+  const [statusUpdating, setStatusUpdating] = useState('');
+  const [statusMessage, setStatusMessage] = useState('');
 
   const ownPost = post?.authorId === session?.id;
   const isSale = post?.goal === 'Venda';
 
   useEffect(() => {
+    setStatusUpdating('');
+    setStatusMessage('');
     setBusy(true);
     Promise.all([api.post(postId), api.comments(postId)]).then(([postResult, commentResult]) => {
       setPost(postResult.post);
@@ -1227,6 +1273,22 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
     try { await useAppStore.getState().reservePost(post.id, interestedId); await refreshPost(); await loadInterested(); } catch (error) { alert(error.message); }
   }
 
+  async function updateStatus(status) {
+    if (statusUpdating || post.status === status) return;
+    if (status === 'Encerrado' && post.status === 'Reservado' && !window.confirm('Encerrar este anúncio manterá a reserva atual. Deseja continuar?')) return;
+    setStatusUpdating(status);
+    setStatusMessage('');
+    try {
+      const updatedPost = await useAppStore.getState().updatePostStatus(post.id, status);
+      setPost(updatedPost);
+      setStatusMessage(status === 'Encerrado' ? 'Anúncio encerrado.' : 'Anúncio disponível novamente.');
+    } catch (error) {
+      alert(error.message);
+    } finally {
+      setStatusUpdating('');
+    }
+  }
+
   async function complete(outcome) {
     if (!window.confirm(`Confirmar que o item foi ${outcome.toLowerCase()}?`)) return;
     try { await useAppStore.getState().completePost(post.id, outcome); await refreshPost(); alert('Negociação concluída. As avaliações foram liberadas.'); } catch (error) { alert(error.message); }
@@ -1267,7 +1329,7 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
     <section className="detail-image"><img src={post.imageUrl} alt={post.title} /><span className={`status-tag status-${String(post.status || 'Disponível').toLowerCase().replace(/\s+/g, '-')}`}>{post.status || 'Disponível'}</span>{post.imageUrls?.length > 1 ? <div className="detail-gallery-thumbs">{post.imageUrls.map((imageUrl) => <button type="button" key={imageUrl} onClick={() => setPost((current) => ({ ...current, imageUrl }))}><img src={imageUrl} alt="" /></button>)}</div> : null}</section>
     <section className="detail-summary"><div className="detail-kicker"><span>{post.category}</span><span>{post.condition}</span></div><h1>{post.title}</h1><p>{post.description}</p><div className="detail-info"><span><i className="material-symbols-outlined">{post.goal === 'Venda' ? 'sell' : post.goal === 'Troca' ? 'swap_horiz' : 'volunteer_activism'}</i>{post.goal}</span><span><i className="material-symbols-outlined">location_on</i>{post.location}</span><span><i className="material-symbols-outlined">schedule</i>{formatBrazilDate(post.createdAt)} às {formatBrazilTime(post.createdAt)}</span></div><div className="detail-actions"><button className={post.saved ? 'secondary-btn saved-btn' : 'secondary-btn'} onClick={save} title={post.saved ? 'Remover dos salvos' : 'Salvar anúncio'} aria-label={post.saved ? 'Remover dos salvos' : 'Salvar anúncio'}><span className="material-symbols-outlined">{post.saved ? 'bookmark' : 'bookmark_border'}</span>{post.saved ? 'Salvo' : 'Salvar'}</button><button className="secondary-btn" onClick={share} title="Compartilhar anúncio" aria-label="Compartilhar anúncio"><span className="material-symbols-outlined">share</span>Compartilhar</button>{!ownPost ? <button className="primary-btn" disabled={post.status !== 'Disponível'} onClick={startConversation}><span className="material-symbols-outlined">handshake</span>Tenho interesse</button> : null}</div></section>
     <section className="detail-owner"><div>{post.author.avatar ? <img src={post.author.avatar} alt={post.author.name} /> : <span className="avatar-placeholder material-symbols-outlined">person</span>}</div><div><span>Anunciante</span><h2>{post.author.name}</h2><p>{post.author.city} · {post.authorReputation ? `⭐ ${post.authorReputation.toFixed(1)} (${post.authorReviewCount})` : 'Novo na comunidade'}</p></div>{!ownPost ? <div className="owner-actions"><button className="text-btn" onClick={blockAuthor} title="Bloquear anunciante" aria-label="Bloquear anunciante">Bloquear</button><button className="text-btn" onClick={() => openReport('user', post.authorId)} title="Denunciar anunciante" aria-label="Denunciar anunciante">Denunciar</button></div> : null}</section>
-    {ownPost ? <section className="owner-management"><div className="section-title"><div><span className="eyebrow">Gerenciar anúncio</span><h2>Negociação e status</h2></div><div><button className="text-btn" onClick={() => { setEditImages((post.imageUrls || [post.imageUrl]).map((url) => ({ url }))); setEditing((value) => !value); }}>Editar</button><button className="secondary-btn" onClick={loadInterested}>Interessados ({post.interestedCount || 0})</button><button className="text-btn danger-text" onClick={removeOwnedPost}>Excluir</button></div></div>{editing ?     <form className="edit-post-form" onSubmit={saveEdit}><div className="edit-gallery"><div className="edit-gallery-heading"><div><span className="eyebrow">Fotos do anúncio</span><p>Use os controles para remover ou reordenar. A primeira foto será a principal.</p></div><label className="secondary-btn edit-gallery-add"><span className="material-symbols-outlined">add_photo_alternate</span>Adicionar fotos<input type="file" multiple accept="image/jpeg,image/png,image/gif,image/webp,image/avif" onChange={(event) => setEditImages((current) => [...current, ...Array.from(event.target.files || []).map((file) => ({ file }))].slice(0, 8))} /></label></div><div className="edit-gallery-grid">{editImages.map((image, index) => <article className={index === 0 ? 'edit-gallery-item is-primary' : 'edit-gallery-item'} key={image.file ? `${image.file.name}-${index}` : image.url}><img src={editImagePreviews[index]} alt={`Foto ${index + 1}`} /><div><strong>{index === 0 ? 'Principal' : `Foto ${index + 1}`}</strong><div className="edit-gallery-controls"><button type="button" disabled={index === 0} onClick={() => setEditImages((current) => { const next = [...current]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; return next; })} aria-label="Mover foto para a esquerda"><span className="material-symbols-outlined">arrow_back</span></button><button type="button" disabled={index === editImages.length - 1} onClick={() => setEditImages((current) => { const next = [...current]; [next[index], next[index + 1]] = [next[index + 1], next[index]]; return next; })} aria-label="Mover foto para a direita"><span className="material-symbols-outlined">arrow_forward</span></button><button type="button" disabled={editImages.length === 1} onClick={() => setEditImages((current) => current.filter((_, imageIndex) => imageIndex !== index))} aria-label="Remover foto"><span className="material-symbols-outlined">delete</span></button></div></div></article>)}</div></div><Field label="Título" icon="title" value={editForm.title || ''} onChange={(value) => setEditForm((current) => ({ ...current, title: value }))} /><Field label="Descrição" icon="description" multiline value={editForm.description || ''} onChange={(value) => setEditForm((current) => ({ ...current, description: value }))} /><Field label="Categoria" icon="category" value={editForm.category || ''} onChange={(value) => setEditForm((current) => ({ ...current, category: value }))} /><Field label="Localização aproximada" icon="location_on" value={editForm.location || ''} onChange={(value) => setEditForm((current) => ({ ...current, location: value }))} /><button className="primary-btn">Salvar edição</button></form> : null}<div className="status-controls"><button onClick={() => useAppStore.getState().updatePostStatus(post.id, 'Disponível').then(setPost).catch((error) => alert(error.message))}>Disponível</button><button onClick={() => useAppStore.getState().updatePostStatus(post.id, 'Encerrado').then(setPost).catch((error) => alert(error.message))}>Encerrar</button>{post.status === 'Reservado' ? isSale ? <button onClick={() => complete('Vendido')}>Marcar vendido</button> : <><button onClick={() => complete('Doado')}>Marcar doado</button><button onClick={() => complete('Trocado')}>Marcar trocado</button></> : null}</div>{interested.length ? <div className="interested-list">{interested.map((item) => <article key={item.id}><span className="avatar-placeholder material-symbols-outlined">person</span><div><strong>{item.user?.name || 'Usuário'}</strong><small>{item.user?.city} · {item.status}</small>{item.proposalStatus !== 'none' ? <small>Proposta: R$ {((item.proposalAmountCents || 0) / 100).toFixed(2).replace('.', ',')} · {item.proposalStatus}</small> : null}</div>{item.proposalStatus === 'pending' ? <><button className="secondary-btn" onClick={() => api.decideProposal(item.id, 'rejected').then(loadInterested).catch((error) => alert(error.message))}>Recusar</button><button className="primary-btn" onClick={() => api.decideProposal(item.id, 'accepted').then(loadInterested).catch((error) => alert(error.message))}>Aceitar</button></> : null}{(post.status === 'Disponível' || post.status === 'Reservado') && item.proposalStatus !== 'rejected' ? <button className="secondary-btn" onClick={() => reserve(item.user.id)}>Reservar</button> : null}</article>)}</div> : null}</section> : null}
+    {ownPost ? <section className="owner-management"><div className="section-title"><div><span className="eyebrow">Gerenciar anúncio</span><h2>Negociação e status</h2></div><div><button className="text-btn" onClick={() => { setEditImages((post.imageUrls || [post.imageUrl]).map((url) => ({ url }))); setEditing((value) => !value); }}>Editar</button><button className="secondary-btn" onClick={loadInterested}>Interessados ({post.interestedCount || 0})</button><button className="text-btn danger-text" onClick={removeOwnedPost}>Excluir</button></div></div>{editing ?     <form className="edit-post-form" onSubmit={saveEdit}><div className="edit-gallery"><div className="edit-gallery-heading"><div><span className="eyebrow">Fotos do anúncio</span><p>Use os controles para remover ou reordenar. A primeira foto será a principal.</p></div><label className="secondary-btn edit-gallery-add"><span className="material-symbols-outlined">add_photo_alternate</span>Adicionar fotos<input type="file" multiple accept="image/jpeg,image/png,image/gif,image/webp,image/avif" onChange={(event) => setEditImages((current) => [...current, ...Array.from(event.target.files || []).map((file) => ({ file }))].slice(0, 8))} /></label></div><div className="edit-gallery-grid">{editImages.map((image, index) => <article className={index === 0 ? 'edit-gallery-item is-primary' : 'edit-gallery-item'} key={image.file ? `${image.file.name}-${index}` : image.url}><img src={editImagePreviews[index]} alt={`Foto ${index + 1}`} /><div><strong>{index === 0 ? 'Principal' : `Foto ${index + 1}`}</strong><div className="edit-gallery-controls"><button type="button" disabled={index === 0} onClick={() => setEditImages((current) => { const next = [...current]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; return next; })} aria-label="Mover foto para a esquerda"><span className="material-symbols-outlined">arrow_back</span></button><button type="button" disabled={index === editImages.length - 1} onClick={() => setEditImages((current) => { const next = [...current]; [next[index], next[index + 1]] = [next[index + 1], next[index]]; return next; })} aria-label="Mover foto para a direita"><span className="material-symbols-outlined">arrow_forward</span></button><button type="button" disabled={editImages.length === 1} onClick={() => setEditImages((current) => current.filter((_, imageIndex) => imageIndex !== index))} aria-label="Remover foto"><span className="material-symbols-outlined">delete</span></button></div></div></article>)}</div></div><Field label="Título" icon="title" value={editForm.title || ''} onChange={(value) => setEditForm((current) => ({ ...current, title: value }))} /><Field label="Descrição" icon="description" multiline value={editForm.description || ''} onChange={(value) => setEditForm((current) => ({ ...current, description: value }))} /><Field label="Categoria" icon="category" value={editForm.category || ''} onChange={(value) => setEditForm((current) => ({ ...current, category: value }))} /><Field label="Localização aproximada" icon="location_on" value={editForm.location || ''} onChange={(value) => setEditForm((current) => ({ ...current, location: value }))} /><button className="primary-btn">Salvar edição</button></form> : null}<PostStatusControls post={post} isSale={isSale} statusUpdating={statusUpdating} statusMessage={statusMessage} onChange={updateStatus} onComplete={complete} />{interested.length ? <div className="interested-list">{interested.map((item) => <article key={item.id}><span className="avatar-placeholder material-symbols-outlined">person</span><div><strong>{item.user?.name || 'Usuário'}</strong><small>{item.user?.city} · {item.status}</small>{item.proposalStatus !== 'none' ? <small>Proposta: R$ {((item.proposalAmountCents || 0) / 100).toFixed(2).replace('.', ',')} · {item.proposalStatus}</small> : null}</div>{item.proposalStatus === 'pending' ? <><button className="secondary-btn" onClick={() => api.decideProposal(item.id, 'rejected').then(loadInterested).catch((error) => alert(error.message))}>Recusar</button><button className="primary-btn" onClick={() => api.decideProposal(item.id, 'accepted').then(loadInterested).catch((error) => alert(error.message))}>Aceitar</button></> : null}{(post.status === 'Disponível' || post.status === 'Reservado') && item.proposalStatus !== 'rejected' ? <button className="secondary-btn" onClick={() => reserve(item.user.id)}>Reservar</button> : null}</article>)}</div> : null}</section> : null}
     {!ownPost && isSale && negotiation?.status === 'interested' && negotiation.proposalStatus === 'none' ? <section className="review-form-card proposal-card"><span className="eyebrow">Oferta com pagamento</span><h2>Envie sua proposta</h2><p>Informe o valor e a forma de pagamento. O vendedor receberá sua proposta para análise.</p><form onSubmit={submitProposal}><label>Valor da oferta (R$)<input inputMode="decimal" value={proposalForm.amount} onChange={(event) => setProposalForm((current) => ({ ...current, amount: formatMoneyInput(event.target.value) }))} placeholder="10,00" required /></label><label>Forma de pagamento<select value={proposalForm.method} onChange={(event) => setProposalForm((current) => ({ ...current, method: event.target.value }))}><option value="pix">PIX simulado</option><option value="card">Cartão simulado</option><option value="boleto">Boleto simulado</option></select></label><button className="primary-btn" disabled={proposalBusy}>{proposalBusy ? 'Enviando...' : 'Enviar proposta'}<span className="material-symbols-outlined">send</span></button></form></section> : null}
     {!ownPost && isSale && negotiation?.status === 'interested' && negotiation.proposalStatus === 'pending' ? <section className="payment-waiting-card"><div className="payment-waiting-icon"><span className="material-symbols-outlined">hourglass_top</span></div><div><span className="eyebrow">Proposta enviada</span><h2>Aguardando resposta do vendedor</h2><p>Sua oferta de R$ {((negotiation.proposalAmountCents || 0) / 100).toFixed(2).replace('.', ',')} foi enviada. O pagamento ficará disponível depois que o vendedor aceitar e reservar o item.</p></div><button className="secondary-btn" onClick={startConversation}><span className="material-symbols-outlined">chat_bubble</span>Conversar com o anunciante</button></section> : null}
     {!ownPost && isSale && negotiation?.status === 'reserved' && !payment ? <section className="review-form-card proposal-card"><span className="eyebrow">Pagamento liberado</span><h2>Finalize sua contribuição</h2><p>O vendedor reservou este anúncio para você. Escolha a forma de pagamento simulado para concluir.</p><form onSubmit={submitPayment}><label>Valor do pagamento (R$)<input inputMode="decimal" value={paymentForm.amount || (negotiation.proposalAmountCents ? formatMoneyInput(String(negotiation.proposalAmountCents)) : '')} onChange={(event) => setPaymentForm((current) => ({ ...current, amount: formatMoneyInput(event.target.value) }))} placeholder="10,00" required /></label><label>Forma de pagamento<select value={paymentForm.method} onChange={(event) => setPaymentForm((current) => ({ ...current, method: event.target.value }))}><option value="pix">PIX simulado</option><option value="card">Cartão simulado</option><option value="boleto">Boleto simulado</option></select></label><button className="primary-btn" disabled={paymentBusy}>{paymentBusy ? 'Processando...' : 'Pagar simulação'}<span className="material-symbols-outlined">payments</span></button></form></section> : null}

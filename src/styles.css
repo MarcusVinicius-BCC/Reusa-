@@ -167,11 +167,16 @@ img { display: block; max-width: 100%; }
 .proposal-card label { display: grid; gap: 6px; color: #315644; font-size: 12px; font-weight: 700; }
 .proposal-card input, .proposal-card select { width: 100%; min-height: 46px; padding: 0 12px; border: 1px solid var(--app-line); border-radius: 12px; background: #fff; color: var(--text); }
 .proposal-card .primary-btn { justify-content: center; }
-.offer-status { display: flex; align-items: center; gap: 6px; margin: 0 14px 10px; padding: 8px 10px; border-radius: 10px; font-size: 11px; font-weight: 800; }
-.offer-status .material-symbols-outlined { font-size: 16px; }
+.offer-status { display: inline-flex; align-items: center; gap: 6px; margin: 0; padding: 6px 9px; border-radius: 999px; font-size: 10px; font-weight: 800; line-height: 1.25; }
+.offer-status .material-symbols-outlined { flex: 0 0 auto; font-size: 15px; }
+.offer-status-label { overflow: hidden; min-width: 0; text-overflow: ellipsis; white-space: nowrap; }
+.feed-page .post-head .post-offer-status { flex: 0 1 220px; min-width: 0; max-width: 54%; margin-left: auto; }
+.feed-page .post-head .post-meta { flex: 1 1 0; }
+.feed-page .post-head .post-meta strong, .feed-page .post-head .post-meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .offer-status-pending { color: #7c5608; background: #fff4d6; }
 .offer-status-accepted { color: #075b38; background: #dff5e7; }
 .offer-status-rejected { color: #8b2630; background: #ffe4e5; }
+@media (max-width: 420px) { .feed-page .post-head .post-offer-status { max-width: 150px; padding: 5px 7px; font-size: 9px; } .feed-page .post-head .post-offer-status .material-symbols-outlined { font-size: 14px; } }
 @media (max-width: 1200px) and (min-width: 801px) { .landing-header { min-height: 80px; gap: 10px; }.landing-header .landing-brand { display: none; }.landing-hero-logo { width: min(338px, 72%); margin: 0 auto 18px; }.landing-nav, .landing-account-actions { gap: 4px; }.landing-nav a, .landing-nav button { padding: 8px 7px; font-size: 11px; }.landing-account-actions .landing-login, .landing-account-actions .landing-start { width: 112px; min-height: 38px; font-size: 11px; } }
 @media (min-width: 1201px) { .landing-header { min-height: 82px; }.landing-header .landing-brand { display: none; }.landing-hero-logo { width: 338px; margin: 0 auto 18px; } }
 @media (max-width: 800px) { .landing-header, .landing-hero { width: min(calc(100% - 36px), 520px); }.landing-header { min-height: 74px; }.landing-brand img { width: 132px; height: auto; }.landing-nav { display: none; }.landing-account-actions { gap: 8px; }.landing-account-actions .landing-login, .landing-account-actions .landing-start { width: 106px; min-height: 36px; font-size: 12px; }.landing-hero { grid-template-columns: minmax(0, 1fr); gap: 34px; padding: 36px 0 32px; }.landing-copy h1 { font-size: clamp(32px, 10vw, 48px); }.landing-flow { justify-self: center; width: 100%; }.landing-footer { flex-direction: column; align-items: center; gap: 11px; padding: 18px max(18px, env(safe-area-inset-right)) max(18px, env(safe-area-inset-bottom)) max(18px, env(safe-area-inset-left)); text-align: center; }.landing-footer p { line-height: 1.45; }.landing-footer div { justify-content: center; gap: 7px 13px; width: 100%; } }
@@ -1213,7 +1218,21 @@ button, input, select, textarea { max-width: 100%; }
 .section-title h2 { margin: 0; font-size: 18px; }
 .owner-management .section-title h2 { margin-top: 3px; }
 .status-controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 14px; }
-.status-controls button { min-height: 38px; border: 1px solid var(--outline); border-radius: 11px; padding: 0 10px; background: var(--surface); color: var(--text); font-weight: 700; }
+.status-controls > button:not(.status-control) { min-height: 38px; border: 1px solid var(--outline); border-radius: 11px; padding: 0 10px; background: var(--surface); color: var(--text); font-weight: 700; }
+.status-control { display: inline-flex; min-height: 42px; align-items: center; justify-content: center; gap: 7px; border: 1px solid transparent; border-radius: 12px; padding: 0 14px; background: var(--surface-lowest); font: inherit; font-size: 13px; font-weight: 800; cursor: pointer; transition: transform .18s ease, box-shadow .18s ease, background .18s ease, border-color .18s ease; }
+.status-control .material-symbols-outlined { font-size: 18px; }
+.status-control-available { border-color: color-mix(in srgb, var(--primary) 34%, var(--outline)); background: color-mix(in srgb, var(--primary-container) 12%, var(--surface-lowest)); color: var(--on-primary-container); }
+.status-control-available.is-active { border-color: var(--primary); background: linear-gradient(135deg, var(--primary), var(--primary-container)); color: var(--on-primary); box-shadow: 0 8px 16px rgba(7, 155, 87, .22); }
+.status-control-closed { border-color: #efc5c9; background: #fff8f8; color: #a62f36; }
+.status-control-closed.is-active { border-color: #a62f36; background: linear-gradient(135deg, #c7434b, #a62f36); color: #fff; box-shadow: 0 8px 16px rgba(166, 47, 54, .2); }
+.status-control:hover:not(:disabled) { transform: translateY(-1px); box-shadow: var(--shadow); }
+.status-control:focus-visible { outline: 3px solid color-mix(in srgb, var(--primary) 28%, transparent); outline-offset: 2px; }
+.status-control:disabled { cursor: default; opacity: 1; }
+.status-control:not(.is-active):disabled { cursor: wait; opacity: .68; }
+.status-control[aria-busy="true"] { cursor: wait; opacity: 1; }
+.status-control[aria-busy="true"] .material-symbols-outlined { animation: landing-spin 1s linear infinite; }
+.status-feedback { display: flex; flex: 1 0 100%; align-items: center; gap: 6px; margin: 1px 0 0; color: var(--on-primary-container); font-size: 12px; font-weight: 700; }
+.status-feedback .material-symbols-outlined { color: var(--primary); font-size: 17px; }
 .danger-text { color: #a62f36 !important; }
 .edit-post-form, .review-form-card form { display: grid; gap: 11px; margin-top: 15px; }
 .review-form-card { margin-top: 14px; padding: 16px; border: 1px solid color-mix(in srgb, var(--primary) 32%, var(--outline)); border-radius: 20px; background: color-mix(in srgb, var(--secondary-container) 28%, white); }
