@@ -123,12 +123,29 @@ test('every configured administrator email receives administrator access', async
 });
 
 test('registration validates data and persists a new account', async () => {
-  const invalid = await request('/api/auth/register', {
+  const missingFields = await request('/api/auth/register', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: 'A', email: 'invalid', password: 'short', city: 'SP' })
+    body: JSON.stringify({ name: 'A', email: 'valid@example.test', password: 'senha-segura-123', city: '' })
   });
-  assert.equal(invalid.response.status, 400);
+  assert.equal(missingFields.response.status, 400);
+  assert.equal(missingFields.payload.error, 'Informe nome, e-mail, senha e cidade para criar a conta.');
+
+  const shortPassword = await request('/api/auth/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'A', email: 'valid@example.test', password: 'short', city: 'SP' })
+  });
+  assert.equal(shortPassword.response.status, 400);
+  assert.equal(shortPassword.payload.error, 'A senha precisa ter pelo menos 8 caracteres.');
+
+  const invalidEmail = await request('/api/auth/register', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'A', email: 'usuario@gmail', password: 'senha-segura-123', city: 'SP' })
+  });
+  assert.equal(invalidEmail.response.status, 400);
+  assert.equal(invalidEmail.payload.error, 'Informe um e-mail válido, como nome@gmail.com, nome@outlook.com ou outro domínio existente.');
 
   const email = `test-${Date.now()}@example.test`;
   const registration = await request('/api/auth/register', {
@@ -160,6 +177,32 @@ test('business registration stores public neighborhood without exposing protecte
   const profile = await request('/api/profile', { headers: { Authorization: `Bearer ${registration.payload.token}` } });
   assert.equal(profile.payload.user.neighborhood, 'Pinheiros');
   assert.equal(profile.payload.user.address, 'Rua Protegida, 100');
+});
+
+test('multipart post submission preserves all required item fields', async () => {
+  const email = `multipart-${Date.now()}@example.test`;
+  const registration = await request('/api/auth/register', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ name: 'Publicador de teste', email, password: 'senha-segura-123', city: 'Sao Paulo, SP' })
+  });
+  assert.equal(registration.response.status, 201);
+
+  const form = new FormData();
+  form.set('title', 'Cadeira para reutilizar');
+  form.set('description', 'Cadeira em bom estado para doação.');
+  form.set('category', 'Móveis');
+  form.set('goal', 'Doação');
+  form.set('location', 'Pinheiros, São Paulo, SP');
+  form.set('images', new Blob(['imagem de teste'], { type: 'image/png' }), 'cadeira.png');
+
+  const created = await request('/api/posts', {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${registration.payload.token}` },
+    body: form
+  });
+  assert.equal(created.response.status, 201);
+  assert.equal(created.payload.post.title, 'Cadeira para reutilizar');
+  assert.equal(created.payload.post.category, 'Móveis');
 });
 
 test('CNPJ lookup rejects malformed identifiers before contacting the external service', async () => {

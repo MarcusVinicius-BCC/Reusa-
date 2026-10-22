@@ -9,6 +9,18 @@ import 'leaflet/dist/leaflet.css';
 import feedLogo from './assets/reusa-logo.png';
 
 const BRAZIL_TIME_ZONE = 'America/Sao_Paulo';
+const isValidEmailFormat = (value) => {
+  const email = String(value || '').trim();
+  if (email.length > 254 || email.includes('..')) return false;
+  const match = email.match(/^([^@\s]+)@([^@\s]+)$/);
+  if (!match) return false;
+  const [, localPart, domain] = match;
+  if (localPart.length > 64 || localPart.startsWith('.') || localPart.endsWith('.')) return false;
+  const labels = domain.split('.');
+  return labels.length >= 2
+    && labels.every((label) => label.length >= 1 && label.length <= 63 && !label.startsWith('-') && !label.endsWith('-') && /^[a-zA-Z0-9-]+$/.test(label))
+    && labels.at(-1).length >= 2;
+};
 const validDate = (value) => {
   const date = new Date(value);
   return Number.isNaN(date.getTime()) ? null : date;
@@ -422,15 +434,62 @@ function RegisterScreen({ onGoToLogin, onSuccess }) {
   const [cepBusy, setCepBusy] = useState(false);
   const [cnpjBusy, setCnpjBusy] = useState(false);
   const [cnpjNotice, setCnpjNotice] = useState('');
+  const [emailNotice, setEmailNotice] = useState('');
 
   async function submit(event) {
     event.preventDefault();
+    const name = String(formState.name || '').trim();
+    const email = String(formState.email || '').trim();
+    const password = String(formState.password || '');
+    const city = String(formState.city || '').trim();
+
+    if (!name || !email || !password || !city) {
+      alert('Preencha nome, e-mail, senha e cidade para criar sua conta.');
+      return;
+    }
+    if (!isValidEmailFormat(email)) {
+      alert('Informe um e-mail válido, como nome@gmail.com, nome@outlook.com ou outro domínio existente.');
+      return;
+    }
+    if (password.length < 8) {
+      alert('A senha precisa ter pelo menos 8 caracteres.');
+      return;
+    }
+    if (formState.accountType === 'business' && (!String(formState.businessName || '').trim() || !String(formState.cnpj || '').trim())) {
+      alert('Informe a razão social e o CNPJ da empresa.');
+      return;
+    }
     try {
       await register(formState);
       alert('Cadastro criado. Enviamos um link de confirmação para seu e-mail.');
       onSuccess();
     } catch (error) {
-      alert(error.message);
+      alert(error.message || 'Não foi possível criar sua conta. Tente novamente.');
+    }
+  }
+
+  async function lookupCnpj(value) {
+    const cnpj = value.replace(/\D/g, '').slice(0, 14);
+    setFormState((prev) => ({ ...prev, cnpj }));
+    setCnpjNotice('');
+    if (cnpj.length !== 14) return;
+    setCnpjBusy(true);
+    try {
+      const { business } = await api.businessByCnpj(cnpj);
+      setFormState((prev) => ({
+        ...prev,
+        cnpj,
+        businessName: business.legalName || business.tradeName || prev.businessName,
+        cep: business.cep || prev.cep,
+        address: business.address || prev.address,
+        neighborhood: business.neighborhood || prev.neighborhood,
+        city: business.city || prev.city
+      }));
+      setCnpjNotice(business.status ? `Dados preenchidos · ${business.status}` : 'Dados da empresa preenchidos.');
+    } catch (error) {
+      setCnpjNotice(error.message === 'CNPJ não encontrado.' ? 'CNPJ não encontrado. Preencha os dados manualmente.' : 'Não foi possível consultar agora. Você pode preencher manualmente.');
+    } finally {
+      setCnpjBusy(false);
     }
   }
 
@@ -461,16 +520,19 @@ function RegisterScreen({ onGoToLogin, onSuccess }) {
           <h2>Faça o descarte<br /><em>virar recomeço.</em></h2>
           <p>Uma comunidade local para doar, trocar e reutilizar com propósito.</p>
         </header>
+        <p className="required-fields-note"><strong>*</strong> Campos obrigatórios</p>
         <form onSubmit={submit} className="auth-form register-form">
-          <Field label="Nome completo" icon="person" value={formState.name} onChange={(value) => setFormState((prev) => ({ ...prev, name: value }))} placeholder="Como devemos chamar você?" />
-          <Field label="E-mail" icon="mail" value={formState.email} onChange={(value) => setFormState((prev) => ({ ...prev, email: value }))} placeholder="seu@email.com.br" />
-          <Field label="Senha" icon="lock" type="password" value={formState.password} onChange={(value) => setFormState((prev) => ({ ...prev, password: value }))} placeholder="Mínimo 8 caracteres" />
+          <Field label="Nome completo" icon="person" value={formState.name} onChange={(value) => setFormState((prev) => ({ ...prev, name: value }))} placeholder="Como devemos chamar você?" required />
+          <Field label="E-mail" icon="mail" type="email" value={formState.email} onChange={(value) => { setFormState((prev) => ({ ...prev, email: value })); setEmailNotice(value && !isValidEmailFormat(value) ? 'Digite um e-mail no formato nome@dominio.com.' : ''); }} placeholder="seu@email.com.br" required />
+          {emailNotice ? <p className="email-validation" role="alert">{emailNotice}</p> : null}
+          <Field label="Senha" icon="lock" type="password" value={formState.password} onChange={(value) => setFormState((prev) => ({ ...prev, password: value }))} placeholder="Mínimo 8 caracteres" required minLength={8} />
+          <p className="password-requirements">A senha é obrigatória e deve ter pelo menos 8 caracteres. Não é necessário usar letra maiúscula, letra minúscula ou número.</p>
           <Field label="CEP" icon="markunread_mailbox" value={formState.cep} onChange={lookupCep} placeholder="00000-000" />
           {formState.address ? <div className="address-preview"><span className="material-symbols-outlined">location_on</span><span>{formState.address} · {formState.city}</span>{cepBusy ? <span>Consultando...</span> : null}</div> : null}
-          <Field label="Cidade" icon="location_on" value={formState.city} onChange={(value) => setFormState((prev) => ({ ...prev, city: value }))} placeholder="Ex: São Paulo, SP" />
+          <Field label="Cidade" icon="location_on" value={formState.city} onChange={(value) => setFormState((prev) => ({ ...prev, city: value }))} placeholder="Ex: São Paulo, SP" required />
           <Field label="Bairro público" icon="location_city" value={formState.neighborhood} onChange={(value) => setFormState((prev) => ({ ...prev, neighborhood: value }))} placeholder="Ex: Vila Madalena" />
           <div className="chip-box"><label>Tipo de conta</label><div className="chip-row"><button type="button" className={formState.accountType === 'person' ? 'chip chip-active' : 'chip'} onClick={() => setFormState((prev) => ({ ...prev, accountType: 'person' }))}>Pessoa</button><button type="button" className={formState.accountType === 'business' ? 'chip chip-active' : 'chip'} onClick={() => setFormState((prev) => ({ ...prev, accountType: 'business' }))}>Empresa</button></div></div>
-          {formState.accountType === 'business' ? <><Field label="Razão social" icon="business" value={formState.businessName} onChange={(value) => setFormState((prev) => ({ ...prev, businessName: value }))} placeholder="Nome da empresa" /><Field label={cnpjBusy ? 'Consultando CNPJ...' : 'CNPJ'} icon="badge" value={formState.cnpj} onChange={lookupCnpj} placeholder="00.000.000/0001-00" />{cnpjNotice ? <div className="cnpj-lookup"><span className="material-symbols-outlined">{cnpjNotice.startsWith('Dados') ? 'verified' : 'info'}</span>{cnpjNotice}</div> : null}</> : null}
+          {formState.accountType === 'business' ? <><Field label="Razão social" icon="business" value={formState.businessName} onChange={(value) => setFormState((prev) => ({ ...prev, businessName: value }))} placeholder="Nome da empresa" required /><Field label={cnpjBusy ? 'Consultando CNPJ...' : 'CNPJ'} icon="badge" value={formState.cnpj} onChange={lookupCnpj} placeholder="00.000.000/0001-00" required />{cnpjNotice ? <div className="cnpj-lookup"><span className="material-symbols-outlined">{cnpjNotice.startsWith('Dados') ? 'verified' : 'info'}</span>{cnpjNotice}</div> : null}</> : null}
           <button type="submit" className="primary-btn full register-submit">Criar minha conta <span className="material-symbols-outlined">arrow_forward</span></button>
         </form>
         <div className="register-footer"><span>ou entre em segundos</span><GoogleSignInButton iconOnly /><p>Já faz parte? <button className="text-btn" onClick={onGoToLogin}>Fazer login</button></p></div>
@@ -568,6 +630,10 @@ function FeedScreen({ onNavigate }) {
       </header>
       <div className="feed-category-popover">{categoriesOpen ? <CategoryBar selected={category} onChange={(value) => { setCategory(value); setCategoriesOpen(false); }} showSaved={Boolean(session)} savedCount={favorites.length} /> : null}</div>
       <main className="feed-page">
+        <section className="feed-available-heading" aria-labelledby="feed-available-title">
+          <span className="material-symbols-outlined" aria-hidden="true">inventory_2</span>
+          <h1 id="feed-available-title">Itens disponíveis</h1>
+        </section>
         <div className="feed-list">
           {filteredPosts.length ? filteredPosts.map((post) => <FeedCard key={post.id} post={post} onNavigate={onNavigate} onOpenChat={async () => { try { const thread = await useAppStore.getState().createThread(post.id); onNavigate(`/mensagens/ana?thread=${thread.id}`); } catch (error) { alert(error.message); } }} onOpenPayment={async () => useAppStore.getState().createThread(post.id)} />) : <div className="empty-state"><span className="material-symbols-outlined">{category === 'Salvos' ? 'bookmark_border' : 'search_off'}</span><h2>{category === 'Salvos' ? 'Nenhum item salvo' : 'Nada encontrado'}</h2><p>{category === 'Salvos' ? 'Toque no marcador de um anúncio para encontrá-lo aqui.' : 'Tente outra busca ou categoria.'}</p></div>}
         </div>
@@ -716,31 +782,6 @@ function FeedCard({ post, onNavigate, onOpenChat, onOpenPayment }) {
       if (result.liked) setHeartAnimationKey((current) => current + 1);
     } catch (error) {
       alert(error.message);
-    }
-  }
-
-  async function lookupCnpj(value) {
-    const cnpj = value.replace(/\D/g, '').slice(0, 14);
-    setFormState((prev) => ({ ...prev, cnpj }));
-    setCnpjNotice('');
-    if (cnpj.length !== 14) return;
-    setCnpjBusy(true);
-    try {
-      const { business } = await api.businessByCnpj(cnpj);
-      setFormState((prev) => ({
-        ...prev,
-        cnpj,
-        businessName: business.legalName || business.tradeName || prev.businessName,
-        cep: business.cep || prev.cep,
-        address: business.address || prev.address,
-        neighborhood: business.neighborhood || prev.neighborhood,
-        city: business.city || prev.city
-      }));
-      setCnpjNotice(business.status ? `Dados preenchidos · ${business.status}` : 'Dados da empresa preenchidos.');
-    } catch (error) {
-      setCnpjNotice(error.message === 'CNPJ not found' ? 'CNPJ não encontrado. Preencha os dados manualmente.' : 'Não foi possível consultar agora. Você pode preencher manualmente.');
-    } finally {
-      setCnpjBusy(false);
     }
   }
 
@@ -1003,7 +1044,14 @@ function CreatePostScreen({ onBack, onSuccess }) {
 
   async function submit(event) {
     event.preventDefault();
-    if (!postForm.title?.trim() || !postForm.description?.trim()) return;
+    if (!postForm.title?.trim()) {
+      alert('Informe o título do item.');
+      return;
+    }
+    if (!postForm.description?.trim()) {
+      alert('Informe a descrição do item.');
+      return;
+    }
     if (!images.length) {
       alert('Adicione uma foto do item para publicar o anúncio.');
       return;
@@ -1049,8 +1097,8 @@ function CreatePostScreen({ onBack, onSuccess }) {
           <section className="publish-section">
             <div className="publish-section-head"><div><span className="publish-step">02</span><h3>Conte sobre ele</h3></div><span>Seja direto e honesto</span></div>
             <div className="publish-fields">
-              <Field label="Título do item" icon="title" value={postForm.title || ''} onChange={(value) => setPostForm((prev) => ({ ...prev, title: value }))} placeholder="Ex: Cadeira de madeira antiga" />
-              <Field label="Descrição" icon="description" value={postForm.description || ''} onChange={(value) => setPostForm((prev) => ({ ...prev, description: value }))} placeholder="Estado, medidas e outros detalhes..." multiline />
+              <Field label="Título do item" icon="title" value={postForm.title || ''} onChange={(value) => setPostForm((prev) => ({ ...prev, title: value }))} placeholder="Ex: Cadeira de madeira antiga" required />
+              <Field label="Descrição" icon="description" value={postForm.description || ''} onChange={(value) => setPostForm((prev) => ({ ...prev, description: value }))} placeholder="Estado, medidas e outros detalhes..." multiline required />
             </div>
           </section>
 
@@ -2058,13 +2106,13 @@ function EmptyState({ icon = 'inbox', title, text, action, onAction }) {
   return <section className="empty-state"><span className="material-symbols-outlined">{icon}</span><h2>{title}</h2><p>{text}</p>{action ? <button className="primary-btn" onClick={onAction}>{action}</button> : null}</section>;
 }
 
-function Field({ label, icon, value, onChange, placeholder, type = 'text', multiline = false, maxLength, autoFocus = false }) {
+function Field({ label, icon, value, onChange, placeholder, type = 'text', multiline = false, maxLength, minLength, required = false, autoFocus = false }) {
   return (
     <label className="field">
-      <span>{label}</span>
+      <span>{label}{required ? <strong className="required-mark" title="Campo obrigatório" aria-label="Campo obrigatório"> *</strong> : null}</span>
       <div className="field-control">
         <span className="material-symbols-outlined">{icon}</span>
-        {multiline ? <textarea value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} rows={4} maxLength={maxLength} autoFocus={autoFocus} /> : <input type={type} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} maxLength={maxLength} autoFocus={autoFocus} />}
+        {multiline ? <textarea value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} rows={4} maxLength={maxLength} minLength={minLength} required={required} autoFocus={autoFocus} /> : <input type={type} value={value} onChange={(e) => onChange(e.target.value)} placeholder={placeholder} maxLength={maxLength} minLength={minLength} required={required} autoFocus={autoFocus} />}
       </div>
     </label>
   );

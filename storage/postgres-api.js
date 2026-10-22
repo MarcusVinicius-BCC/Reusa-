@@ -7,6 +7,19 @@ const DONATION_GOAL = 'Doa\u00e7\u00e3o';
 const SALE_GOAL = 'Venda';
 const POST_GOALS = new Set([DONATION_GOAL, 'Troca', SALE_GOAL]);
 
+function isValidEmailFormat(value) {
+  const email = String(value || '').trim();
+  if (email.length > 254 || email.includes('..')) return false;
+  const match = email.match(/^([^@\s]+)@([^@\s]+)$/);
+  if (!match) return false;
+  const [, localPart, domain] = match;
+  if (localPart.length > 64 || localPart.startsWith('.') || localPart.endsWith('.')) return false;
+  const labels = domain.split('.');
+  return labels.length >= 2
+    && labels.every((label) => label.length >= 1 && label.length <= 63 && !label.startsWith('-') && !label.endsWith('-') && /^[a-zA-Z0-9-]+$/.test(label))
+    && labels[labels.length - 1].length >= 2;
+}
+
 function id(prefix) {
   return `${prefix}-${crypto.randomUUID()}`;
 }
@@ -155,13 +168,20 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
   app.post('/api/auth/register', async (req, res, next) => {
     try {
       const { name, email, password, city, neighborhood = '', cep = '', address = '', interests = [], accountType = 'person', businessName = '', cnpj = '' } = req.body || {};
+      const normalizedName = String(name || '').trim();
       const normalizedEmail = String(email || '').trim().toLowerCase();
-      if (!String(name || '').trim() || !normalizedEmail || String(password || '').length < 8 || !String(city || '').trim()) return res.status(400).json({ error: 'Missing required fields' });
-      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) return res.status(400).json({ error: 'Invalid email address' });
+      const normalizedPassword = String(password || '');
+      const normalizedCity = String(city || '').trim();
+      const normalizedAccountType = String(accountType || 'person').trim();
+      const normalizedBusinessName = String(businessName || '').trim();
+      const normalizedCnpj = String(cnpj || '').replace(/\D/g, '');
+      if (!normalizedName || !normalizedEmail || !normalizedPassword || !normalizedCity) return res.status(400).json({ error: 'Informe nome, e-mail, senha e cidade para criar a conta.' });
+      if (normalizedPassword.length < 8) return res.status(400).json({ error: 'A senha precisa ter pelo menos 8 caracteres.' });
+      if (!isValidEmailFormat(normalizedEmail)) return res.status(400).json({ error: 'Informe um e-mail válido, como nome@gmail.com, nome@outlook.com ou outro domínio existente.' });
       const verification = verificationToken();
-      const user = { id: id('user'), name: String(name).trim(), email: normalizedEmail, password_hash: passwordHash(password), city: String(city).trim(), neighborhood: String(neighborhood).trim(), cep: String(cep).trim(), address: String(address).trim(), account_type: accountType, business_name: String(businessName).trim(), cnpj: String(cnpj).replace(/\D/g, ''), interests_json: JSON.stringify(Array.isArray(interests) ? interests : []), avatar: '', achievements_json: JSON.stringify(['Novo membro']), email_verified: false, email_verification_token_hash: verification.hash, email_verification_expires_at: verification.expiresAt, created_at: new Date().toISOString(), last_active_at: new Date().toISOString() };
+      const user = { id: id('user'), name: normalizedName, email: normalizedEmail, password_hash: passwordHash(normalizedPassword), city: normalizedCity, neighborhood: String(neighborhood).trim(), cep: String(cep).trim(), address: String(address).trim(), account_type: normalizedAccountType, business_name: normalizedBusinessName, cnpj: normalizedCnpj, interests_json: JSON.stringify(Array.isArray(interests) ? interests : []), avatar: '', achievements_json: JSON.stringify(['Novo membro']), email_verified: false, email_verification_token_hash: verification.hash, email_verification_expires_at: verification.expiresAt, created_at: new Date().toISOString(), last_active_at: new Date().toISOString() };
       const created = await db.transaction(async (client) => {
-        if (await client.query('SELECT 1 FROM users WHERE lower(email)=lower($1)', [normalizedEmail]).then((r) => r.rowCount)) throw Object.assign(new Error('Email already registered'), { status: 409 });
+        if (await client.query('SELECT 1 FROM users WHERE lower(email)=lower($1)', [normalizedEmail]).then((r) => r.rowCount)) throw Object.assign(new Error('Este e-mail já está cadastrado.'), { status: 409 });
         await client.query(`INSERT INTO users (id,name,email,password_hash,city,neighborhood,cep,address,account_type,business_name,cnpj,interests_json,avatar,achievements_json,email_verified,email_verification_token_hash,email_verification_expires_at,created_at,last_active_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`, Object.values(user));
         return client.query('SELECT * FROM users WHERE id=$1', [user.id]).then((r) => r.rows[0]);
       });
@@ -233,7 +253,8 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
     try {
       const body = req.body || {};
       const imageUrl = req.files?.[0] ? (req.files[0].location || `/uploads/${req.files[0].filename}`) : String(body.imageUrl || '').trim();
-      if (!String(body.title || '').trim() || !String(body.description || '').trim() || !String(body.category || '').trim() || !imageUrl) return res.status(400).json({ error: 'Missing required fields' });
+      if (!String(body.title || '').trim() || !String(body.description || '').trim() || !String(body.category || '').trim()) return res.status(400).json({ error: 'Informe o título, a descrição e a categoria do item.' });
+      if (!imageUrl) return res.status(400).json({ error: 'Adicione pelo menos uma foto do item.' });
       const goal = String(body.goal || DONATION_GOAL).trim() || DONATION_GOAL;
       if (!POST_GOALS.has(goal)) return res.status(400).json({ error: 'Goal must be Doação, Troca or Venda' });
       const post = { id: id('post'), author_id: req.user.id, title: String(body.title).trim(), description: String(body.description).trim(), category: String(body.category).trim(), condition: String(body.condition || 'Bom estado'), goal, image_url: imageUrl, location: String(body.location || req.user.city), created_at: new Date().toISOString(), chip_icon: String(body.chipIcon || (goal === 'Troca' ? 'swap_horiz' : goal === SALE_GOAL ? 'sell' : 'volunteer_activism')), chip_label: String(body.chipLabel || goal) };
@@ -594,8 +615,8 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
           ? [...req.user.interests]
           : [];
       if (!name || !city) return res.status(400).json({ error: 'Name and city are required' });
-      if (!['person', 'business'].includes(accountType)) return res.status(400).json({ error: 'Invalid account type' });
-      if (accountType === 'business' && (!businessName || cnpj.length !== 14)) return res.status(400).json({ error: 'Business accounts require a legal name and valid CNPJ' });
+      if (!['person', 'business'].includes(accountType)) return res.status(400).json({ error: 'Selecione um tipo de conta válido.' });
+      if (accountType === 'business' && (!businessName || cnpj.length !== 14)) return res.status(400).json({ error: 'Contas empresariais precisam de razão social e CNPJ válido.' });
       await db.query(`UPDATE users SET name=$1, city=$2, neighborhood=$3, cep=$4, address=$5, account_type=$6, business_name=$7, cnpj=$8, interests_json=$9, last_active_at=now() WHERE id=$10`, [name, city, neighborhood, cep, address, accountType, businessName, cnpj, JSON.stringify(interests), req.user.id]);
       const refreshed = await db.one('SELECT * FROM users WHERE id=$1', [req.user.id]);
       return res.json({ user: userView(refreshed) });
