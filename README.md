@@ -1,154 +1,303 @@
 # ReUsa+
 
-> Plataforma web de economia circular para doar, trocar, reaproveitar itens e encontrar pontos de coleta na comunidade.
+> **Economia circular, comunidade e impacto em um só lugar.**
 
-![Node.js](https://img.shields.io/badge/Node.js-20%2B-339933?logo=node.js&logoColor=white)
-![React](https://img.shields.io/badge/React-18-61DAFB?logo=react&logoColor=20232a)
-![License](https://img.shields.io/badge/uso-acad%C3%AAmico-0b5b3a)
+O **ReUsa+** é uma plataforma web para dar uma nova vida a itens que seriam
+descartados. A comunidade pode publicar produtos para **doação, troca ou
+venda**, conversar com interessados, concluir negociações e encontrar pontos
+de coleta.
 
-O ReUsa+ reúne anúncios, conversas, favoritos, perfil, inspirações de reaproveitamento, administração e um mapa colaborativo de pontos de coleta. O frontend React é compilado pelo Vite e servido pelo mesmo backend Express, simplificando a execução e o deploy.
+Além do marketplace comunitário, o sistema oferece mapa colaborativo,
+inspirações de reaproveitamento, notificações, indicadores de impacto e uma
+área administrativa.
 
-## Índice
+<p align="center">
+  <img src="src/assets/reusa-logo.png" alt="Logo ReUsa+" width="220">
+</p>
 
+## Sumário
+
+- [Visão geral](#visão-geral)
+- [Funcionalidades](#funcionalidades)
+- [Arquitetura](#arquitetura)
 - [Tecnologias](#tecnologias)
-- [Pré-requisitos](#pré-requisitos)
-- [Como executar localmente](#como-executar-localmente)
-- [Variáveis de ambiente](#variáveis-de-ambiente)
-- [Comandos disponíveis](#comandos-disponíveis)
-- [Banco de dados e serviços opcionais](#banco-de-dados-e-serviços-opcionais)
-- [API de pagamento gratuita](#api-de-pagamento-gratuita)
-- [Testes](#testes)
-- [Deploy na Railway](#deploy-na-railway)
 - [Estrutura do projeto](#estrutura-do-projeto)
-- [Guia para entender o sistema](#guia-para-entender-o-sistema)
+- [Pré-requisitos](#pré-requisitos)
+- [Executar localmente](#executar-localmente)
+- [Configuração](#configuração)
+- [Comandos](#comandos)
+- [Banco de dados](#banco-de-dados)
+- [Serviços distribuídos](#serviços-distribuídos)
+- [APIs externas](#apis-externas)
+- [API própria](#api-própria)
+- [Pagamentos simulados](#pagamentos-simulados)
+- [Testes e validação](#testes-e-validação)
+- [Docker](#docker)
+- [Deploy na Railway](#deploy-na-railway)
+- [Segurança](#segurança)
+- [Licença e uso](#licença-e-uso)
+
+## Visão geral
+
+```text
++----------------------+        +----------------------+
+| React + Vite         |        | PostgreSQL ou SQLite |
+| Interface web        |        | Persistencia         |
++----------+-----------+        +----------^-----------+
+           | /api                           |
+           v                                |
++----------------------+                     |
+| Core ReUsa+          +---------------------+
+| Node.js + Express    |
++----------+-----------+
+           | eventos
+           v
++----------------------+        +----------------------+
+| RabbitMQ             +------->| Notificacoes         |
+| Outbox transacional  +------->| Impacto ambiental    |
++----------------------+        +----------------------+
+```
+
+Em desenvolvimento, a aplicação pode funcionar apenas com Node.js e SQLite.
+Em uma instalação completa, o Docker Compose adiciona PostgreSQL, Redis,
+RabbitMQ, o serviço de notificações e o serviço de impacto.
+
+## Funcionalidades
+
+### Comunidade e anúncios
+
+- Cadastro de pessoas e empresas;
+- Login com e-mail e senha;
+- Confirmação de e-mail;
+- Login opcional com Google;
+- Feed de publicações;
+- Publicações para doação, troca ou venda;
+- Upload de até oito imagens por anúncio;
+- Curtidas, favoritos, comentários e visualizações;
+- Edição e exclusão de anúncios;
+- Status `Disponível`, `Reservado`, `Doado`, `Trocado`, `Vendido` e `Encerrado`.
+
+### Negociação
+
+- Demonstração de interesse;
+- Conversas relacionadas aos anúncios;
+- Propostas de negociação;
+- Reserva de itens;
+- Conclusão como doação, troca ou venda;
+- Pagamento local simulado;
+- Avaliações entre participantes.
+
+### Mapa e impacto
+
+- Mapa com Leaflet e OpenStreetMap;
+- Pontos de coleta cadastrados;
+- Sugestão de novos pontos pela comunidade;
+- Busca de pontos próximos;
+- Cálculo de rotas;
+- Indicadores de itens reutilizados, doações, trocas e beneficiários.
+
+### Administração
+
+- Dashboard administrativo;
+- Consulta e suspensão de usuários;
+- Moderação de anúncios e denúncias;
+- Gerenciamento de pontos de coleta;
+- Aprovação ou rejeição de sugestões da comunidade.
+
+## Arquitetura
+
+O frontend e o backend ficam no mesmo repositório. Em produção, o serviço
+`core` compila e serve a interface React e também expõe a API Express.
+
+```text
+Usuário
+  │
+  ▼
+React / React Router / Zustand
+  │
+  ▼
+src/services/api.js
+  │
+  ▼
+API própria: /api/*
+  │
+  ├──► SQLite local ou PostgreSQL
+  ├──► Outbox de eventos
+  ├──► Integrações externas
+  └──► RabbitMQ
+          ├──► services/notification-service.js
+          └──► services/impact-service.js
+```
+
+O arquivo central do backend é [`backend.js`](backend.js). A comunicação
+HTTP do frontend é centralizada em [`src/services/api.js`](src/services/api.js)
+e o estado global é mantido em [`src/state/store.js`](src/state/store.js).
 
 ## Tecnologias
 
 | Camada | Tecnologias |
 | --- | --- |
-| Interface | React 18, React Router, Zustand, Vite |
-| API | Node.js, Express, JWT, Multer |
-| Banco local | SQL.js (não exige instalação adicional) |
-| Produção | PostgreSQL, Railway |
-| Mapa | Leaflet e OpenStreetMap |
-| Opcional | Redis, RabbitMQ e armazenamento compatível com S3 |
+| Interface | React 18, JSX, React Router, Zustand, Vite |
+| Mapas | Leaflet, React Leaflet, OpenStreetMap |
+| Backend | Node.js 20+, Express |
+| Autenticação | JWT, `scrypt`, OAuth 2.0 do Google (opcional) |
+| Uploads | Multer, armazenamento local ou compatível com S3 |
+| Banco local | SQLite via SQL.js |
+| Banco de produção | PostgreSQL |
+| Mensageria | RabbitMQ via AMQP |
+| Cache/infraestrutura | Redis |
+| Observabilidade | Endpoint de métricas em `/metrics` |
+| Deploy | Railway ou Docker Compose |
+
+## Estrutura do projeto
+
+```text
+.
+├── backend.js                  # API Express e servidor principal
+├── package.json                # Dependências e scripts
+├── Dockerfile                  # Imagem de produção
+├── docker-compose.yml          # Ambiente completo
+├── railway.toml                # Configuração de deploy na Railway
+├── index.html                  # Entrada do frontend
+├── src/
+│   ├── main.jsx                # Montagem do React
+│   ├── App.jsx                 # Entrada da aplicação
+│   ├── routes.jsx              # Telas e navegação
+│   ├── services/api.js         # Cliente da API própria
+│   ├── state/store.js          # Estado global com Zustand
+│   ├── data/                   # Dados de fallback
+│   └── assets/                 # Imagens da interface
+├── storage/
+│   ├── postgres-api.js         # Rotas no modo PostgreSQL
+│   ├── postgres-repository.js  # Acesso ao PostgreSQL
+│   ├── postgres-domains.js     # Repositórios de domínio
+│   └── location-validation.js  # Validações de localização
+├── distributed/
+│   ├── event-publisher.js      # Publicação na outbox/RabbitMQ
+│   ├── object-storage.js       # Integração compatível com S3
+│   ├── redis-client.js         # Cliente Redis
+│   └── observability.js        # Métricas HTTP
+├── services/
+│   ├── notification-service.js # Consumidor de notificações
+│   ├── impact-service.js       # Consumidor de impacto
+│   └── persistence.js          # Persistência dos serviços
+├── migrations/                 # Migrações e índices SQL
+├── scripts/                    # Migração e verificação do banco
+├── test/                       # Testes automatizados
+├── data/                       # SQLite e uploads locais
+└── uploads/                    # Diretório de uploads servido localmente
+```
 
 ## Pré-requisitos
 
-Para executar a versão básica, instale apenas:
+Para a execução básica:
 
-- [Node.js](https://nodejs.org/) **20.x, 22.x ou 24.x**;
-- npm (instalado junto com o Node.js);
+- [Node.js](https://nodejs.org/) 20, 22 ou 24;
+- npm, incluído no Node.js;
 - Git.
 
-Docker Desktop é opcional e só é necessário para subir o ambiente completo com PostgreSQL, Redis e RabbitMQ.
+Docker Desktop é opcional e necessário apenas para executar a infraestrutura
+completa.
 
-## Como executar localmente
+## Executar localmente
+
+### Instalação e produção local
 
 ```bash
-# 1. Clone o repositório
-git clone <URL_DO_SEU_REPOSITORIO>
+git clone https://github.com/MarcusVinicius-BCC/Reusa-.git
 cd Reusa-
-
-# 2. Instale as dependências
 npm install
-
-# 3. Gere o frontend de produção
 npm run build
-
-# 4. Inicie a aplicação
 npm start
 ```
 
-Abra [http://localhost:3000](http://localhost:3000) no navegador.
+Abra:
 
-A primeira execução cria os dados locais automaticamente na pasta `data/`. A aplicação funciona sem PostgreSQL, Redis, RabbitMQ ou chave de mapa.
+- Interface e API: <http://localhost:3000>
+- Health check: <http://localhost:3000/api/health>
 
-### API de pagamento gratuita
+### Desenvolvimento com atualização automática
 
-O fluxo de pagamento do ReUsa+ é um provedor local simulado, sem conta externa,
-chave de API ou tarifa. Ele existe para validar o ciclo da negociação durante o
-desenvolvimento e pode usar SQLite local ou PostgreSQL:
-
-- `GET /api/negotiations/:id/payment` consulta o último pagamento da negociação;
-- `POST /api/negotiations/:id/payment` cria um pagamento em BRL com `pix`, `card`
-  ou `boleto`;
-- o corpo exige `amountCents` e uma `idempotencyKey` com 16 a 128 caracteres;
-- o retorno possui `providerReference` local (`sim_...`), auditoria e status
-  `succeeded` ou `failed`.
-
-O pagamento só pode ser criado pelo interessado depois da reserva. Se houver uma
-proposta aceita, o valor e o método precisam ser exatamente os da proposta.
-Repetir a mesma requisição com a mesma chave é seguro; reutilizar a chave com
-outros dados retorna `409 Conflict`. Para testar a recusa controlada, use
-`"simulateFailure": true`.
-
-Esse fluxo não movimenta dinheiro real. Para produção financeira, substitua o
-adaptador simulado por um provedor regulado e implemente a confirmação por
-webhook antes de liberar qualquer produto ou valor.
-
-### Desenvolvimento com atualização da interface
-
-Em dois terminais, execute:
+Em dois terminais:
 
 ```bash
-# Terminal 1: API e backend com reinício automático
+# Terminal 1: backend Node.js
 npm run dev
 ```
 
 ```bash
-# Terminal 2: interface Vite com atualização automática
+# Terminal 2: frontend Vite
 npm run dev:ui
 ```
 
-Abra [http://localhost:5173](http://localhost:5173). O Vite encaminha as chamadas `/api` para o backend em `http://localhost:3000`.
+Abra <http://localhost:5173>. O Vite encaminha `/api` para
+`http://localhost:3000`.
 
-## Variáveis de ambiente
+Na primeira execução, o sistema cria o banco local em `data/reusa.sqlite`.
 
-Copie o arquivo de exemplo antes de configurar integrações opcionais:
+## Configuração
 
-```bash
-# Windows PowerShell
-Copy-Item .env.example .env
+O sistema funciona sem arquivo `.env` na configuração mínima. Para produção,
+defina as variáveis diretamente no ambiente de execução. Nunca publique
+segredos no Git.
 
-# macOS/Linux
-cp .env.example .env
-```
+### Variáveis principais
 
-| Variável | Obrigatória? | Finalidade |
+| Variável | Quando usar | Finalidade |
 | --- | --- | --- |
-| `JWT_SECRET` | Produção: sim | Assina as sessões de usuário. Use um valor longo e aleatório. |
-| `DATA_DIR` | Não | Diretório de dados locais e uploads. O padrão é `./data`. |
-| `DATABASE_PROVIDER` | Não | Use `postgres` para habilitar PostgreSQL. Sem ela, a aplicação usa SQL.js local. |
-| `DATABASE_URL` ou `POSTGRES_URL` | Com PostgreSQL | String de conexão do PostgreSQL. |
-| `APP_BASE_URL` | Não | URL pública da aplicação, sem barra no final. |
-| `GOOGLE_CLIENT_ID` | Não | Client ID do login Google. |
-| `GOOGLE_CLIENT_SECRET` | Não | Client Secret do login Google. Nunca o envie ao Git. |
-| `GOOGLE_REDIRECT_URI` | Com Google | Callback OAuth, por exemplo `https://dominio/api/auth/google/callback`. |
-| `ADMIN_EMAILS` | Não | Lista de e-mails de administradores, separados por vírgula. `ADMIN_EMAIL` continua aceito para compatibilidade. |
-| `REDIS_URL`, `AMQP_URL`, `EVENT_EXCHANGE` | Não | Integrações distribuídas opcionais. |
-| Variáveis `S3_*` | Não | Persistência de imagens em um serviço compatível com S3. |
+| `PORT` | Opcional | Porta HTTP; padrão `3000`. |
+| `JWT_SECRET` | Produção | Segredo longo e aleatório para assinar sessões. |
+| `DATA_DIR` | Opcional | Diretório do SQLite e dos uploads; padrão `./data`. |
+| `DATABASE_PROVIDER` | PostgreSQL | Use `postgres` para ativar PostgreSQL. |
+| `DATABASE_URL` ou `POSTGRES_URL` | PostgreSQL | String de conexão do banco. |
+| `APP_BASE_URL` | Produção | URL pública da aplicação. |
+| `ADMIN_EMAILS` | Opcional | E-mails administrativos separados por vírgula. |
+| `GOOGLE_CLIENT_ID` | Login Google | Client ID OAuth. |
+| `GOOGLE_CLIENT_SECRET` | Login Google | Segredo OAuth; não versionar. |
+| `GOOGLE_REDIRECT_URI` | Login Google | Callback `/api/auth/google/callback`. |
+| `RESEND_API_KEY` | E-mail | Chave para envio de confirmação por e-mail. |
+| `EMAIL_FROM` | E-mail | Remetente das mensagens de confirmação. |
+| `REDIS_URL` | Opcional | Conexão Redis. |
+| `AMQP_URL` | Opcional | Conexão RabbitMQ. |
+| `EVENT_EXCHANGE` | Opcional | Exchange de eventos; padrão `reusa.events`. |
+| `SERVICE_AUTH_TOKEN` | Serviços | Autenticação entre serviços internos. |
+| `NOTIFICATION_SERVICE_URL` | Distribuído | URL do serviço de notificações. |
+| `IMPACT_SERVICE_URL` | Distribuído | URL do serviço de impacto. |
+| `S3_*` | Upload externo | Configuração do armazenamento compatível com S3. |
 
-> Nunca versione o arquivo `.env`, bancos locais, imagens enviadas por usuários ou a pasta `dist/`.
+> Em produção, defina obrigatoriamente `JWT_SECRET`. Para preservar uploads
+> locais na Railway, use um Volume montado em `/data` e `DATA_DIR=/data`.
 
-## Comandos disponíveis
+## Comandos
 
-| Comando | Descrição |
+| Comando | O que faz |
 | --- | --- |
-| `npm start` | Inicia o servidor Express em produção. |
-| `npm run dev` | Inicia o backend com reinício automático. |
-| `npm run dev:ui` | Inicia o Vite para desenvolvimento da interface. |
-| `npm run build` | Compila o frontend para `dist/`. |
-| `npm test` | Executa os testes automatizados. |
-| `npm run migrate:postgres:schema` | Executa as migrações PostgreSQL. |
-| `npm run migrate:postgres` | Migra dados do banco local para PostgreSQL. |
+| `npm start` | Inicia o backend principal. |
+| `npm run dev` | Inicia o backend com `node --watch`. |
+| `npm run dev:ui` | Inicia o servidor Vite. |
+| `npm run build` | Gera o frontend em `dist/`. |
+| `npm test` | Executa os testes Node.js. |
+| `npm run migrate:postgres:schema` | Aplica as migrações PostgreSQL. |
+| `npm run migrate:postgres` | Migra dados do SQLite para PostgreSQL. |
 | `npm run verify:postgres` | Verifica a migração PostgreSQL. |
 
-## Banco de dados e serviços opcionais
+## Banco de dados
+
+### SQLite
+
+É o modo padrão local. O arquivo principal é:
+
+```text
+data/reusa.sqlite
+```
+
+O banco é carregado pelo SQL.js e persistido em arquivo. Diretórios
+`data-debug`, `data-run` e `data-local-*` podem existir como ambientes
+temporários de desenvolvimento ou testes.
 
 ### PostgreSQL
 
-Para usar PostgreSQL localmente, defina no `.env`:
+Ative com:
 
 ```env
 DATABASE_PROVIDER=postgres
@@ -156,80 +305,245 @@ POSTGRES_URL=postgres://usuario:senha@localhost:5432/reusa
 JWT_SECRET=troque-por-um-segredo-longo-e-aleatorio
 ```
 
-As migrações também são aplicadas automaticamente quando o backend inicia com PostgreSQL configurado.
+As migrações ficam em [`migrations/`](migrations/) e são aplicadas pelo
+script [`scripts/run-postgres-migrations.js`](scripts/run-postgres-migrations.js).
 
-### Ambiente completo com Docker
+As entidades principais incluem:
 
-O `docker-compose.yml` sobe PostgreSQL, Redis, RabbitMQ, API principal e os serviços de notificações e impacto.
+`users`, `posts`, `post_images`, `threads`, `messages`, `negotiations`,
+`negotiation_proposals`, `payments`, `reviews`, `comments`, `favorites`,
+`notifications`, `reports`, `collection_points` e `event_outbox`.
 
-```bash
-docker compose up --build
+## Serviços distribuídos
+
+O fluxo de eventos usa uma outbox transacional:
+
+```text
+Operação concluída
+  ↓
+event_outbox
+  ↓
+RabbitMQ / reusa.events
+  ├── negotiation.*
+  ├── message.sent
+  └── review.created
+       ↓
+notification-service
+impact-service
 ```
 
-Depois, abra [http://localhost:3000](http://localhost:3000). Para encerrar os contêineres, use `docker compose down`.
+Os eventos são processados com entrega **at-least-once**, permitindo retentativa
+quando o broker está indisponível.
 
-## Testes
+Serviços internos:
 
-Execute antes de criar um commit ou enviar o projeto:
+| Serviço | Porta padrão | Arquivo |
+| --- | ---: | --- |
+| Core | 3000 | [`backend.js`](backend.js) |
+| Notificações | 3001 | [`services/notification-service.js`](services/notification-service.js) |
+| Impacto | 3002 | [`services/impact-service.js`](services/impact-service.js) |
+
+## APIs externas
+
+Estas integrações não pertencem ao domínio principal do ReUsa+; são chamadas
+pelo backend quando a funcionalidade correspondente é utilizada.
+
+| Serviço externo | Uso |
+| --- | --- |
+| Google OAuth | Login social |
+| BrasilAPI | Consulta de empresas por CNPJ |
+| Resend | Envio de confirmação de e-mail |
+| Nominatim | Geocodificação de endereços |
+| Overpass API | Busca de pontos públicos no OpenStreetMap |
+| OSRM | Cálculo de rotas |
+| OpenStreetMap | Tiles e dados visuais do mapa |
+| Google Fonts | Fontes e ícones da interface |
+
+As rotas `/api/*` são a API própria do ReUsa+. O frontend não precisa chamar
+diretamente APIs externas que exigem segredo.
+
+## API própria
+
+### Saúde e operação
+
+```text
+GET /api/health
+GET /api/health/live
+GET /api/health/ready
+GET /api/distributed/status
+GET /api/distributed/overview
+GET /metrics
+```
+
+### Autenticação
+
+```text
+POST /api/auth/register
+POST /api/auth/login
+GET  /api/auth/me
+GET  /api/auth/verify-email
+POST /api/auth/resend-verification
+GET  /api/auth/google
+GET  /api/auth/google/callback
+```
+
+### Publicações e interação
+
+```text
+GET    /api/feed
+GET    /api/posts/:id
+POST   /api/posts
+PUT    /api/posts/:id
+DELETE /api/posts/:id
+PATCH  /api/posts/:id/status
+POST   /api/posts/:id/like
+POST   /api/posts/:id/favorite
+GET    /api/posts/:id/comments
+POST   /api/posts/:id/comments
+```
+
+### Negociação, mensagens e perfil
+
+```text
+GET|POST|PATCH /api/negotiations/*
+GET|POST|DELETE /api/messages/threads/*
+GET|POST       /api/notifications/*
+GET|PUT|DELETE /api/profile/*
+GET             /api/impact/community
+```
+
+### Mapa e administração
+
+```text
+GET|POST /api/collection-points/*
+GET      /api/map-route
+GET      /api/businesses/cnpj/:cnpj
+GET|POST|PATCH|DELETE /api/admin/*
+```
+
+Rotas protegidas exigem `Authorization: Bearer <token>`. Rotas administrativas
+exigem, além do token, um usuário com `role=admin`.
+
+## Pagamentos simulados
+
+O pagamento atual é um **provedor local simulado**. Ele não movimenta dinheiro
+real e não exige conta em gateway externo.
+
+```text
+GET  /api/negotiations/:id/payment
+POST /api/negotiations/:id/payment
+```
+
+O fluxo usa valores em centavos, chave de idempotência e métodos `pix`,
+`card` ou `boleto`. A referência gerada possui formato `sim_...`.
+
+Esse mecanismo existe para testar o ciclo de negociação. Para pagamentos reais,
+seria necessário substituir o adaptador por um provedor regulado e implementar
+confirmação por webhook antes de liberar qualquer item ou valor.
+
+## Testes e validação
+
+Execute:
 
 ```bash
 npm test
 npm run build
 ```
 
-Os testes usam uma pasta temporária e não alteram o banco local de desenvolvimento.
+Os testes usam diretórios temporários e não devem alterar o banco local de
+desenvolvimento. O health check pode ser verificado com:
+
+```bash
+curl http://localhost:3000/api/health
+```
+
+Resposta esperada:
+
+```json
+{
+  "ok": true
+}
+```
+
+## Docker
+
+O ambiente completo sobe PostgreSQL, RabbitMQ, Redis, core, notificações e
+impacto:
+
+```bash
+docker compose up --build
+```
+
+Abra <http://localhost:3000>.
+
+Para encerrar:
+
+```bash
+docker compose down
+```
+
+Os dados persistentes ficam nos volumes Docker declarados em
+[`docker-compose.yml`](docker-compose.yml).
 
 ## Deploy na Railway
 
-1. Crie um projeto na [Railway](https://railway.app/) e selecione **Deploy from GitHub Repo**.
-2. Escolha este repositório. O `railway.toml` já define build, comando de início e healthcheck.
-3. Adicione um serviço PostgreSQL.
-4. Em **Variables** do serviço da aplicação, configure:
+O arquivo [`railway.toml`](railway.toml) já define:
 
-   ```env
-   DATABASE_PROVIDER=postgres
-   DATABASE_URL=${{Postgres.DATABASE_URL}}
-   JWT_SECRET=um-segredo-longo-e-aleatorio
-   ```
+- Build: `npm run build`;
+- Inicialização: `npm start`;
+- Health check: `/api/health`;
+- Reinício em caso de falha.
 
-   Ajuste `Postgres` caso o serviço tenha outro nome.
+Passos:
 
-5. Gere um domínio público em **Networking**.
-6. Confirme o healthcheck em `https://seu-dominio/api/health`.
+1. Crie um projeto na [Railway](https://railway.app/);
+2. Escolha **Deploy from GitHub Repo**;
+3. Selecione o repositório;
+4. Adicione PostgreSQL;
+5. Configure `DATABASE_PROVIDER=postgres`;
+6. Configure `DATABASE_URL`;
+7. Configure um `JWT_SECRET` forte;
+8. Gere um domínio público;
+9. Teste `https://seu-dominio/api/health`.
 
-### Login com Google em produção
-
-No Google Cloud, cadastre esta URL de redirecionamento no cliente OAuth Web:
+Para login Google, cadastre no Google Cloud:
 
 ```text
 https://seu-dominio/api/auth/google/callback
 ```
 
-Depois configure `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, `GOOGLE_REDIRECT_URI` e `APP_BASE_URL` nas variáveis da Railway.
+Depois configure `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
+`GOOGLE_REDIRECT_URI` e `APP_BASE_URL`.
 
-Se não usar S3, adicione um **Volume** na Railway montado em `/data` e defina `DATA_DIR=/data` para preservar uploads locais entre deploys.
+## Segurança
 
-## Estrutura do projeto
+O projeto inclui:
+
+- JWT para sessões;
+- Senhas protegidas com `scrypt`;
+- Confirmação de e-mail;
+- Limitação de tentativas em rotas sensíveis;
+- Validação de upload e limite de tamanho;
+- Validação de CNPJ, coordenadas e endereços;
+- Controle de acesso administrativo;
+- Cabeçalhos de segurança HTTP;
+- Token para comunicação entre serviços;
+- Identificador de correlação por requisição.
+
+Nunca versione:
 
 ```text
-src/            # Interface React, rotas, estado e estilos
-storage/        # Persistência local/PostgreSQL e regras de localização
-distributed/    # Integrações Redis, RabbitMQ, S3 e observabilidade
-services/       # Serviços de notificações e impacto
-migrations/     # Esquema e índices PostgreSQL
-scripts/        # Migração e verificação do banco
-test/           # Testes automatizados
-backend.js      # API Express e servidor da aplicação
+.env
+node_modules/
+dist/
+data/
+uploads/
+data-local-*/
 ```
 
-## Entrega acadêmica
+## Licença e uso
 
-Para entregar o projeto em outro repositório, envie os arquivos versionados e execute `npm install`, `npm run build` e `npm start` após o clone. Não inclua `node_modules/`, `.env`, `dist/`, `data/`, `uploads/` ou pastas `data-local-*`.
-
-## Guia para entender o sistema
-
-Se voce precisa explicar a arquitetura do projeto, veja:
-
-- [`docs/ENTENDA-O-SISTEMA.md`](docs/ENTENDA-O-SISTEMA.md): mapa das pastas e explicacao geral.
-- [`docs/FLUXO-TELA-API-BANCO.md`](docs/FLUXO-TELA-API-BANCO.md): fluxo de dados entre tela, API e banco.
-- [`docs/GUIA-PARA-EXPLICAR.md`](docs/GUIA-PARA-EXPLICAR.md): respostas curtas para apresentar ao professor.
+Este projeto está identificado no `package.json` como privado e foi organizado
+para uso acadêmico e de demonstração. Antes de uma operação comercial, revise
+licenciamento, privacidade, retenção de dados, e-mails, armazenamento de
+imagens e pagamentos reais.
