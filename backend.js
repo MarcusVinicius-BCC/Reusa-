@@ -1,3 +1,4 @@
+
 const express = require('express');
 const fs = require('fs');
 const path = require('path');
@@ -58,19 +59,6 @@ const POST_GOALS = new Set([DONATION_GOAL, 'Troca', SALE_GOAL]);
 
 function isConfiguredAdminEmail(email) {
   return ADMIN_EMAILS.has(String(email || '').trim().toLowerCase());
-}
-
-function isValidEmailFormat(value) {
-  const email = String(value || '').trim();
-  if (email.length > 254 || email.includes('..')) return false;
-  const match = email.match(/^([^@\s]+)@([^@\s]+)$/);
-  if (!match) return false;
-  const [, localPart, domain] = match;
-  if (localPart.length > 64 || localPart.startsWith('.') || localPart.endsWith('.')) return false;
-  const labels = domain.split('.');
-  return labels.length >= 2
-    && labels.every((label) => label.length >= 1 && label.length <= 63 && !label.startsWith('-') && !label.endsWith('-') && /^[a-zA-Z0-9-]+$/.test(label))
-    && labels[labels.length - 1].length >= 2;
 }
 
 let db;
@@ -1691,7 +1679,7 @@ async function start() {
 
     try {
       const response = await fetchWithTimeout(`https://brasilapi.com.br/api/cnpj/v1/${cnpj}`, { headers: { 'User-Agent': 'ReusaPlus/1.0' } });
-      if (response.status === 404) return res.status(404).json({ error: 'CNPJ não encontrado.' });
+      if (response.status === 404) return res.status(404).json({ error: 'CNPJ not found' });
       if (!response.ok) throw new Error(`BrasilAPI responded with ${response.status}`);
       const result = await response.json();
       const business = {
@@ -1779,32 +1767,32 @@ async function start() {
     const normalizedCnpj = String(cnpj || '').replace(/\D/g, '');
 
     if (!normalizedName || !normalizedEmail || !normalizedPassword || !normalizedCity) {
-      return res.status(400).json({ error: 'Informe nome, e-mail, senha e cidade para criar a conta.' });
+      return res.status(400).json({ error: 'Missing required fields' });
     }
 
     if (!['person', 'business'].includes(normalizedAccountType)) {
-      return res.status(400).json({ error: 'Selecione um tipo de conta válido.' });
+      return res.status(400).json({ error: 'Invalid account type' });
     }
 
     if (normalizedAccountType === 'business' && (!normalizedBusinessName || !validCnpj(normalizedCnpj))) {
-      return res.status(400).json({ error: 'Contas empresariais precisam de razão social e CNPJ válido.' });
+      return res.status(400).json({ error: 'Business accounts require a legal name and valid CNPJ' });
     }
 
     if (normalizedName.length > 80 || normalizedCity.length > 100 || normalizedNeighborhood.length > 100 || String(cep).length > 16 || String(address).length > 200 || normalizedBusinessName.length > 120) {
-      return res.status(400).json({ error: 'Um ou mais campos ultrapassam o limite permitido.' });
+      return res.status(400).json({ error: 'One or more fields exceed the allowed length' });
     }
 
-    if (!isValidEmailFormat(normalizedEmail)) {
-      return res.status(400).json({ error: 'Informe um e-mail válido, como nome@gmail.com, nome@outlook.com ou outro domínio existente.' });
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
+      return res.status(400).json({ error: 'Invalid email address' });
     }
 
     if (normalizedPassword.length < 8) {
-      return res.status(400).json({ error: 'A senha precisa ter pelo menos 8 caracteres.' });
+      return res.status(400).json({ error: 'Password must contain at least 8 characters' });
     }
 
     const existingUser = get('SELECT id FROM users WHERE lower(email) = lower(?)', [normalizedEmail]);
     if (existingUser) {
-      return res.status(409).json({ error: 'Este e-mail já está cadastrado.' });
+      return res.status(409).json({ error: 'Email already registered' });
     }
 
     const user = {
@@ -2375,11 +2363,11 @@ async function start() {
     const normalizedCategory = String(category || '').trim();
 
     if (!normalizedTitle || !normalizedDescription || !normalizedCategory) {
-      return res.status(400).json({ error: 'Informe o título, a descrição e a categoria do item.' });
+      return res.status(400).json({ error: 'Missing required fields' });
     }
 
     if (!req.files?.length && !String(req.body?.imageUrl || '').trim()) {
-      return res.status(400).json({ error: 'Adicione pelo menos uma foto do item.' });
+      return res.status(400).json({ error: 'An image is required for every post' });
     }
 
     if (normalizedTitle.length > 140 || normalizedDescription.length > 3000 || normalizedCategory.length > 60) {
