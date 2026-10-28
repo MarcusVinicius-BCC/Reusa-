@@ -1,3 +1,4 @@
+// controla as funcionalidades do app, como login, registro, feed, threads, notificações, pontos de coleta, favoritos, perfil, busca e formulários de postagem
 import { create } from 'zustand';
 import { api, clearToken, getToken, setToken } from '../services/api';
 import { fallbackPosts } from '../data/fallback-posts';

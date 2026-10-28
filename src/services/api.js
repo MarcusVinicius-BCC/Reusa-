@@ -1,3 +1,4 @@
+// conexão frontend com backend
 const API_BASE = '/api';
 const TOKEN_KEY = 'reusa_token';
 

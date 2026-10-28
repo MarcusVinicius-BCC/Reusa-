@@ -1037,10 +1037,6 @@ function CreatePostScreen({ onBack, onSuccess }) {
     ['plastico', 'recycling', 'Plástico'],
     ['outros', 'category', 'Outros']
   ];
-  const selectedGoal = postForm.goal || 'Doação';
-
-  useEffect(() => {
-  }, []);
 
   async function submit(event) {
     event.preventDefault();
@@ -1056,10 +1052,28 @@ function CreatePostScreen({ onBack, onSuccess }) {
       alert('Adicione uma foto do item para publicar o anúncio.');
       return;
     }
+    const selectedCategory = categories.find(([value]) => value === postForm.categoryId);
+    if (!selectedCategory) {
+      alert('Selecione a categoria do produto.');
+      return;
+    }
+    const [categoryId, , categoryLabel] = selectedCategory;
     const customCategory = String(postForm.customCategory || '').trim();
-    const category = postForm.category === 'outros' ? customCategory : (postForm.category || 'moveis');
+    const category = categoryId === 'outros' ? customCategory : categoryLabel;
     if (!category) {
       alert('Informe a categoria do produto.');
+      return;
+    }
+    if (!postForm.condition) {
+      alert('Selecione o estado do item.');
+      return;
+    }
+    if (!postForm.goal) {
+      alert('Selecione o tipo de publicação.');
+      return;
+    }
+    if (!postForm.location?.trim()) {
+      alert('Informe a localização aproximada do item.');
       return;
     }
     if (!session) {
@@ -1067,8 +1081,8 @@ function CreatePostScreen({ onBack, onSuccess }) {
       return;
     }
     try {
-      const { customCategory: ignoredCustomCategory, ...postPayload } = postForm;
-      await createPost({ ...postPayload, category, images });
+      const { customCategory: ignoredCustomCategory, category: ignoredCategory, ...postPayload } = postForm;
+      await createPost({ ...postPayload, categoryId, category, images });
       setPostForm({});
       setImages([]);
       onSuccess();
@@ -1085,9 +1099,10 @@ function CreatePostScreen({ onBack, onSuccess }) {
           <span className="publish-hero-icon material-symbols-outlined">volunteer_activism</span>
           <div><span className="eyebrow">Dê um novo ciclo</span><h2>O que vai ganhar uma nova história?</h2><p>Capriche nos detalhes para encontrar a pessoa certa.</p></div>
         </section>
+        <p className="publish-required-note"><strong>*</strong> Campos obrigatórios</p>
         <form onSubmit={submit} className="publish-form">
           <section className="publish-section publish-photo-section">
-            <div className="publish-section-head"><div><span className="publish-step">01</span><h3>Mostre seu item</h3></div><span>Uma boa foto faz diferença</span></div>
+            <div className="publish-section-head"><div><span className="publish-step">01</span><h3>Mostre seu item <strong className="required-mark" title="Campo obrigatório" aria-label="Campo obrigatório">*</strong></h3></div><span>Uma boa foto faz diferença</span></div>
             <label className={images.length ? 'publish-image-picker has-image' : 'publish-image-picker'}>
               {images.length ? <div className="publish-image-previews">{images.map((image, index) => <span key={`${image.name}-${index}`}><img src={imagePreviews[index]} alt={`Prévia ${index + 1}`} /><button type="button" onClick={(event) => { event.preventDefault(); setImages((current) => current.filter((_, imageIndex) => imageIndex !== index)); }} aria-label={`Remover foto ${index + 1}`}>×</button></span>)}</div> : <><span className="publish-image-icon material-symbols-outlined">add_a_photo</span><strong>Adicionar fotos</strong><small>Até 8 imagens • JPG, PNG, WebP ou GIF • até 5 MB cada</small></>}
               <input type="file" multiple accept="image/jpeg,image/png,image/gif,image/webp,image/avif" onChange={(event) => setImages((current) => [...current, ...Array.from(event.target.files || [])].slice(0, 8))} />
@@ -1103,32 +1118,32 @@ function CreatePostScreen({ onBack, onSuccess }) {
           </section>
 
           <section className="publish-section">
-            <div className="publish-section-head"><div><span className="publish-step">03</span><h3>Escolha a categoria</h3></div></div>
-            <div className="publish-categories">
-              {categories.map(([value, icon, label]) => <button type="button" key={value} className={(postForm.category || 'moveis') === value ? 'publish-category publish-category-active' : 'publish-category'} onClick={() => setPostForm((prev) => ({ ...prev, category: value }))} aria-pressed={(postForm.category || 'moveis') === value}><span className="material-symbols-outlined">{icon}</span><span>{label}</span></button>)}
+            <div className="publish-section-head"><div><span className="publish-step">03</span><h3>Escolha a categoria <strong className="required-mark" title="Campo obrigatório" aria-label="Campo obrigatório">*</strong></h3></div></div>
+            <div className="publish-categories" role="group" aria-label="Categoria do produto" aria-required="true">
+              {categories.map(([value, icon, label]) => <button type="button" key={value} className={postForm.categoryId === value ? 'publish-category publish-category-active' : 'publish-category'} onClick={() => setPostForm((prev) => ({ ...prev, categoryId: value, customCategory: value === 'outros' ? prev.customCategory : '' }))} aria-pressed={postForm.categoryId === value}><span className="material-symbols-outlined">{icon}</span><span>{label}</span></button>)}
             </div>
-            {postForm.category === 'outros' && <div className="publish-custom-category"><Field label="Qual é a categoria?" icon="sell" value={postForm.customCategory || ''} onChange={(value) => setPostForm((prev) => ({ ...prev, customCategory: value }))} placeholder="Ex: Esportes, jardinagem, brinquedos..." maxLength={60} autoFocus /><small>Ela aparecerá no anúncio como a categoria do produto.</small></div>}
+            {postForm.categoryId === 'outros' && <div className="publish-custom-category"><Field label="Qual é a categoria?" icon="sell" value={postForm.customCategory || ''} onChange={(value) => setPostForm((prev) => ({ ...prev, customCategory: value }))} placeholder="Ex: Esportes, jardinagem, brinquedos..." maxLength={60} required autoFocus /><small>Ela aparecerá no anúncio como a categoria do produto.</small></div>}
           </section>
 
           <section className="publish-section">
-            <div className="publish-section-head"><div><span className="publish-step">04</span><h3>Como está o item?</h3></div></div>
-            <div className="publish-options">
-              {['Novo', 'Bom estado', 'Marcas de uso', 'Para conserto'].map((condition) => <button type="button" key={condition} className={postForm.condition === condition || (!postForm.condition && condition === 'Novo') ? 'publish-option publish-option-active' : 'publish-option'} onClick={() => setPostForm((prev) => ({ ...prev, condition }))}>{condition}</button>)}
-            </div>
-          </section>
-
-          <section className="publish-section">
-            <div className="publish-section-head"><div><span className="publish-step">05</span><h3>Qual é a sua intenção?</h3></div></div>
-            <div className="publish-goals">
-              <button type="button" className={selectedGoal === 'Doação' ? 'publish-goal publish-goal-active' : 'publish-goal'} onClick={() => setPostForm((prev) => ({ ...prev, goal: 'Doação' }))}><span className="material-symbols-outlined">volunteer_activism</span><span><strong>Doar</strong><small>Encontrar um novo lar</small></span></button>
-              <button type="button" className={selectedGoal === 'Troca' ? 'publish-goal publish-goal-active' : 'publish-goal'} onClick={() => setPostForm((prev) => ({ ...prev, goal: 'Troca' }))}><span className="material-symbols-outlined">swap_horiz</span><span><strong>Trocar</strong><small>Receber algo em troca</small></span></button>
-              <button type="button" className={selectedGoal === 'Venda' ? 'publish-goal publish-goal-active' : 'publish-goal'} onClick={() => setPostForm((prev) => ({ ...prev, goal: 'Venda' }))}><span className="material-symbols-outlined">sell</span><span><strong>Vender</strong><small>Receber uma oferta em dinheiro</small></span></button>
+            <div className="publish-section-head"><div><span className="publish-step">04</span><h3>Como está o item? <strong className="required-mark" title="Campo obrigatório" aria-label="Campo obrigatório">*</strong></h3></div></div>
+            <div className="publish-options" role="group" aria-label="Estado do item" aria-required="true">
+              {['Novo', 'Bom estado', 'Marcas de uso', 'Para conserto'].map((condition) => <button type="button" key={condition} className={postForm.condition === condition ? 'publish-option publish-option-active' : 'publish-option'} onClick={() => setPostForm((prev) => ({ ...prev, condition }))} aria-pressed={postForm.condition === condition}>{condition}</button>)}
             </div>
           </section>
 
           <section className="publish-section">
-            <div className="publish-section-head"><div><span className="publish-step">06</span><h3>Onde ele está?</h3></div></div>
-            <Field label="Localização" icon="location_on" value={postForm.location || ''} onChange={(value) => setPostForm((prev) => ({ ...prev, location: value }))} placeholder="Ex: Santarém, PA" />
+            <div className="publish-section-head"><div><span className="publish-step">05</span><h3>Escolha o tipo de publicação <strong className="required-mark" title="Campo obrigatório" aria-label="Campo obrigatório">*</strong></h3></div></div>
+            <div className="publish-goals" role="group" aria-label="Tipo de publicação" aria-required="true">
+              <button type="button" className={postForm.goal === 'Doação' ? 'publish-goal publish-goal-active' : 'publish-goal'} onClick={() => setPostForm((prev) => ({ ...prev, goal: 'Doação' }))} aria-pressed={postForm.goal === 'Doação'}><span className="material-symbols-outlined">volunteer_activism</span><span><strong>Doar</strong><small>Encontrar um novo lar</small></span></button>
+              <button type="button" className={postForm.goal === 'Troca' ? 'publish-goal publish-goal-active' : 'publish-goal'} onClick={() => setPostForm((prev) => ({ ...prev, goal: 'Troca' }))} aria-pressed={postForm.goal === 'Troca'}><span className="material-symbols-outlined">swap_horiz</span><span><strong>Trocar</strong><small>Receber algo em troca</small></span></button>
+              <button type="button" className={postForm.goal === 'Venda' ? 'publish-goal publish-goal-active' : 'publish-goal'} onClick={() => setPostForm((prev) => ({ ...prev, goal: 'Venda' }))} aria-pressed={postForm.goal === 'Venda'}><span className="material-symbols-outlined">sell</span><span><strong>Vender</strong><small>Receber uma oferta em dinheiro</small></span></button>
+            </div>
+          </section>
+
+          <section className="publish-section">
+            <div className="publish-section-head"><div><span className="publish-step">06</span><h3>Onde ele está? <strong className="required-mark" title="Campo obrigatório" aria-label="Campo obrigatório">*</strong></h3></div></div>
+            <Field label="Localização aproximada" icon="location_on" value={postForm.location || ''} onChange={(value) => setPostForm((prev) => ({ ...prev, location: value }))} placeholder="Ex: Santarém, PA" required />
           </section>
 
           <aside className="publish-tip"><span className="material-symbols-outlined">tips_and_updates</span><span><strong>Dica REUSA+</strong> Fotos claras e uma descrição sincera aumentam as chances de um novo encontro.</span></aside>

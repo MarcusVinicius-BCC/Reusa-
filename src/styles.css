@@ -789,6 +789,9 @@ button, input, select, textarea { max-width: 100%; }
 
 .publish-form { display: grid; gap: 14px; }
 
+.publish-required-note { margin: 0; color: var(--muted); font-size: 12px; }
+.publish-required-note strong { color: #b42318; }
+
 .publish-section {
   padding: 16px;
   border: 1px solid color-mix(in srgb, var(--border) 90%, white);
