@@ -32,6 +32,7 @@ const ADMIN_EMAILS = new Set(
 );
 const SQLITE_ADMIN_EMAILS = ADMIN_EMAILS.size ? ADMIN_EMAILS : new Set(['mariana@reusa.com']);
 const APP_BASE_URL = String(process.env.APP_BASE_URL || '').trim().replace(/\/$/, '');
+const MERCADO_PAGO_CLIENT_ID = String(process.env.MERCADOPAGO_CLIENT_ID || '').trim();
 const NOTIFICATION_SERVICE_URL = String(process.env.NOTIFICATION_SERVICE_URL || '').trim().replace(/\/$/, '');
 const IMPACT_SERVICE_URL = String(process.env.IMPACT_SERVICE_URL || '').trim().replace(/\/$/, '');
 const SERVICE_AUTH_TOKEN = String(process.env.SERVICE_AUTH_TOKEN || '').trim();
@@ -558,8 +559,10 @@ function userFromRow(row) {
     role: row.role || 'user',
     suspended: Boolean(row.suspended),
     notificationPreferences: jsonArray(row.notification_preferences_json)
+    , mercadoPagoConnected: Boolean(row.mercado_pago_user_id)
   };
 }
+
 
 function verificationToken() {
   const raw = crypto.randomBytes(32).toString('hex');
@@ -1128,6 +1131,10 @@ function seedDatabase() {
   ensureColumn('users', 'role', "TEXT NOT NULL DEFAULT 'user'");
   ensureColumn('users', 'suspended', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('users', 'notification_preferences_json', "TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn('users', 'mercado_pago_user_id', 'TEXT');
+  ensureColumn('users', 'mercado_pago_access_token', 'TEXT');
+  ensureColumn('users', 'mercado_pago_refresh_token', 'TEXT');
+  ensureColumn('users', 'mercado_pago_token_expires_at', 'TEXT');
   ensureColumn('users', 'last_active_at', 'TEXT');
   ensureColumn('users', 'created_at', 'TEXT');
   ensureColumn('users', 'email_verified', 'INTEGER NOT NULL DEFAULT 1');
@@ -1704,6 +1711,44 @@ async function start() {
     res.json({ user: req.user });
   });
 
+  app.get('/api/payments/mercadopago/connect', authMiddleware, (req, res) => {
+    const returnTo = safeReturnTo(req.query.return_to || '/configuracoes');
+    const state = jwt.sign({ purpose: 'mercado-pago-seller-oauth', sub: req.user.id, returnTo }, JWT_SECRET, { expiresIn: '10m' });
+    try {
+      const redirectUri = `${appOrigin(req)}/api/payments/mercadopago/callback`;
+      return res.redirect(mercadoPago.authorizationUrl(state, redirectUri));
+    } catch (error) {
+      return res.status(error.status || 503).json({ error: 'Mercado Pago seller connection is not configured' });
+    }
+  });
+
+  app.get('/api/payments/mercadopago/callback', async (req, res) => {
+    let returnTo = '/configuracoes';
+    try {
+      const state = jwt.verify(String(req.query.state || ''), JWT_SECRET);
+      if (state.purpose !== 'mercado-pago-seller-oauth') throw new Error('Invalid OAuth state');
+      returnTo = safeReturnTo(state.returnTo);
+      if (req.query.error) throw new Error('Mercado Pago authorization was cancelled');
+      const redirectUri = `${appOrigin(req)}/api/payments/mercadopago/callback`;
+      const token = await mercadoPago.exchangeCode(String(req.query.code || ''), redirectUri);
+      const values = [token.user_id ? String(token.user_id) : null, mercadoPago.protectToken(token.access_token), token.refresh_token ? mercadoPago.protectToken(token.refresh_token) : null, new Date(Date.now() + Number(token.expires_in || 0) * 1000).toISOString(), state.sub];
+      if (postgresEnabled()) {
+        await postgres.query('UPDATE users SET mercado_pago_user_id=$1,mercado_pago_access_token=$2,mercado_pago_refresh_token=$3,mercado_pago_token_expires_at=$4 WHERE id=$5', values);
+      } else {
+        run('UPDATE users SET mercado_pago_user_id=?,mercado_pago_access_token=?,mercado_pago_refresh_token=?,mercado_pago_token_expires_at=? WHERE id=?', values);
+        persistDb();
+      }
+      const target = new URL(returnTo, appOrigin(req));
+      target.hash = 'payment_connected=1';
+      return res.redirect(target.toString());
+    } catch (error) {
+      console.error('Mercado Pago seller OAuth failed:', error.message);
+      const target = new URL(returnTo, appOrigin(req));
+      target.hash = 'payment_connected=0';
+      return res.redirect(target.toString());
+    }
+  });
+
   app.get('/api/auth/google', (req, res) => {
     const returnTo = safeReturnTo(req.query.return_to);
     if (!googleOauthEnabled()) {
@@ -2190,13 +2235,15 @@ async function start() {
       try {
         const post = get('SELECT title FROM posts WHERE id = ?', [negotiation.post_id]);
         const payer = get('SELECT email FROM users WHERE id = ?', [negotiation.interested_id]);
+        const seller = get('SELECT mercado_pago_access_token FROM users WHERE id = ?', [negotiation.owner_id]);
         provider = await mercadoPago.createPreference({
           paymentId,
           postId: negotiation.post_id,
           title: post?.title,
           amountCents,
           payerEmail: payer?.email,
-          method
+          method,
+          sellerAccessToken: mercadoPago.revealToken(seller?.mercado_pago_access_token)
         });
       } catch (error) {
         console.error('Mercado Pago preference failed', error);
@@ -2256,7 +2303,9 @@ async function start() {
       return res.sendStatus(401);
     }
     try {
-      const providerPayment = await mercadoPago.payment(externalId);
+      const currentPayment = get('SELECT * FROM payments WHERE provider_reference = ?', [String(externalId)]);
+      const seller = currentPayment && get('SELECT mercado_pago_access_token FROM users WHERE id = ?', [currentPayment.payee_id]);
+      const providerPayment = await mercadoPago.payment(externalId, mercadoPago.revealToken(seller?.mercado_pago_access_token));
       const paymentId = String(providerPayment.external_reference || '');
       const current = get('SELECT * FROM payments WHERE id = ?', [paymentId]);
       if (!current) return res.sendStatus(200);
@@ -2283,6 +2332,12 @@ async function start() {
     const interestedId = String(req.body?.interestedId || '');
     if (!post) return res.status(404).json({ error: 'Post not found' });
     if (post.author_id !== req.user.id) return res.status(403).json({ error: 'Only the owner can reserve this post' });
+    if (mercadoPago.isConfigured()) {
+      const seller = get('SELECT mercado_pago_access_token FROM users WHERE id = ?', [req.user.id]);
+      if (!mercadoPago.revealToken(seller?.mercado_pago_access_token)) {
+        return res.status(409).json({ error: 'Conecte sua conta Mercado Pago antes de reservar este item para receber o pagamento.' });
+      }
+    }
     if (!['Disponível', 'Reservado'].includes(post.status || 'Disponível')) return res.status(400).json({ error: 'This post is no longer available' });
     const negotiation = get('SELECT * FROM negotiations WHERE post_id = ? AND interested_id = ?', [post.id, interestedId]);
     if (!negotiation || negotiation.status === 'cancelled') return res.status(400).json({ error: 'Choose a user who demonstrated interest' });

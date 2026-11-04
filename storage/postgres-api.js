@@ -73,7 +73,8 @@ function userView(row) {
     rating: Number(row.rating || 0), donations: Number(row.donations || 0),
     received: Number(row.received || 0), carbonSavedPercent: Number(row.carbon_saved_percent || 0),
     achievements: json(row.achievements_json), role: row.role || 'user',
-    suspended: Boolean(row.suspended), notificationPreferences: json(row.notification_preferences_json)
+    suspended: Boolean(row.suspended), notificationPreferences: json(row.notification_preferences_json),
+    mercadoPagoConnected: Boolean(row.mercado_pago_user_id)
   };
 }
 
@@ -418,7 +419,8 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       let provider;
       if (mercadoPago.isConfigured()) {
         const payer = await db.one('SELECT email FROM users WHERE id=$1', [negotiation.interested_id]);
-        provider = await mercadoPago.createPreference({ paymentId, postId: negotiation.post_id, title: post.title, amountCents, payerEmail: payer?.email, method });
+        const seller = await db.one('SELECT mercado_pago_access_token FROM users WHERE id=$1', [negotiation.owner_id]);
+        provider = await mercadoPago.createPreference({ paymentId, postId: negotiation.post_id, title: post.title, amountCents, payerEmail: payer?.email, method, sellerAccessToken: mercadoPago.revealToken(seller?.mercado_pago_access_token) });
       } else if (process.env.NODE_ENV === 'test') {
         provider = { id: `test_${crypto.randomUUID()}`, checkoutUrl: null };
       } else {
@@ -454,7 +456,9 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
     if (String(req.body?.type || req.body?.topic || '').toLowerCase() !== 'payment' || !externalId) return res.sendStatus(200);
     if (!mercadoPago.webhookIsValid({ dataId: externalId, requestId: req.get('x-request-id'), signature: req.get('x-signature') })) return res.sendStatus(401);
     try {
-      const providerPayment = await mercadoPago.payment(externalId);
+      const currentPayment = await db.one('SELECT * FROM payments WHERE provider_reference=$1', [String(externalId)]);
+      const seller = currentPayment && await db.one('SELECT mercado_pago_access_token FROM users WHERE id=$1', [currentPayment.payee_id]);
+      const providerPayment = await mercadoPago.payment(externalId, mercadoPago.revealToken(seller?.mercado_pago_access_token));
       const paymentId = String(providerPayment.external_reference || '');
       const current = await db.one('SELECT * FROM payments WHERE id=$1', [paymentId]);
       if (!current) return res.sendStatus(200);
@@ -494,6 +498,12 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
         const postResult = await client.query('SELECT * FROM posts WHERE id=$1 FOR UPDATE', [req.params.id]);
         const post = postResult.rows[0]; if (!post) throw Object.assign(new Error('Post not found'), { status: 404 });
         if (post.author_id !== req.user.id) throw Object.assign(new Error('Only the owner can reserve this post'), { status: 403 });
+        if (mercadoPago.isConfigured()) {
+          const seller = (await client.query('SELECT mercado_pago_access_token FROM users WHERE id=$1', [req.user.id])).rows[0];
+          if (!mercadoPago.revealToken(seller?.mercado_pago_access_token)) {
+            throw Object.assign(new Error('Conecte sua conta Mercado Pago antes de reservar este item para receber o pagamento.'), { status: 409 });
+          }
+        }
         if (!['Disponível', 'Reservado'].includes(post.status)) throw Object.assign(new Error('This post is no longer available'), { status: 400 });
         const negotiation = (await client.query("SELECT * FROM negotiations WHERE post_id=$1 AND interested_id=$2 AND status <> 'cancelled'", [post.id, req.body?.interestedId])).rows[0];
         if (!negotiation) throw Object.assign(new Error('Choose a user who demonstrated interest'), { status: 400 });

@@ -60,6 +60,8 @@ services:
       IMPACT_SERVICE_URL: http://impact:3002
       SERVICE_AUTH_TOKEN: ${SERVICE_AUTH_TOKEN:-development-service-token-change-me}
       MERCADOPAGO_ACCESS_TOKEN: ${MERCADOPAGO_ACCESS_TOKEN:-}
+      MERCADOPAGO_CLIENT_ID: ${MERCADOPAGO_CLIENT_ID:-}
+      MERCADOPAGO_CLIENT_SECRET: ${MERCADOPAGO_CLIENT_SECRET:-}
       APP_BASE_URL: ${APP_BASE_URL:-http://localhost:3000}
     ports:
       - "3000:3000"

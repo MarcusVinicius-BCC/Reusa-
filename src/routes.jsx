@@ -2023,6 +2023,7 @@ function SettingsScreen({ onBack, onLogout }) {
   const logout = useAppStore((state) => state.logout);
   const [activeSection, setActiveSection] = useState('perfil');
   const [paymentItems, setPaymentItems] = useState([]);
+  const [paymentConnected, setPaymentConnected] = useState(Boolean(profile?.user?.mercadoPagoConnected));
   const [form, setForm] = useState({ name: profile?.user?.name || '', city: profile?.user?.city || '', neighborhood: profile?.user?.neighborhood || '', cep: profile?.user?.cep || '', address: profile?.user?.address || '', businessName: profile?.user?.businessName || '' });
   const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '' });
   const [preferences, setPreferences] = useState(profile?.user?.notificationPreferences || ['Curtidas', 'Comentários', 'Interesse', 'Mensagens', 'Negociações', 'Avaliações', 'Sistema']);
@@ -2030,6 +2031,9 @@ function SettingsScreen({ onBack, onLogout }) {
   useEffect(() => {
     api.paymentItems().then((result) => setPaymentItems(result.items || [])).catch(() => {});
   }, []);
+  useEffect(() => {
+    if (profile?.user) setPaymentConnected(Boolean(profile.user.mercadoPagoConnected));
+  }, [profile]);
 
   useEffect(() => {
     if (profile?.user) setForm({ name: profile.user.name || '', city: profile.user.city || '', neighborhood: profile.user.neighborhood || '', cep: profile.user.cep || '', address: profile.user.address || '', businessName: profile.user.businessName || '' });
@@ -2110,6 +2114,7 @@ function SettingsScreen({ onBack, onLogout }) {
             </section> : null}
             {activeSection === 'pagamentos' ? <section className="card settings-card settings-panel" id="pagamentos">
               <div className="settings-panel-heading"><div><span className="settings-panel-icon payments"><span className="material-symbols-outlined">payments</span></span><div><h2>Ofertas e pagamentos</h2><p>Acompanhe os itens que aguardam sua decisão ou pagamento.</p></div></div></div>
+              <div className={`marketplace-connection ${paymentConnected ? 'is-connected' : ''}`}><div><strong>{paymentConnected ? 'Conta Mercado Pago conectada' : 'Receba suas vendas pelo Mercado Pago'}</strong><small>{paymentConnected ? 'Sua conta está pronta para receber pagamentos.' : 'Conecte sua conta para receber os valores das suas vendas com segurança.'}</small></div>{paymentConnected ? <span className="connection-status"><span className="material-symbols-outlined">check_circle</span>Conectada</span> : <button className="primary-btn" onClick={() => window.location.assign('/api/payments/mercadopago/connect?return_to=/configuracoes')}><span className="material-symbols-outlined">account_balance_wallet</span>Conectar conta</button>}</div>
               <div className="payment-items-list">{paymentItems.length ? paymentItems.map((item) => <article className="payment-item" key={item.negotiationId}><span className="payment-item-icon material-symbols-outlined">shopping_bag</span><div><strong>{item.title}</strong><small>R$ {((item.amountCents || 0) / 100).toFixed(2).replace('.', ',')} · {item.method === 'pix' ? 'PIX' : item.method === 'card' ? 'Cartão' : 'Boleto'}</small><small>{item.negotiationStatus === 'reserved' ? 'Reserva confirmada: pagamento liberado' : 'Oferta enviada: aguardando resposta'}</small></div><button className="secondary-btn" onClick={() => window.location.assign(`/anuncios/${item.postId}`)}>{item.negotiationStatus === 'reserved' ? 'Pagar agora' : 'Ver oferta'}</button></article>) : <EmptyState icon="payments" title="Nenhum pagamento pendente" text="Quando você enviar uma oferta, ela aparecerá aqui para acompanhamento." />}</div>
             </section> : null}
           </div>

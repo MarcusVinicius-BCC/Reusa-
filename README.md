@@ -434,6 +434,8 @@ Configure no ambiente do backend:
 
 ```text
 MERCADOPAGO_ACCESS_TOKEN=APP_USR-...
+MERCADOPAGO_CLIENT_ID=...
+MERCADOPAGO_CLIENT_SECRET=...
 MERCADOPAGO_WEBHOOK_SECRET=...
 APP_BASE_URL=https://seu-dominio-publico.example
 ```
@@ -443,6 +445,11 @@ enviar o webhook em `/api/payments/mercadopago/webhook`. Configure o segredo de
 assinatura exibido no painel do Mercado Pago em `MERCADOPAGO_WEBHOOK_SECRET`.
 Em desenvolvimento,
 use as credenciais de teste do Mercado Pago e um túnel HTTPS público.
+
+Vendedores devem conectar suas próprias contas na seção **Configurações >
+Ofertas e pagamentos > Conectar conta**. O sistema usa OAuth e armazena os
+tokens protegidos; sem essa conexão, uma venda não pode criar checkout para
+repassar o valor ao vendedor.
 
 ```text
 GET  /api/negotiations/:id/payment
