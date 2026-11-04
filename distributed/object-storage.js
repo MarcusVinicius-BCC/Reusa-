@@ -32,7 +32,7 @@ function createObjectStorage({ bucket, endpoint, publicBaseUrl = endpoint, regio
     },
     async put({ key, body, contentType }) {
       await client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: contentType }));
-      return `${publicBaseUrl.replace(/\/$/, '')}/${bucket}/${encodeURIComponent(key).replace(/%2F/g, '/')}`;
+      return `${publicBaseUrl.replace(/\/$/, '')}/${encodeURIComponent(key).replace(/%2F/g, '/')}`;
     }
   };
 }

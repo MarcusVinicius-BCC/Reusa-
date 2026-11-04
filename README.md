@@ -265,6 +265,10 @@ segredos no Git.
 | `IMPACT_SERVICE_URL` | Distribuído | URL do serviço de impacto. |
 | `S3_*` | Upload externo | Configuração do armazenamento compatível com S3. |
 
+> `S3_PUBLIC_BASE_URL` deve ser a URL pública que já aponta para o bucket,
+> por exemplo `https://pub-xxxx.r2.dev` ou um domínio personalizado. As
+> imagens serão acessadas como `/uploads/<arquivo>`.
+
 > Em produção, defina obrigatoriamente `JWT_SECRET`. Para preservar uploads
 > locais na Railway, use um Volume montado em `/data` e `DATA_DIR=/data`.
 
