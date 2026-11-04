@@ -1195,6 +1195,11 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
   const [payment, setPayment] = useState(null);
   const [paymentForm, setPaymentForm] = useState({ amount: '', method: 'pix' });
   const [paymentBusy, setPaymentBusy] = useState(false);
+  const [collection, setCollection] = useState(null);
+  const [collectionPoints, setCollectionPoints] = useState([]);
+  const [collectionForm, setCollectionForm] = useState({ mode: 'pickup', scheduledFor: '', address: '', collectionPointId: '' });
+  const [collectionBusy, setCollectionBusy] = useState(false);
+  const [collectionToken, setCollectionToken] = useState('');
   const [proposalForm, setProposalForm] = useState({ amount: '', method: 'pix' });
   const [proposalBusy, setProposalBusy] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -1239,9 +1244,16 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
         }
         const paymentResult = await api.payment(currentNegotiation.id);
         setPayment(paymentResult.payment);
+        const collectionResult = await api.collection(currentNegotiation.id);
+        setCollection(collectionResult.collection);
       }
     }).catch(() => {});
   }, [postId, session?.id]);
+
+  useEffect(() => {
+    if (collectionForm.mode !== 'dropoff' || collectionPoints.length) return;
+    api.collectionPoints().then((result) => setCollectionPoints(result.points || [])).catch(() => {});
+  }, [collectionForm.mode, collectionPoints.length]);
 
   useEffect(() => {
     const previews = editImages.map((image) => image.file ? URL.createObjectURL(image.file) : image.url);
@@ -1308,12 +1320,45 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
         window.location.assign(result.payment.checkoutUrl);
         return;
       }
+
       alert(result.payment.status === 'succeeded' ? 'Pagamento confirmado.' : 'Pagamento aguardando confirmação.');
     } catch (error) {
       alert(error.message);
     } finally {
       setPaymentBusy(false);
     }
+  }
+
+  async function scheduleCollection(event) {
+    event.preventDefault();
+    if (!negotiation || collectionBusy) return;
+    setCollectionBusy(true);
+    try {
+      const result = await api.scheduleCollection(negotiation.id, collectionForm);
+      setCollection(result.collection);
+      alert('Coleta agendada. Apresente o QR Code no momento da entrega.');
+    } catch (error) {
+      alert(error.message);
+    } finally {
+      setCollectionBusy(false);
+    }
+  }
+
+  async function confirmCollection() {
+    if (!collection || !collectionToken.trim()) return;
+    try {
+      const result = await api.confirmCollection(collection.id, collectionToken.trim());
+      setCollection(result.collection);
+      setCollectionToken('');
+    } catch (error) { alert(error.message); }
+  }
+
+  async function changeCollectionStatus(status) {
+    if (!collection) return;
+    try {
+      const result = await api.updateCollectionStatus(collection.id, status);
+      setCollection(result.collection);
+    } catch (error) { alert(error.message); }
   }
 
   async function submitProposal(event) {
@@ -1515,6 +1560,23 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
         {interested.length ? <div className="interested-list">{interested.map((item) => <article key={item.id}>{item.user?.avatar ? <img className="interested-avatar" src={item.user.avatar} alt={`Foto de ${item.user.name || 'usuário'}`} /> : <span className="avatar-placeholder material-symbols-outlined">person</span>}<div><strong>{item.user?.name || 'Usuário'}</strong><small>{item.user?.city} · {negotiationStatusLabel(item.status)}</small>{item.proposalStatus !== 'none' ? <small>Proposta: {Number.isFinite(Number(item.proposalAmountCents)) && Number(item.proposalAmountCents) > 0 ? `R$ ${(Number(item.proposalAmountCents) / 100).toFixed(2).replace('.', ',')}` : 'Valor indisponível'} · {proposalStatusLabel(item.proposalStatus)}</small> : null}</div>{item.proposalStatus === 'pending' ? <><button className="secondary-btn" onClick={() => api.decideProposal(item.id, 'rejected').then(loadInterested).catch((error) => alert(error.message))}>Recusar</button><button className="primary-btn" onClick={() => api.decideProposal(item.id, 'accepted').then(loadInterested).catch((error) => alert(error.message))}>Aceitar</button></> : null}{item.proposalStatus !== 'rejected' ? <button className={item.status === 'reserved' ? 'reserve-btn reserve-btn-active' : 'reserve-btn'} onClick={() => reserve(item.user.id)} disabled={item.status === 'reserved'}><span className="material-symbols-outlined">{item.status === 'reserved' ? 'check_circle' : 'bookmark_add'}</span>{item.status === 'reserved' ? 'Item reservado' : 'Reservar para este usuário'}</button> : null}</article>)}</div> : null}
       </section>
     ) : null}
+    {negotiation?.status === 'reserved' ? <section className="review-form-card collection-card">
+      <span className="eyebrow">Logística segura</span><h2><span className="material-symbols-outlined">local_shipping</span> Coleta e entrega</h2>
+      {collection ? <div className="collection-tracking">
+        <div className="collection-status-line"><strong>{({ scheduled: 'Agendada', confirmed: 'Confirmada', in_transit: 'Em transporte', completed: 'Concluída', cancelled: 'Cancelada' }[collection.status] || collection.status)}</strong><small>{formatBrazilDate(collection.scheduledFor)} às {formatBrazilTime(collection.scheduledFor)}</small></div>
+        <p>{collection.mode === 'pickup' ? `Retirada: ${collection.address}` : `Ponto: ${collection.collectionPoint?.name || 'ponto de coleta'}`}</p>
+        {collection.qrCodeDataUrl ? <img className="collection-qr" src={collection.qrCodeDataUrl} alt="QR Code para confirmar a coleta" /> : null}
+        {['scheduled', 'confirmed'].includes(collection.status) ? <div className="collection-confirm-form"><input value={collectionToken} onChange={(event) => setCollectionToken(event.target.value)} placeholder="Token lido do QR Code" aria-label="Token do QR Code" /><button type="button" className="secondary-btn" onClick={confirmCollection}>Confirmar QR Code</button></div> : null}
+        {collection.status === 'confirmed' ? <button type="button" className="primary-btn" onClick={() => changeCollectionStatus('in_transit')}>Iniciar transporte</button> : null}
+        {collection.status === 'in_transit' ? <button type="button" className="primary-btn" onClick={() => changeCollectionStatus('completed')}>Confirmar entrega concluída</button> : null}
+      </div> : <form className="collection-form" onSubmit={scheduleCollection}>
+        <p>Agende a retirada na residência ou escolha um ponto parceiro.</p>
+        <label>Modalidade<select value={collectionForm.mode} onChange={(event) => setCollectionForm((current) => ({ ...current, mode: event.target.value }))}><option value="pickup">Retirada combinada</option><option value="dropoff">Entrega em ponto de coleta</option></select></label>
+        <label>Data e horário<input type="datetime-local" required value={collectionForm.scheduledFor} onChange={(event) => setCollectionForm((current) => ({ ...current, scheduledFor: event.target.value }))} /></label>
+        {collectionForm.mode === 'pickup' ? <label>Endereço para retirada<input required maxLength={240} value={collectionForm.address} onChange={(event) => setCollectionForm((current) => ({ ...current, address: event.target.value }))} placeholder="Rua, número, bairro e cidade" /></label> : <label>Ponto parceiro<select required value={collectionForm.collectionPointId} onChange={(event) => setCollectionForm((current) => ({ ...current, collectionPointId: event.target.value }))}><option value="">Selecione um ponto</option>{collectionPoints.map((point) => <option key={point.id} value={point.id}>{point.name} · {point.location}</option>)}</select></label>}
+        <button className="primary-btn" disabled={collectionBusy}>{collectionBusy ? 'Agendando...' : 'Agendar coleta'}</button>
+      </form>}
+    </section> : null}
     {!ownPost && isSale && negotiation?.status === 'interested' && negotiation.proposalStatus === 'none' ? <section className="review-form-card proposal-card"><span className="eyebrow">Oferta com pagamento</span><h2>Envie sua proposta</h2><p>Informe o valor e a forma de pagamento. O vendedor receberá sua proposta para análise.</p><form onSubmit={submitProposal}><label>Valor da oferta (R$)<input inputMode="decimal" value={proposalForm.amount} onChange={(event) => setProposalForm((current) => ({ ...current, amount: formatMoneyInput(event.target.value) }))} placeholder="10,00" required /></label>    <label>Forma de pagamento<select value={proposalForm.method} onChange={(event) => setProposalForm((current) => ({ ...current, method: event.target.value }))}><option value="pix">PIX</option><option value="card">Cartão</option><option value="boleto">Boleto</option></select></label><button className="primary-btn" disabled={proposalBusy}>{proposalBusy ? 'Enviando...' : 'Enviar proposta'}<span className="material-symbols-outlined">send</span></button></form></section> : null}
     {!ownPost && isSale && negotiation?.status === 'interested' && negotiation.proposalStatus === 'pending' ? <section className="payment-waiting-card"><div className="payment-waiting-icon"><span className="material-symbols-outlined">hourglass_top</span></div><div><span className="eyebrow">Proposta enviada</span><h2>Aguardando resposta do vendedor</h2><p>Sua oferta de R$ {((negotiation.proposalAmountCents || 0) / 100).toFixed(2).replace('.', ',')} foi enviada. O pagamento ficará disponível depois que o vendedor aceitar e reservar o item.</p></div><button className="secondary-btn" onClick={startConversation}><span className="material-symbols-outlined">chat_bubble</span>Conversar com o anunciante</button></section> : null}
     {!ownPost && isSale && negotiation?.status === 'reserved' && !payment ? <section className="review-form-card proposal-card"><span className="eyebrow">Pagamento liberado</span><h2>Finalize seu pagamento</h2><p>O vendedor reservou este anúncio para você. Escolha uma forma de pagamento para continuar no Mercado Pago.</p><form onSubmit={submitPayment}><label>Valor do pagamento (R$)<input inputMode="decimal" value={paymentForm.amount || (negotiation.proposalAmountCents ? formatMoneyInput(String(negotiation.proposalAmountCents)) : '')} onChange={(event) => setPaymentForm((current) => ({ ...current, amount: formatMoneyInput(event.target.value) }))} placeholder="10,00" required /></label><label>Forma de pagamento<select value={paymentForm.method} onChange={(event) => setPaymentForm((current) => ({ ...current, method: event.target.value }))}><option value="pix">PIX</option><option value="card">Cartão</option><option value="boleto">Boleto</option></select></label><button className="primary-btn" disabled={paymentBusy}>{paymentBusy ? 'Abrindo checkout...' : 'Continuar para pagamento'}<span className="material-symbols-outlined">payments</span></button></form></section> : null}

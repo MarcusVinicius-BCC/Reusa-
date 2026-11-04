@@ -1314,6 +1314,17 @@ button, input, select, textarea { max-width: 100%; }
 .reserve-btn:hover:not(:disabled) { color: white; background: var(--primary); transform: translateY(-1px); }
 .reserve-btn:disabled, .reserve-btn-active { color: #17653f; border-color: #9ac9aa; background: #e8f7ed; cursor: default; }
 .reserve-btn .material-symbols-outlined { font-size: 18px; }
+.collection-card h2 { display: flex; align-items: center; gap: 7px; }
+.collection-card h2 .material-symbols-outlined { color: var(--primary); }
+.collection-form, .collection-tracking { display: grid; gap: 12px; }
+.collection-form label { display: grid; gap: 5px; color: var(--text-variant); font-size: 13px; font-weight: 800; }
+.collection-form input, .collection-form select, .collection-confirm-form input { min-height: 43px; padding: 9px 11px; border: 1px solid var(--outline); border-radius: 12px; background: var(--surface-lowest); font: inherit; }
+.collection-status-line { display: flex; justify-content: space-between; gap: 12px; align-items: center; }
+.collection-status-line strong { color: var(--primary); }
+.collection-status-line small, .collection-tracking p { color: var(--text-variant); }
+.collection-qr { width: 180px; height: 180px; padding: 8px; border: 1px solid var(--surface-high); border-radius: 14px; background: #fff; }
+.collection-confirm-form { display: flex; flex-wrap: wrap; gap: 8px; }
+.collection-confirm-form input { flex: 1 1 180px; }
 .payment-items-list { display: grid; gap: 10px; }
 .payment-item { display: flex; align-items: center; gap: 12px; padding: 14px; border: 1px solid var(--surface-high); border-radius: 15px; background: var(--surface-lowest); }
 .payment-item > div { min-width: 0; flex: 1; }

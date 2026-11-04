@@ -4,6 +4,7 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
+const QRCode = require('qrcode');
 const multer = require('multer');
 const initSqlJs = require('sql.js');
 const { EventPublisher } = require('./distributed/event-publisher');
@@ -737,6 +738,25 @@ function publicPost(row, viewerId = null) {
   };
 }
 
+function collectionDeliveryView(row, { includeQr = false } = {}) {
+  const point = row.collection_point_id
+    ? get('SELECT id, name, location, latitude, longitude FROM collection_points WHERE id = ?', [row.collection_point_id])
+    : null;
+  return {
+    id: row.id,
+    negotiationId: row.negotiation_id,
+    mode: row.mode,
+    scheduledFor: row.scheduled_for,
+    address: row.address || '',
+    collectionPoint: point ? { id: point.id, name: point.name, location: point.location, latitude: point.latitude, longitude: point.longitude } : null,
+    status: row.status,
+    confirmedAt: row.confirmed_at || null,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+    ...(includeQr && row.qr_code_data_url ? { qrCodeDataUrl: row.qr_code_data_url } : {})
+  };
+}
+
 function threadSummary(row, currentUserId, { hideCleared = false } = {}) {
   const participants = JSON.parse(row.participants_json || '[]');
   const otherParticipantId = participants.find((participantId) => participantId !== currentUserId) || participants[0];
@@ -1007,6 +1027,27 @@ function seedDatabase() {
   ensureColumn('negotiations', 'proposal_amount_cents', 'INTEGER');
   ensureColumn('negotiations', 'proposal_method', "TEXT");
   ensureColumn('negotiations', 'proposal_created_at', 'TEXT');
+
+  run(`
+    CREATE TABLE IF NOT EXISTS collection_deliveries (
+      id TEXT PRIMARY KEY,
+      negotiation_id TEXT NOT NULL UNIQUE,
+      mode TEXT NOT NULL,
+      scheduled_for TEXT NOT NULL,
+      address TEXT NOT NULL DEFAULT '',
+      collection_point_id TEXT,
+      status TEXT NOT NULL DEFAULT 'scheduled',
+      confirmation_token_hash TEXT NOT NULL,
+      confirmation_token_expires_at TEXT NOT NULL,
+      qr_code_data_url TEXT NOT NULL DEFAULT '',
+      confirmed_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      FOREIGN KEY(negotiation_id) REFERENCES negotiations(id),
+      FOREIGN KEY(collection_point_id) REFERENCES collection_points(id)
+    );
+  `);
+  run('CREATE INDEX IF NOT EXISTS collection_deliveries_status_idx ON collection_deliveries(status, scheduled_for)');
 
   run(`
     CREATE TABLE IF NOT EXISTS payments (
@@ -2193,6 +2234,71 @@ async function start() {
       paidAt: payment.paid_at
     } : null });
   });
+
+  app.get('/api/negotiations/:id/collection', authMiddleware, (req, res) => {
+    const negotiation = get('SELECT * FROM negotiations WHERE id = ?', [req.params.id]);
+    if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
+    if (![negotiation.owner_id, negotiation.interested_id].includes(req.user.id)) return res.status(403).json({ error: 'Collection access denied' });
+    const delivery = get('SELECT * FROM collection_deliveries WHERE negotiation_id = ?', [negotiation.id]);
+    return res.json({ collection: delivery ? collectionDeliveryView(delivery, { includeQr: true }) : null });
+  });
+
+  app.post('/api/negotiations/:id/collection', authMiddleware, async (req, res) => {
+    const negotiation = get('SELECT * FROM negotiations WHERE id = ?', [req.params.id]);
+    if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
+    if (![negotiation.owner_id, negotiation.interested_id].includes(req.user.id)) return res.status(403).json({ error: 'Collection access denied' });
+    if (negotiation.status !== 'reserved') return res.status(400).json({ error: 'Reserve the item before scheduling collection' });
+    if (get('SELECT id FROM collection_deliveries WHERE negotiation_id = ?', [negotiation.id])) return res.status(409).json({ error: 'This collection is already scheduled' });
+
+    const mode = String(req.body?.mode || '').trim();
+    const scheduledFor = new Date(String(req.body?.scheduledFor || ''));
+    const address = String(req.body?.address || '').trim().slice(0, 240);
+    const collectionPointId = String(req.body?.collectionPointId || '').trim() || null;
+    if (!['pickup', 'dropoff'].includes(mode) || Number.isNaN(scheduledFor.getTime())) return res.status(400).json({ error: 'Choose a valid collection mode and date' });
+    if (scheduledFor.getTime() < Date.now() + 30 * 60 * 1000 || scheduledFor.getTime() > Date.now() + 90 * 24 * 60 * 60 * 1000) return res.status(400).json({ error: 'Schedule the collection between 30 minutes and 90 days from now' });
+    if (mode === 'pickup' && !address) return res.status(400).json({ error: 'Provide the pickup address' });
+    if (mode === 'dropoff' && (!collectionPointId || !get('SELECT id FROM collection_points WHERE id = ?', [collectionPointId]))) return res.status(400).json({ error: 'Choose a valid collection point' });
+
+    const now = new Date().toISOString();
+    const token = crypto.randomBytes(24).toString('base64url');
+    const deliveryId = uid('collection');
+    const qrCodeDataUrl = await QRCode.toDataURL(`reusa+://collection/${deliveryId}?token=${encodeURIComponent(token)}`, { errorCorrectionLevel: 'M', margin: 2, width: 280 });
+    const expiresAt = new Date(scheduledFor.getTime() + 24 * 60 * 60 * 1000).toISOString();
+    run(`INSERT INTO collection_deliveries
+      (id, negotiation_id, mode, scheduled_for, address, collection_point_id, status, confirmation_token_hash, confirmation_token_expires_at, qr_code_data_url, created_at, updated_at)
+      VALUES (?, ?, ?, ?, ?, ?, 'scheduled', ?, ?, ?, ?, ?)`,
+    [deliveryId, negotiation.id, mode, scheduledFor.toISOString(), address, collectionPointId, sha256(token), expiresAt, qrCodeDataUrl, now, now]);
+    notification(negotiation.owner_id === req.user.id ? negotiation.interested_id : negotiation.owner_id, 'collection', 'Coleta agendada', `A coleta foi agendada para ${scheduledFor.toLocaleString('pt-BR')}.`, `/anuncios/${negotiation.post_id}`);
+    persistDb();
+    return res.status(201).json({ collection: collectionDeliveryView(get('SELECT * FROM collection_deliveries WHERE id = ?', [deliveryId]), { includeQr: true }) });
+  });
+
+  app.post('/api/collection-deliveries/:id/confirm', authMiddleware, (req, res) => {
+    const delivery = get('SELECT d.*, n.owner_id, n.interested_id, n.post_id FROM collection_deliveries d JOIN negotiations n ON n.id = d.negotiation_id WHERE d.id = ?', [req.params.id]);
+    if (!delivery) return res.status(404).json({ error: 'Collection not found' });
+    if (![delivery.owner_id, delivery.interested_id].includes(req.user.id)) return res.status(403).json({ error: 'Collection access denied' });
+    if (!delivery.confirmation_token_expires_at || new Date(delivery.confirmation_token_expires_at).getTime() < Date.now()) return res.status(410).json({ error: 'This QR Code has expired' });
+    if (!req.body?.token || sha256(String(req.body.token)) !== delivery.confirmation_token_hash) return res.status(400).json({ error: 'Invalid QR Code' });
+    if (!['scheduled', 'confirmed'].includes(delivery.status)) return res.status(409).json({ error: 'This collection cannot be confirmed in its current status' });
+    const now = new Date().toISOString();
+    run("UPDATE collection_deliveries SET status = 'confirmed', confirmed_at = COALESCE(confirmed_at, ?), updated_at = ? WHERE id = ?", [now, now, delivery.id]);
+    persistDb();
+    return res.json({ collection: collectionDeliveryView(get('SELECT * FROM collection_deliveries WHERE id = ?', [delivery.id]), { includeQr: true }) });
+  });
+
+  app.patch('/api/collection-deliveries/:id/status', authMiddleware, (req, res) => {
+    const delivery = get('SELECT d.*, n.owner_id, n.interested_id FROM collection_deliveries d JOIN negotiations n ON n.id = d.negotiation_id WHERE d.id = ?', [req.params.id]);
+    if (!delivery) return res.status(404).json({ error: 'Collection not found' });
+    if (![delivery.owner_id, delivery.interested_id].includes(req.user.id)) return res.status(403).json({ error: 'Collection access denied' });
+    const nextStatus = String(req.body?.status || '').trim();
+    const transitions = { scheduled: ['cancelled'], confirmed: ['in_transit', 'cancelled'], in_transit: ['completed'], completed: [] };
+    if (!transitions[delivery.status]?.includes(nextStatus)) return res.status(400).json({ error: 'Invalid collection status transition' });
+    const now = new Date().toISOString();
+    run('UPDATE collection_deliveries SET status = ?, updated_at = ? WHERE id = ?', [nextStatus, now, delivery.id]);
+    persistDb();
+    return res.json({ collection: collectionDeliveryView(get('SELECT * FROM collection_deliveries WHERE id = ?', [delivery.id]), { includeQr: true }) });
+  });
+
   app.get('/api/profile/payment-items', authMiddleware, (req, res) => {
     const rows = all(`SELECT n.id AS negotiation_id,n.status,n.proposal_status,n.proposal_amount_cents,n.proposal_method,n.proposal_created_at,p.id AS post_id,p.title,p.image_url,p.location
       FROM negotiations n JOIN posts p ON p.id=n.post_id

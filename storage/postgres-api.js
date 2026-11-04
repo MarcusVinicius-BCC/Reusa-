@@ -1,6 +1,7 @@
 // 
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
+const QRCode = require('qrcode');
 const { isLikelyResidentialAddress } = require('./location-validation');
 const { buildCollectionPointAddress, geocodeCollectionPoint } = require('./collection-point-geocoding');
 const mercadoPago = require('../services/mercado-pago');
@@ -388,6 +389,70 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       if (![negotiation.owner_id, negotiation.interested_id].includes(req.user.id)) return res.status(403).json({ error: 'Payment access denied' });
       const payment = await db.one('SELECT * FROM payments WHERE negotiation_id=$1 ORDER BY created_at DESC LIMIT 1', [negotiation.id]);
       return res.json({ payment: payment ? paymentView(payment) : null });
+    } catch (error) { return next(error); }
+  });
+  const collectionView = async (row, includeQr = true) => {
+    const point = row.collection_point_id ? await db.one('SELECT id,name,location,latitude,longitude FROM collection_points WHERE id=$1', [row.collection_point_id]) : null;
+    return {
+      id: row.id, negotiationId: row.negotiation_id, mode: row.mode, scheduledFor: row.scheduled_for,
+      address: row.address || '', collectionPoint: point ? { id: point.id, name: point.name, location: point.location, latitude: point.latitude, longitude: point.longitude } : null,
+      status: row.status, confirmedAt: row.confirmed_at || null, createdAt: row.created_at, updatedAt: row.updated_at,
+      ...(includeQr ? { qrCodeDataUrl: row.qr_code_data_url } : {})
+    };
+  };
+  app.get('/api/negotiations/:id/collection', authenticate, async (req, res, next) => {
+    try {
+      const negotiation = await db.one('SELECT * FROM negotiations WHERE id=$1', [req.params.id]);
+      if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
+      if (![negotiation.owner_id, negotiation.interested_id].includes(req.user.id)) return res.status(403).json({ error: 'Collection access denied' });
+      const delivery = await db.one('SELECT * FROM collection_deliveries WHERE negotiation_id=$1', [negotiation.id]);
+      return res.json({ collection: delivery ? await collectionView(delivery) : null });
+    } catch (error) { return next(error); }
+  });
+  app.post('/api/negotiations/:id/collection', authenticate, async (req, res, next) => {
+    try {
+      const negotiation = await db.one('SELECT * FROM negotiations WHERE id=$1', [req.params.id]);
+      const mode = String(req.body?.mode || '').trim();
+      const scheduledFor = new Date(String(req.body?.scheduledFor || ''));
+      const address = String(req.body?.address || '').trim().slice(0, 240);
+      const pointId = String(req.body?.collectionPointId || '').trim() || null;
+      if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
+      if (![negotiation.owner_id, negotiation.interested_id].includes(req.user.id)) return res.status(403).json({ error: 'Collection access denied' });
+      if (negotiation.status !== 'reserved') return res.status(400).json({ error: 'Reserve the item before scheduling collection' });
+      if (await db.one('SELECT id FROM collection_deliveries WHERE negotiation_id=$1', [negotiation.id])) return res.status(409).json({ error: 'This collection is already scheduled' });
+      if (!['pickup', 'dropoff'].includes(mode) || Number.isNaN(scheduledFor.getTime()) || scheduledFor.getTime() < Date.now() + 1800000 || scheduledFor.getTime() > Date.now() + 7776000000) return res.status(400).json({ error: 'Choose a valid collection mode and date' });
+      if (mode === 'pickup' && !address) return res.status(400).json({ error: 'Provide the pickup address' });
+      if (mode === 'dropoff' && (!pointId || !(await db.one('SELECT id FROM collection_points WHERE id=$1', [pointId])))) return res.status(400).json({ error: 'Choose a valid collection point' });
+      const token = crypto.randomBytes(24).toString('base64url');
+      const now = new Date().toISOString();
+      const delivery = { id: id('collection'), negotiation_id: negotiation.id, mode, scheduled_for: scheduledFor.toISOString(), address, collection_point_id: pointId, status: 'scheduled', confirmation_token_hash: sha256(token), confirmation_token_expires_at: new Date(scheduledFor.getTime() + 86400000).toISOString(), qr_code_data_url: '', confirmed_at: null, created_at: now, updated_at: now };
+      delivery.qr_code_data_url = await QRCode.toDataURL(`reusa+://collection/${delivery.id}?token=${encodeURIComponent(token)}`, { errorCorrectionLevel: 'M', margin: 2, width: 280 });
+      await db.query('INSERT INTO collection_deliveries(id,negotiation_id,mode,scheduled_for,address,collection_point_id,status,confirmation_token_hash,confirmation_token_expires_at,qr_code_data_url,confirmed_at,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)', Object.values(delivery));
+      return res.status(201).json({ collection: await collectionView(delivery) });
+    } catch (error) { return next(error); }
+  });
+  app.post('/api/collection-deliveries/:id/confirm', authenticate, async (req, res, next) => {
+    try {
+      const delivery = await db.one('SELECT d.*,n.owner_id,n.interested_id FROM collection_deliveries d JOIN negotiations n ON n.id=d.negotiation_id WHERE d.id=$1', [req.params.id]);
+      if (!delivery) return res.status(404).json({ error: 'Collection not found' });
+      if (![delivery.owner_id, delivery.interested_id].includes(req.user.id)) return res.status(403).json({ error: 'Collection access denied' });
+      if (new Date(delivery.confirmation_token_expires_at).getTime() < Date.now()) return res.status(410).json({ error: 'This QR Code has expired' });
+      if (!req.body?.token || sha256(String(req.body.token)) !== delivery.confirmation_token_hash) return res.status(400).json({ error: 'Invalid QR Code' });
+      if (!['scheduled', 'confirmed'].includes(delivery.status)) return res.status(409).json({ error: 'This collection cannot be confirmed in its current status' });
+      const updated = await db.one("UPDATE collection_deliveries SET status='confirmed',confirmed_at=COALESCE(confirmed_at,now()),updated_at=now() WHERE id=$1 RETURNING *", [delivery.id]);
+      return res.json({ collection: await collectionView(updated) });
+    } catch (error) { return next(error); }
+  });
+  app.patch('/api/collection-deliveries/:id/status', authenticate, async (req, res, next) => {
+    try {
+      const delivery = await db.one('SELECT d.*,n.owner_id,n.interested_id FROM collection_deliveries d JOIN negotiations n ON n.id=d.negotiation_id WHERE d.id=$1', [req.params.id]);
+      const nextStatus = String(req.body?.status || '').trim();
+      const transitions = { scheduled: ['cancelled'], confirmed: ['in_transit', 'cancelled'], in_transit: ['completed'], completed: [] };
+      if (!delivery) return res.status(404).json({ error: 'Collection not found' });
+      if (![delivery.owner_id, delivery.interested_id].includes(req.user.id)) return res.status(403).json({ error: 'Collection access denied' });
+      if (!transitions[delivery.status]?.includes(nextStatus)) return res.status(400).json({ error: 'Invalid collection status transition' });
+      const updated = await db.one('UPDATE collection_deliveries SET status=$1,updated_at=now() WHERE id=$2 RETURNING *', [nextStatus, delivery.id]);
+      return res.json({ collection: await collectionView(updated) });
     } catch (error) { return next(error); }
   });
   app.get('/api/profile/payment-items', authenticate, async (req, res, next) => {
