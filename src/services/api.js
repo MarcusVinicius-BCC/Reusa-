@@ -70,6 +70,7 @@ export const api = {
   createProposal: (negotiationId, body) => request(`/negotiations/${negotiationId}/proposal`, { method: 'POST', body: JSON.stringify(body) }),
   decideProposal: (negotiationId, decision) => request(`/negotiations/${negotiationId}/proposal`, { method: 'PATCH', body: JSON.stringify({ decision }) }),
   payment: (negotiationId) => request(`/negotiations/${negotiationId}/payment`),
+  paymentItems: () => request('/profile/payment-items'),
   createPayment: (negotiationId, body) => request(`/negotiations/${negotiationId}/payment`, { method: 'POST', body: JSON.stringify(body) }),
   favorites: () => request('/favorites'),
   toggleFavorite: (id) => request(`/posts/${id}/favorite`, { method: 'POST' }),

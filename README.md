@@ -30,7 +30,7 @@ inspirações de reaproveitamento, notificações, indicadores de impacto e uma
 - [Serviços distribuídos](#serviços-distribuídos)
 - [APIs externas](#apis-externas)
 - [API própria](#api-própria)
-- [Pagamentos simulados](#pagamentos-simulados)
+- [Pagamentos com Mercado Pago](#pagamentos-com-mercado-pago)
 - [Testes e validação](#testes-e-validação)
 - [Docker](#docker)
 - [Deploy na Railway](#deploy-na-railway)
@@ -84,7 +84,7 @@ RabbitMQ, o serviço de notificações e o serviço de impacto.
 - Propostas de negociação;
 - Reserva de itens;
 - Conclusão como doação, troca ou venda;
-- Pagamento local simulado;
+- Checkout de pagamento via Mercado Pago;
 - Avaliações entre participantes.
 
 ### Mapa e impacto

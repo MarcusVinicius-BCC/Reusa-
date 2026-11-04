@@ -2141,6 +2141,15 @@ async function start() {
       paidAt: payment.paid_at
     } : null });
   });
+  app.get('/api/profile/payment-items', authMiddleware, (req, res) => {
+    const rows = all(`SELECT n.id AS negotiation_id,n.status,n.proposal_status,n.proposal_amount_cents,n.proposal_method,n.proposal_created_at,p.id AS post_id,p.title,p.image_url,p.location
+      FROM negotiations n JOIN posts p ON p.id=n.post_id
+      WHERE n.interested_id = ? AND n.proposal_status IN ('pending','accepted') AND n.status IN ('interested','reserved')
+      ORDER BY n.updated_at DESC`, [req.user.id]);
+    const payments = all("SELECT negotiation_id,status,checkout_url FROM payments WHERE payer_id = ? AND status IN ('processing','failed') ORDER BY created_at DESC", [req.user.id]);
+    const paymentByNegotiation = new Map(payments.map((payment) => [payment.negotiation_id, payment]));
+    return res.json({ items: rows.map((row) => ({ negotiationId: row.negotiation_id, postId: row.post_id, title: row.title, imageUrl: row.image_url, location: row.location, negotiationStatus: row.status, proposalStatus: row.proposal_status, amountCents: row.proposal_amount_cents, method: row.proposal_method, createdAt: row.proposal_created_at, payment: paymentByNegotiation.get(row.negotiation_id) || null })) });
+  });
 
   app.post('/api/negotiations/:id/payment', authMiddleware, async (req, res) => {
     const negotiation = get('SELECT * FROM negotiations WHERE id = ?', [req.params.id]);

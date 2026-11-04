@@ -331,8 +331,8 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       const post = await db.one('SELECT id,author_id FROM posts WHERE id=$1', [req.params.id]);
       if (!post) return res.status(404).json({ error: 'Post not found' });
       if (post.author_id !== req.user.id) return res.status(403).json({ error: 'Only the owner can view interested users' });
-      const rows = await db.many('SELECT n.id,n.status,n.created_at,n.thread_id,u.id AS user_id,u.name,u.city,u.avatar FROM negotiations n JOIN users u ON u.id=n.interested_id WHERE n.post_id=$1 ORDER BY n.created_at DESC', [post.id]);
-      return res.json({ negotiations: rows.map((row) => ({ id: row.id, status: row.status, createdAt: row.created_at, threadId: row.thread_id, user: { id: row.user_id, name: row.name, city: row.city, avatar: row.avatar || '' } })) });
+      const rows = await db.many('SELECT n.id,n.status,n.proposal_status,n.proposal_amount_cents,n.proposal_method,n.proposal_created_at,n.created_at,n.thread_id,u.id AS user_id,u.name,u.city,u.avatar FROM negotiations n JOIN users u ON u.id=n.interested_id WHERE n.post_id=$1 ORDER BY n.created_at DESC', [post.id]);
+      return res.json({ negotiations: rows.map((row) => ({ id: row.id, status: row.status, proposalStatus: row.proposal_status || 'none', proposalAmountCents: row.proposal_amount_cents || null, proposalMethod: row.proposal_method || null, proposalCreatedAt: row.proposal_created_at || null, createdAt: row.created_at, threadId: row.thread_id, user: { id: row.user_id, name: row.name, city: row.city, avatar: row.avatar || '' } })) });
     } catch (error) { return next(error); }
   });
   app.get('/api/posts/:id/negotiation', authenticate, async (req, res, next) => {
@@ -354,12 +354,17 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       if (negotiation.interested_id !== req.user.id) return res.status(403).json({ error: 'Only the interested user can send this proposal' });
       if (negotiation.proposal_status && negotiation.proposal_status !== 'none') return res.status(409).json({ error: 'Você já enviou uma oferta para este anúncio.' });
       if (negotiation.status !== 'interested') return res.status(400).json({ error: 'This negotiation is no longer accepting proposals' });
-      const post = await db.one('SELECT goal FROM posts WHERE id=$1', [negotiation.post_id]);
+      const post = await db.one('SELECT title,goal FROM posts WHERE id=$1', [negotiation.post_id]);
       if (!post || post.goal !== SALE_GOAL) return res.status(400).json({ error: 'Money offers are only available for items marked for sale' });
       if (!Number.isSafeInteger(amountCents) || amountCents < 100 || amountCents > 100000000) return res.status(400).json({ error: 'Amount must be between R$ 1,00 and R$ 1.000.000,00' });
       if (!['pix', 'card', 'boleto'].includes(method)) return res.status(400).json({ error: 'Use pix, card or boleto' });
       const createdAt = new Date().toISOString();
-      const updated = await db.one('UPDATE negotiations SET proposal_status=$1,proposal_amount_cents=$2,proposal_method=$3,proposal_created_at=$4,updated_at=$4 WHERE id=$5 RETURNING *', ['pending', amountCents, method, createdAt, negotiation.id]);
+      const updated = await db.transaction(async (client) => {
+        const result = await client.query('UPDATE negotiations SET proposal_status=$1,proposal_amount_cents=$2,proposal_method=$3,proposal_created_at=$4,updated_at=$4 WHERE id=$5 RETURNING *', ['pending', amountCents, method, createdAt, negotiation.id]);
+        await emit(client, 'negotiation.proposal_created', { negotiationId: negotiation.id, postId: negotiation.post_id, postTitle: post.title || 'anúncio', ownerId: negotiation.owner_id, interestedId: negotiation.interested_id, amountCents, method }, req.correlationId);
+        return result.rows[0];
+      });
+      queueMicrotask(() => publisher?.flush?.());
       return res.status(201).json({ proposal: { negotiationId: updated.id, status: updated.proposal_status, amountCents: updated.proposal_amount_cents, method: updated.proposal_method, createdAt: updated.proposal_created_at } });
     } catch (error) { return next(error); }
   });
@@ -382,6 +387,17 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       if (![negotiation.owner_id, negotiation.interested_id].includes(req.user.id)) return res.status(403).json({ error: 'Payment access denied' });
       const payment = await db.one('SELECT * FROM payments WHERE negotiation_id=$1 ORDER BY created_at DESC LIMIT 1', [negotiation.id]);
       return res.json({ payment: payment ? paymentView(payment) : null });
+    } catch (error) { return next(error); }
+  });
+  app.get('/api/profile/payment-items', authenticate, async (req, res, next) => {
+    try {
+      const rows = await db.many(`SELECT n.id AS negotiation_id,n.status,n.proposal_status,n.proposal_amount_cents,n.proposal_method,n.proposal_created_at,p.id AS post_id,p.title,p.image_url,p.location
+        FROM negotiations n JOIN posts p ON p.id=n.post_id
+        WHERE n.interested_id=$1 AND n.proposal_status IN ('pending','accepted') AND n.status IN ('interested','reserved')
+        ORDER BY n.updated_at DESC`, [req.user.id]);
+      const payments = await db.many(`SELECT negotiation_id,status,checkout_url FROM payments WHERE payer_id=$1 AND status IN ('processing','failed') ORDER BY created_at DESC`, [req.user.id]);
+      const paymentByNegotiation = new Map(payments.map((payment) => [payment.negotiation_id, payment]));
+      return res.json({ items: rows.map((row) => ({ negotiationId: row.negotiation_id, postId: row.post_id, title: row.title, imageUrl: row.image_url, location: row.location, negotiationStatus: row.status, proposalStatus: row.proposal_status, amountCents: row.proposal_amount_cents, method: row.proposal_method, createdAt: row.proposal_created_at, payment: paymentByNegotiation.get(row.negotiation_id) || null })) });
     } catch (error) { return next(error); }
   });
   app.post('/api/negotiations/:id/payment', authenticate, async (req, res, next) => {

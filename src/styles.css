@@ -1309,6 +1309,18 @@ button, input, select, textarea { max-width: 100%; }
 .interested-list article, .detail-comment { display: flex; align-items: center; gap: 10px; padding: 10px 0; border-top: 1px solid var(--surface-high); }
 .interested-list article > div, .detail-comment > div { min-width: 0; flex: 1; }
 .interested-list small { display: block; color: var(--text-variant); }
+.interested-avatar { display: grid; width: 40px; height: 40px; flex: 0 0 auto; place-items: center; border-radius: 50%; object-fit: cover; }
+.reserve-btn { display: inline-flex; align-items: center; gap: 6px; min-height: 38px; padding: 8px 13px; border: 1px solid color-mix(in srgb, var(--primary) 28%, var(--outline)); border-radius: 12px; color: var(--primary); background: var(--surface-lowest); font: 700 12px/1.1 inherit; cursor: pointer; transition: .2s ease; }
+.reserve-btn:hover:not(:disabled) { color: white; background: var(--primary); transform: translateY(-1px); }
+.reserve-btn:disabled, .reserve-btn-active { color: #17653f; border-color: #9ac9aa; background: #e8f7ed; cursor: default; }
+.reserve-btn .material-symbols-outlined { font-size: 18px; }
+.payment-items-list { display: grid; gap: 10px; }
+.payment-item { display: flex; align-items: center; gap: 12px; padding: 14px; border: 1px solid var(--surface-high); border-radius: 15px; background: var(--surface-lowest); }
+.payment-item > div { min-width: 0; flex: 1; }
+.payment-item strong, .payment-item small { display: block; }
+.payment-item small { margin-top: 3px; color: var(--text-variant); font-size: 12px; }
+.payment-item-icon { display: grid; width: 38px; height: 38px; place-items: center; border-radius: 12px; color: var(--primary); background: var(--secondary-container); }
+.settings-panel-icon.payments { color: #17653f; background: #e8f7ed; }
 .detail-comment .avatar-placeholder { display: grid; width: 34px; height: 34px; flex: 0 0 auto; place-items: center; border-radius: 50%; font-size: 18px; }
 .detail-comment p { margin: 3px 0 0; color: var(--text-variant); }
 .detail-comments .comment-form { margin-top: 14px; }

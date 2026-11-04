@@ -20,6 +20,7 @@ function notice(event) {
   const data = event.data;
   const mapping = {
     'negotiation.reserved': [data.interestedId, 'negotiation', 'Item reservado para você', `Você foi selecionado para ${data.postTitle}.`],
+    'negotiation.proposal_created': [data.ownerId, 'negotiation', 'Nova oferta recebida', `Você recebeu uma oferta de R$ ${(Number(data.amountCents || 0) / 100).toFixed(2).replace('.', ',')} para ${data.postTitle}.`],
     'negotiation.completed': [data.interestedId, 'negotiation', 'Negociação concluída', `A negociação de ${data.postTitle} foi concluída.`],
     'negotiation.interested': [data.ownerId, 'interest', 'Novo interessado', `${data.interestedName || 'Uma pessoa'} demonstrou interesse em ${data.postTitle}.`],
     'message.sent': [data.recipientId, 'message', 'Nova mensagem', `${data.senderName || 'Uma pessoa'} enviou uma mensagem.`],
