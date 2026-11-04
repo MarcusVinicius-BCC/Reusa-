@@ -17,18 +17,27 @@ function createObjectStorage({ bucket, endpoint, publicBaseUrl = endpoint, regio
         if (error?.$metadata?.httpStatusCode !== 404 && error?.name !== 'NotFound' && error?.name !== 'NoSuchBucket') throw error;
         await client.send(new CreateBucketCommand({ Bucket: bucket }));
       }
-      await client.send(new PutBucketPolicyCommand({
-        Bucket: bucket,
-        Policy: JSON.stringify({
-          Version: '2012-10-17',
-          Statement: [{
-            Effect: 'Allow',
-            Principal: '*',
-            Action: ['s3:GetObject'],
-            Resource: [`arn:aws:s3:::${bucket}/*`]
-          }]
-        })
-      }));
+      try {
+        await client.send(new PutBucketPolicyCommand({
+          Bucket: bucket,
+          Policy: JSON.stringify({
+            Version: '2012-10-17',
+            Statement: [{
+              Effect: 'Allow',
+              Principal: '*',
+              Action: ['s3:GetObject'],
+              Resource: [`arn:aws:s3:::${bucket}/*`]
+            }]
+          })
+        }));
+      } catch (error) {
+        const statusCode = error?.$metadata?.httpStatusCode ?? error?.statusCode;
+        const isNotImplemented = statusCode === 501
+          || error?.name === 'NotImplemented'
+          || error?.Code === 'NotImplemented';
+        if (!isNotImplemented) throw error;
+        console.warn('[object-storage] bucket policy is not supported by this provider; continuing without it');
+      }
     },
     async put({ key, body, contentType }) {
       await client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: contentType }));
