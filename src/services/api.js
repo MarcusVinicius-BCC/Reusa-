@@ -71,6 +71,7 @@ export const api = {
   decideProposal: (negotiationId, decision) => request(`/negotiations/${negotiationId}/proposal`, { method: 'PATCH', body: JSON.stringify({ decision }) }),
   payment: (negotiationId) => request(`/negotiations/${negotiationId}/payment`),
   paymentItems: () => request('/profile/payment-items'),
+  mercadoPagoConnect: () => request('/payments/mercadopago/connect?format=json&return_to=/configuracoes'),
   createPayment: (negotiationId, body) => request(`/negotiations/${negotiationId}/payment`, { method: 'POST', body: JSON.stringify(body) }),
   favorites: () => request('/favorites'),
   toggleFavorite: (id) => request(`/posts/${id}/favorite`, { method: 'POST' }),

@@ -1716,7 +1716,9 @@ async function start() {
     const state = jwt.sign({ purpose: 'mercado-pago-seller-oauth', sub: req.user.id, returnTo }, JWT_SECRET, { expiresIn: '10m' });
     try {
       const redirectUri = `${appOrigin(req)}/api/payments/mercadopago/callback`;
-      return res.redirect(mercadoPago.authorizationUrl(state, redirectUri));
+      const authorizationUrl = mercadoPago.authorizationUrl(state, redirectUri);
+      if (req.query.format === 'json') return res.json({ authorizationUrl });
+      return res.redirect(authorizationUrl);
     } catch (error) {
       return res.status(error.status || 503).json({ error: 'Mercado Pago seller connection is not configured' });
     }
