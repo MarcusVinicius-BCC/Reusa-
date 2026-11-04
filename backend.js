@@ -1820,7 +1820,7 @@ async function start() {
     const normalizedCnpj = String(cnpj || '').replace(/\D/g, '');
 
     if (!normalizedName || !normalizedEmail || !normalizedPassword || !normalizedCity) {
-      return res.status(400).json({ error: 'Missing required fields' });
+      return res.status(400).json({ error: 'Informe nome, e-mail, senha e cidade para criar a conta.' });
     }
 
     if (!['person', 'business'].includes(normalizedAccountType)) {
@@ -1836,11 +1836,11 @@ async function start() {
     }
 
     if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail)) {
-      return res.status(400).json({ error: 'Invalid email address' });
+      return res.status(400).json({ error: 'Informe um e-mail válido, como nome@gmail.com, nome@outlook.com ou outro domínio existente.' });
     }
 
     if (normalizedPassword.length < 8) {
-      return res.status(400).json({ error: 'Password must contain at least 8 characters' });
+      return res.status(400).json({ error: 'A senha precisa ter pelo menos 8 caracteres.' });
     }
 
     const existingUser = get('SELECT id FROM users WHERE lower(email) = lower(?)', [normalizedEmail]);

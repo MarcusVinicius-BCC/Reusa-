@@ -183,9 +183,7 @@ e o estado global é mantido em [`src/state/store.js`](src/state/store.js).
 │   └── persistence.js          # Persistência dos serviços
 ├── migrations/                 # Migrações e índices SQL
 ├── scripts/                    # Migração e verificação do banco
-├── test/                       # Testes automatizados
-├── data/                       # SQLite e uploads locais
-└── uploads/                    # Diretório de uploads servido localmente
+└── test/                       # Testes automatizados
 ```
 
 ## Pré-requisitos
@@ -496,7 +494,44 @@ Resposta esperada:
 }
 ```
 
-## Docker
+## Entrega em um único contêiner
+
+A imagem padrão funciona sem PostgreSQL, Redis, RabbitMQ ou credenciais de
+serviços externos. Ela usa SQLite e armazenamento local para permitir que a
+avaliação comece imediatamente. O Cloudflare R2 e o PostgreSQL continuam
+disponíveis quando suas variáveis são fornecidas no ambiente.
+
+Para criar e executar:
+
+```bash
+docker build -t reusa-plus .
+docker run --rm -p 3000:3000 -e JWT_SECRET=chave-local-de-avaliacao reusa-plus
+```
+
+Abra <http://localhost:3000> e valide <http://localhost:3000/api/health>.
+Para manter o SQLite e os uploads entre execuções, use um volume:
+
+```bash
+docker run --rm -p 3000:3000 -e JWT_SECRET=chave-local-de-avaliacao \
+  -v reusa-plus-data:/app/data reusa-plus
+```
+
+Para exportar uma imagem para envio pelo SIGAA:
+
+```bash
+docker save reusa-plus -o reusa-plus.tar
+```
+
+No computador do professor:
+
+```bash
+docker load -i reusa-plus.tar
+docker run --rm -p 3000:3000 -e JWT_SECRET=chave-local-de-avaliacao reusa-plus
+```
+
+Não inclua chaves do Cloudflare, PostgreSQL ou outros serviços na imagem.
+
+## Ambiente completo com Docker Compose
 
 O ambiente completo sobe PostgreSQL, RabbitMQ, Redis, core, notificações e
 impacto:
