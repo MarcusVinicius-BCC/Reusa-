@@ -1042,6 +1042,7 @@ function CreatePostScreen({ onBack, onSuccess }) {
   const setPostForm = useAppStore((state) => state.setPostForm);
   const session = useAppStore((state) => state.session);
   const [images, setImages] = useState([]);
+  const [publishing, setPublishing] = useState(false);
   const imagePreviews = useMemo(() => images.map((image) => URL.createObjectURL(image)), [images]);
 
   useEffect(() => () => imagePreviews.forEach((preview) => URL.revokeObjectURL(preview)), [imagePreviews]);
@@ -1056,6 +1057,7 @@ function CreatePostScreen({ onBack, onSuccess }) {
 
   async function submit(event) {
     event.preventDefault();
+    if (publishing) return;
     if (!postForm.title?.trim()) {
       alert('Informe o título do item.');
       return;
@@ -1096,6 +1098,7 @@ function CreatePostScreen({ onBack, onSuccess }) {
       alert('Entre na sua conta para publicar um anúncio.');
       return;
     }
+    setPublishing(true);
     try {
       const { customCategory: ignoredCustomCategory, category: ignoredCategory, ...postPayload } = postForm;
       await createPost({ ...postPayload, categoryId, category, images });
@@ -1104,6 +1107,7 @@ function CreatePostScreen({ onBack, onSuccess }) {
       onSuccess();
     } catch (error) {
       alert(error.message);
+      setPublishing(false);
     }
   }
 
@@ -1163,7 +1167,7 @@ function CreatePostScreen({ onBack, onSuccess }) {
           </section>
 
           <aside className="publish-tip"><span className="material-symbols-outlined">tips_and_updates</span><span><strong>Dica REUSA+</strong> Fotos claras e uma descrição sincera aumentam as chances de um novo encontro.</span></aside>
-          <div className="publish-submit"><button type="submit" className="primary-btn full">Publicar anúncio <span className="material-symbols-outlined">arrow_forward</span></button><small>Você poderá conversar com interessados depois da publicação.</small></div>
+          <div className="publish-submit"><button type="submit" className="primary-btn full" disabled={publishing} aria-busy={publishing}><span className="material-symbols-outlined">{publishing ? 'progress_activity' : 'arrow_forward'}</span>{publishing ? 'Publicando anúncio...' : 'Publicar anúncio'}</button><small>{publishing ? 'Aguarde enquanto salvamos seu anúncio.' : 'Você poderá conversar com interessados depois da publicação.'}</small></div>
         </form>
       </main>
     </div>
