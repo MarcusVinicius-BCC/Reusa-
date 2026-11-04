@@ -32,6 +32,7 @@ const ADMIN_EMAILS = new Set(
 );
 const SQLITE_ADMIN_EMAILS = ADMIN_EMAILS.size ? ADMIN_EMAILS : new Set(['mariana@reusa.com']);
 const APP_BASE_URL = String(process.env.APP_BASE_URL || '').trim().replace(/\/$/, '');
+const MERCADO_PAGO_REDIRECT_URI = String(process.env.MERCADOPAGO_REDIRECT_URI || '').trim();
 const MERCADO_PAGO_CLIENT_ID = String(process.env.MERCADOPAGO_CLIENT_ID || '').trim();
 const NOTIFICATION_SERVICE_URL = String(process.env.NOTIFICATION_SERVICE_URL || '').trim().replace(/\/$/, '');
 const IMPACT_SERVICE_URL = String(process.env.IMPACT_SERVICE_URL || '').trim().replace(/\/$/, '');
@@ -274,6 +275,10 @@ function appOrigin(req) {
     }
   }
   return `${req.protocol}://${req.get('host')}`;
+}
+
+function mercadoPagoRedirectUri(req) {
+  return MERCADO_PAGO_REDIRECT_URI || `${appOrigin(req)}/api/payments/mercadopago/callback`;
 }
 
 function googleRedirectUri(req) {
@@ -1715,7 +1720,7 @@ async function start() {
     const returnTo = safeReturnTo(req.query.return_to || '/configuracoes');
     const state = jwt.sign({ purpose: 'mercado-pago-seller-oauth', sub: req.user.id, returnTo }, JWT_SECRET, { expiresIn: '10m' });
     try {
-      const redirectUri = `${appOrigin(req)}/api/payments/mercadopago/callback`;
+      const redirectUri = mercadoPagoRedirectUri(req);
       const authorizationUrl = mercadoPago.authorizationUrl(state, redirectUri);
       if (req.query.format === 'json') return res.json({ authorizationUrl });
       return res.redirect(authorizationUrl);
@@ -1731,7 +1736,7 @@ async function start() {
       if (state.purpose !== 'mercado-pago-seller-oauth') throw new Error('Invalid OAuth state');
       returnTo = safeReturnTo(state.returnTo);
       if (req.query.error) throw new Error('Mercado Pago authorization was cancelled');
-      const redirectUri = `${appOrigin(req)}/api/payments/mercadopago/callback`;
+      const redirectUri = mercadoPagoRedirectUri(req);
       const token = await mercadoPago.exchangeCode(String(req.query.code || ''), redirectUri);
       const values = [token.user_id ? String(token.user_id) : null, mercadoPago.protectToken(token.access_token), token.refresh_token ? mercadoPago.protectToken(token.refresh_token) : null, new Date(Date.now() + Number(token.expires_in || 0) * 1000).toISOString(), state.sub];
       if (postgresEnabled()) {

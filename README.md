@@ -438,6 +438,8 @@ MERCADOPAGO_CLIENT_ID=...
 MERCADOPAGO_CLIENT_SECRET=...
 MERCADOPAGO_WEBHOOK_SECRET=...
 APP_BASE_URL=https://seu-dominio-publico.example
+# Opcional, mas recomendado quando a URL pública tiver proxy:
+MERCADOPAGO_REDIRECT_URI=https://seu-dominio-publico.example/api/payments/mercadopago/callback
 ```
 
 O `APP_BASE_URL` precisa ser público e usar HTTPS para que o Mercado Pago consiga
@@ -450,6 +452,11 @@ Vendedores devem conectar suas próprias contas na seção **Configurações >
 Ofertas e pagamentos > Conectar conta**. O sistema usa OAuth e armazena os
 tokens protegidos; sem essa conexão, uma venda não pode criar checkout para
 repassar o valor ao vendedor.
+
+No painel da aplicação Mercado Pago, cadastre exatamente a mesma URL usada em
+`MERCADOPAGO_REDIRECT_URI` (sem barra final). A aplicação também precisa estar
+ativa/pronta para OAuth e ter o produto de marketplace habilitado; essas etapas
+são obrigatórias antes de autorizar uma conta de vendedor.
 
 ```text
 GET  /api/negotiations/:id/payment
