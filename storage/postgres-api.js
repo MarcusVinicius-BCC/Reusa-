@@ -3,6 +3,7 @@ const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const { isLikelyResidentialAddress } = require('./location-validation');
 const { buildCollectionPointAddress, geocodeCollectionPoint } = require('./collection-point-geocoding');
+const mercadoPago = require('../services/mercado-pago');
 
 const DONATION_GOAL = 'Doa\u00e7\u00e3o';
 const SALE_GOAL = 'Venda';
@@ -87,6 +88,7 @@ function paymentView(payment) {
     method: payment.method,
     status: payment.status,
     providerReference: payment.provider_reference,
+    checkoutUrl: payment.checkout_url,
     failureCode: payment.failure_code,
     createdAt: payment.created_at,
     updatedAt: payment.updated_at,
@@ -389,14 +391,23 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       const currency = String(req.body?.currency || 'BRL').trim().toUpperCase();
       const method = String(req.body?.method || '').trim().toLowerCase();
       const idempotencyKey = String(req.body?.idempotencyKey || '').trim();
-      const simulateFailure = req.body?.simulateFailure === true;
       if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
       if (negotiation.interested_id !== req.user.id) return res.status(403).json({ error: 'Only the interested user can make this payment' });
       if (negotiation.status !== 'reserved') return res.status(400).json({ error: 'The negotiation must be reserved before payment' });
-      const post = await db.one('SELECT goal FROM posts WHERE id=$1', [negotiation.post_id]);
+      const post = await db.one('SELECT title,goal FROM posts WHERE id=$1', [negotiation.post_id]);
       if (!post || post.goal !== SALE_GOAL) return res.status(400).json({ error: 'Payments are only available for items marked for sale' });
       if (!Number.isSafeInteger(amountCents) || amountCents < 100 || amountCents > 100000000 || currency !== 'BRL' || !['pix', 'card', 'boleto'].includes(method)) return res.status(400).json({ error: 'Use a valid BRL amount and pix, card or boleto' });
       if (!/^[A-Za-z0-9._:-]{16,128}$/.test(idempotencyKey)) return res.status(400).json({ error: 'A valid idempotency key is required' });
+      const paymentId = id('payment');
+      let provider;
+      if (mercadoPago.isConfigured()) {
+        const payer = await db.one('SELECT email FROM users WHERE id=$1', [negotiation.interested_id]);
+        provider = await mercadoPago.createPreference({ paymentId, postId: negotiation.post_id, title: post.title, amountCents, payerEmail: payer?.email, method });
+      } else if (process.env.NODE_ENV === 'test') {
+        provider = { id: `test_${crypto.randomUUID()}`, checkoutUrl: null };
+      } else {
+        return res.status(503).json({ error: 'Mercado Pago is not configured. Set MERCADOPAGO_ACCESS_TOKEN and APP_BASE_URL.' });
+      }
       const result = await db.transaction(async (client) => {
         const lockedNegotiation = (await client.query('SELECT * FROM negotiations WHERE id=$1 FOR UPDATE', [negotiation.id])).rows[0];
         const existing = (await client.query('SELECT * FROM payments WHERE negotiation_id=$1 AND idempotency_key=$2', [lockedNegotiation.id, idempotencyKey])).rows[0];
@@ -414,13 +425,37 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
           throw Object.assign(new Error('This negotiation already has a successful payment'), { status: 409 });
         }
         const now = new Date().toISOString();
-        const payment = { id: id('payment'), negotiation_id: lockedNegotiation.id, payer_id: lockedNegotiation.interested_id, payee_id: lockedNegotiation.owner_id, amount_cents: amountCents, currency, method, status: simulateFailure ? 'failed' : 'succeeded', idempotency_key: idempotencyKey, provider_reference: `sim_${crypto.randomUUID()}`, failure_code: simulateFailure ? 'SIMULATED_PROVIDER_DECLINE' : null, created_at: now, updated_at: now, paid_at: simulateFailure ? null : now, refunded_at: null };
-        await client.query('INSERT INTO payments (id,negotiation_id,payer_id,payee_id,amount_cents,currency,method,status,idempotency_key,provider_reference,failure_code,created_at,updated_at,paid_at,refunded_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)', Object.values(payment));
-        await client.query('INSERT INTO payment_audit_events (id,payment_id,from_status,to_status,reason,correlation_id,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)', [id('payment-audit'), payment.id, null, payment.status, simulateFailure ? 'simulated_provider_decline' : 'simulated_provider_approved', req.correlationId, now]);
+        const payment = { id: paymentId, negotiation_id: lockedNegotiation.id, payer_id: lockedNegotiation.interested_id, payee_id: lockedNegotiation.owner_id, amount_cents: amountCents, currency, method, status: mercadoPago.isConfigured() ? 'processing' : 'succeeded', idempotency_key: idempotencyKey, provider_reference: provider.id, checkout_url: provider.checkoutUrl, failure_code: null, created_at: now, updated_at: now, paid_at: mercadoPago.isConfigured() ? null : now, refunded_at: null };
+        await client.query('INSERT INTO payments (id,negotiation_id,payer_id,payee_id,amount_cents,currency,method,status,idempotency_key,provider_reference,checkout_url,failure_code,created_at,updated_at,paid_at,refunded_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)', Object.values(payment));
+        await client.query('INSERT INTO payment_audit_events (id,payment_id,from_status,to_status,reason,correlation_id,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)', [id('payment-audit'), payment.id, null, payment.status, mercadoPago.isConfigured() ? 'mercado_pago_checkout_created' : 'test_payment_approved', req.correlationId, now]);
         return { payment, idempotentReplay: false };
       });
       return res.status(result.idempotentReplay ? 200 : 201).json({ payment: paymentView(result.payment), idempotentReplay: result.idempotentReplay });
     } catch (error) { return next(error); }
+  });
+  app.post('/api/payments/mercadopago/webhook', async (req, res) => {
+    const externalId = req.body?.data?.id || req.body?.id;
+    if (String(req.body?.type || req.body?.topic || '').toLowerCase() !== 'payment' || !externalId) return res.sendStatus(200);
+    if (!mercadoPago.webhookIsValid({ dataId: externalId, requestId: req.get('x-request-id'), signature: req.get('x-signature') })) return res.sendStatus(401);
+    try {
+      const providerPayment = await mercadoPago.payment(externalId);
+      const paymentId = String(providerPayment.external_reference || '');
+      const current = await db.one('SELECT * FROM payments WHERE id=$1', [paymentId]);
+      if (!current) return res.sendStatus(200);
+      const statusMap = { approved: 'succeeded', pending: 'processing', in_process: 'processing', rejected: 'failed', cancelled: 'failed', refunded: 'refunded' };
+      const status = statusMap[providerPayment.status];
+      if (!status || current.status === status) return res.sendStatus(200);
+      const now = new Date().toISOString();
+      const failureCode = status === 'failed' ? String(providerPayment.status_detail || providerPayment.status) : null;
+      await db.transaction(async (client) => {
+        await client.query('UPDATE payments SET status=$1,failure_code=$2,updated_at=$3,paid_at=$4 WHERE id=$5', [status, failureCode, now, status === 'succeeded' ? now : current.paid_at, paymentId]);
+        await client.query('INSERT INTO payment_audit_events(id,payment_id,from_status,to_status,reason,correlation_id,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)', [id('payment-audit'), paymentId, current.status, status, `mercado_pago_${providerPayment.status}`, id('webhook'), now]);
+      });
+      return res.sendStatus(200);
+    } catch (error) {
+      console.error('Mercado Pago webhook failed', error);
+      return res.sendStatus(500);
+    }
   });
   app.patch('/api/posts/:id/status', authenticate, async (req, res, next) => {
     try {

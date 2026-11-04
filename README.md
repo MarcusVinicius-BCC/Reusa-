@@ -424,22 +424,35 @@ GET|POST|PATCH|DELETE /api/admin/*
 Rotas protegidas exigem `Authorization: Bearer <token>`. Rotas administrativas
 exigem, além do token, um usuário com `role=admin`.
 
-## Pagamentos simulados
+## Pagamentos com Mercado Pago
 
-O pagamento atual é um **provedor local simulado**. Ele não movimenta dinheiro
-real e não exige conta em gateway externo.
+O pagamento usa o **Mercado Pago Checkout Pro**. O usuário é redirecionado para
+o checkout oficial, e o status é confirmado por webhook antes de ser considerado
+concluído. A aplicação não recebe nem armazena dados de cartão.
+
+Configure no ambiente do backend:
+
+```text
+MERCADOPAGO_ACCESS_TOKEN=APP_USR-...
+MERCADOPAGO_WEBHOOK_SECRET=...
+APP_BASE_URL=https://seu-dominio-publico.example
+```
+
+O `APP_BASE_URL` precisa ser público e usar HTTPS para que o Mercado Pago consiga
+enviar o webhook em `/api/payments/mercadopago/webhook`. Configure o segredo de
+assinatura exibido no painel do Mercado Pago em `MERCADOPAGO_WEBHOOK_SECRET`.
+Em desenvolvimento,
+use as credenciais de teste do Mercado Pago e um túnel HTTPS público.
 
 ```text
 GET  /api/negotiations/:id/payment
 POST /api/negotiations/:id/payment
+POST /api/payments/mercadopago/webhook
 ```
 
 O fluxo usa valores em centavos, chave de idempotência e métodos `pix`,
-`card` ou `boleto`. A referência gerada possui formato `sim_...`.
-
-Esse mecanismo existe para testar o ciclo de negociação. Para pagamentos reais,
-seria necessário substituir o adaptador por um provedor regulado e implementar
-confirmação por webhook antes de liberar qualquer item ou valor.
+`card` ou `boleto`. O pagamento começa como `processing` e passa para
+`succeeded`, `failed` ou `refunded` conforme a notificação oficial do provedor.
 
 ## Testes e validação
 

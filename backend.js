@@ -15,6 +15,7 @@ const { applyMigrations } = require('./scripts/run-postgres-migrations');
 const { createObjectStorage } = require('./distributed/object-storage');
 const { connectRedis } = require('./distributed/redis-client');
 const { metricsText, requestMetrics } = require('./distributed/observability');
+const mercadoPago = require('./services/mercado-pago');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -865,7 +866,6 @@ function seedDatabase() {
       FOREIGN KEY(author_id) REFERENCES users(id)
     );
   `);
-
   run(`
     CREATE TABLE IF NOT EXISTS threads (
       id TEXT PRIMARY KEY,
@@ -1023,6 +1023,7 @@ function seedDatabase() {
       FOREIGN KEY(payee_id) REFERENCES users(id)
     );
   `);
+  ensureColumn('payments', 'checkout_url', 'TEXT');
 
   run(`
     CREATE TABLE IF NOT EXISTS payment_audit_events (
@@ -2133,6 +2134,7 @@ async function start() {
       method: payment.method,
       status: payment.status,
       providerReference: payment.provider_reference,
+      checkoutUrl: payment.checkout_url,
       failureCode: payment.failure_code,
       createdAt: payment.created_at,
       updatedAt: payment.updated_at,
@@ -2140,13 +2142,12 @@ async function start() {
     } : null });
   });
 
-  app.post('/api/negotiations/:id/payment', authMiddleware, (req, res) => {
+  app.post('/api/negotiations/:id/payment', authMiddleware, async (req, res) => {
     const negotiation = get('SELECT * FROM negotiations WHERE id = ?', [req.params.id]);
     const amountCents = Number(req.body?.amountCents);
     const currency = String(req.body?.currency || 'BRL').trim().toUpperCase();
     const method = String(req.body?.method || '').trim().toLowerCase();
     const idempotencyKey = String(req.body?.idempotencyKey || '').trim();
-    const simulateFailure = req.body?.simulateFailure === true;
     if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
     if (negotiation.interested_id !== req.user.id) return res.status(403).json({ error: 'Only the interested user can make this payment' });
     if (negotiation.status !== 'reserved') return res.status(400).json({ error: 'The negotiation must be reserved before payment' });
@@ -2174,9 +2175,32 @@ async function start() {
     if (get("SELECT id FROM payments WHERE negotiation_id = ? AND status = 'succeeded'", [negotiation.id])) return res.status(409).json({ error: 'This negotiation already has a successful payment' });
 
     const now = new Date().toISOString();
-    const status = simulateFailure ? 'failed' : 'succeeded';
+    const paymentId = uid('payment');
+    let provider;
+    if (mercadoPago.isConfigured()) {
+      try {
+        const post = get('SELECT title FROM posts WHERE id = ?', [negotiation.post_id]);
+        const payer = get('SELECT email FROM users WHERE id = ?', [negotiation.interested_id]);
+        provider = await mercadoPago.createPreference({
+          paymentId,
+          postId: negotiation.post_id,
+          title: post?.title,
+          amountCents,
+          payerEmail: payer?.email,
+          method
+        });
+      } catch (error) {
+        console.error('Mercado Pago preference failed', error);
+        return res.status(error.status && error.status >= 400 && error.status < 500 ? error.status : 502).json({ error: 'Mercado Pago could not create the checkout' });
+      }
+    } else if (process.env.NODE_ENV === 'test') {
+      provider = { id: `test_${crypto.randomUUID()}`, checkoutUrl: null };
+    } else {
+      return res.status(503).json({ error: 'Mercado Pago is not configured. Set MERCADOPAGO_ACCESS_TOKEN and APP_BASE_URL.' });
+    }
+    const status = mercadoPago.isConfigured() ? 'processing' : 'succeeded';
     const payment = {
-      id: uid('payment'),
+      id: paymentId,
       negotiation_id: negotiation.id,
       payer_id: negotiation.interested_id,
       payee_id: negotiation.owner_id,
@@ -2185,17 +2209,18 @@ async function start() {
       method,
       status,
       idempotency_key: idempotencyKey,
-      provider_reference: `sim_${crypto.randomUUID()}`,
-      failure_code: simulateFailure ? 'SIMULATED_PROVIDER_DECLINE' : null,
+      provider_reference: provider.id,
+      checkout_url: provider.checkoutUrl,
+      failure_code: null,
       created_at: now,
       updated_at: now,
-      paid_at: simulateFailure ? null : now,
+      paid_at: mercadoPago.isConfigured() ? null : now,
       refunded_at: null
     };
     try {
       db.exec('BEGIN TRANSACTION');
-      run('INSERT INTO payments (id, negotiation_id, payer_id, payee_id, amount_cents, currency, method, status, idempotency_key, provider_reference, failure_code, created_at, updated_at, paid_at, refunded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', Object.values(payment));
-      run('INSERT INTO payment_audit_events (id, payment_id, from_status, to_status, reason, correlation_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', [uid('payment-audit'), payment.id, null, status, simulateFailure ? 'simulated_provider_decline' : 'simulated_provider_approved', req.correlationId, now]);
+      run('INSERT INTO payments (id, negotiation_id, payer_id, payee_id, amount_cents, currency, method, status, idempotency_key, provider_reference, checkout_url, failure_code, created_at, updated_at, paid_at, refunded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)', Object.values(payment));
+      run('INSERT INTO payment_audit_events (id, payment_id, from_status, to_status, reason, correlation_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', [uid('payment-audit'), payment.id, null, status, mercadoPago.isConfigured() ? 'mercado_pago_checkout_created' : 'test_payment_approved', req.correlationId, now]);
       emitDomainEvent(`payment.${status}`, { paymentId: payment.id, negotiationId: negotiation.id, postId: negotiation.post_id, payerId: payment.payer_id, payeeId: payment.payee_id, amountCents, currency, method, status }, req.correlationId);
       db.exec('COMMIT');
     } catch (error) {
@@ -2203,14 +2228,45 @@ async function start() {
       console.error('Payment transaction failed', error);
       return res.status(500).json({ error: 'Payment could not be processed' });
     }
-    if (!eventPublisher.enabled() && !simulateFailure) notification(payment.payee_id, 'payment', 'Pagamento simulado recebido', `Um pagamento de R$ ${(amountCents / 100).toFixed(2).replace('.', ',')} foi confirmado.`, `/anuncios/${negotiation.post_id}`);
+    if (!eventPublisher.enabled() && status === 'succeeded') notification(payment.payee_id, 'payment', 'Pagamento recebido', `Um pagamento de R$ ${(amountCents / 100).toFixed(2).replace('.', ',')} foi confirmado.`, `/anuncios/${negotiation.post_id}`);
     persistDb();
     return res.status(201).json({ payment: {
       id: payment.id, negotiationId: payment.negotiation_id, payerId: payment.payer_id, payeeId: payment.payee_id,
       amountCents: payment.amount_cents, currency: payment.currency, method: payment.method, status: payment.status,
-      providerReference: payment.provider_reference, failureCode: payment.failure_code, createdAt: payment.created_at,
+      providerReference: payment.provider_reference, checkoutUrl: payment.checkout_url, failureCode: payment.failure_code, createdAt: payment.created_at,
       updatedAt: payment.updated_at, paidAt: payment.paid_at
     }, idempotentReplay: false });
+  });
+
+  app.post('/api/payments/mercadopago/webhook', async (req, res) => {
+    const externalId = req.body?.data?.id || req.body?.id;
+    if (String(req.body?.type || req.body?.topic || '').toLowerCase() !== 'payment' || !externalId) {
+      return res.sendStatus(200);
+    }
+    if (!mercadoPago.webhookIsValid({ dataId: externalId, requestId: req.get('x-request-id'), signature: req.get('x-signature') })) {
+      return res.sendStatus(401);
+    }
+    try {
+      const providerPayment = await mercadoPago.payment(externalId);
+      const paymentId = String(providerPayment.external_reference || '');
+      const current = get('SELECT * FROM payments WHERE id = ?', [paymentId]);
+      if (!current) return res.sendStatus(200);
+      const statusMap = { approved: 'succeeded', pending: 'processing', in_process: 'processing', rejected: 'failed', cancelled: 'failed', refunded: 'refunded' };
+      const status = statusMap[providerPayment.status];
+      if (!status || current.status === status) return res.sendStatus(200);
+      const now = new Date().toISOString();
+      const failureCode = status === 'failed' ? String(providerPayment.status_detail || providerPayment.status) : null;
+      run('UPDATE payments SET status = ?, failure_code = ?, updated_at = ?, paid_at = ? WHERE id = ?', [status, failureCode, now, status === 'succeeded' ? now : current.paid_at, paymentId]);
+      run('INSERT INTO payment_audit_events (id, payment_id, from_status, to_status, reason, correlation_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', [uid('payment-audit'), paymentId, current.status, status, `mercado_pago_${providerPayment.status}`, uid('webhook'), now]);
+      if (status === 'succeeded' && !eventPublisher.enabled()) {
+        notification(current.payee_id, 'payment', 'Pagamento recebido', `Um pagamento de R$ ${(current.amount_cents / 100).toFixed(2).replace('.', ',')} foi confirmado.`, `/anuncios/${current.negotiation_id}`);
+      }
+      persistDb();
+      return res.sendStatus(200);
+    } catch (error) {
+      console.error('Mercado Pago webhook failed', error);
+      return res.sendStatus(500);
+    }
   });
 
   app.post('/api/posts/:id/reserve', authMiddleware, (req, res) => {

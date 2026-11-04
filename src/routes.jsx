@@ -1215,9 +1215,18 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
       setComments(commentResult.comments || []);
     }).catch((error) => alert(error.message)).finally(() => setBusy(false));
     if (session) api.negotiation(postId).then(async (result) => {
-      setNegotiation(result.negotiation);
-      if (result.negotiation) {
-        const paymentResult = await api.payment(result.negotiation.id);
+      const currentNegotiation = result.negotiation;
+      setNegotiation(currentNegotiation);
+      if (currentNegotiation) {
+        if (currentNegotiation.status === 'reserved') {
+          setPaymentForm({
+            amount: currentNegotiation.proposalAmountCents
+              ? formatMoneyInput(String(currentNegotiation.proposalAmountCents))
+              : '',
+            method: currentNegotiation.proposalMethod || 'pix'
+          });
+        }
+        const paymentResult = await api.payment(currentNegotiation.id);
         setPayment(paymentResult.payment);
       }
     }).catch(() => {});
@@ -1270,17 +1279,25 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
   async function submitPayment(event) {
     event.preventDefault();
     if (!isSale || !negotiation || paymentBusy) return;
-    const amountCents = Number(String(paymentForm.amount).replace(/\D/g, ''));
+    const amountInput = paymentForm.amount || (negotiation.proposalAmountCents
+      ? formatMoneyInput(String(negotiation.proposalAmountCents))
+      : '');
+    const amountCents = Number(String(amountInput).replace(/\D/g, ''));
     if (!Number.isSafeInteger(amountCents) || amountCents < 100) return alert('Informe um valor válido a partir de R$ 1,00.');
     setPaymentBusy(true);
     try {
       const result = await api.createPayment(negotiation.id, {
         amountCents,
-        method: paymentForm.method,
+        currency: 'BRL',
+        method: paymentForm.method || negotiation.proposalMethod || 'pix',
         idempotencyKey: `web-${session.id}-${negotiation.id}-${Date.now()}`
       });
       setPayment(result.payment);
-      alert(result.payment.status === 'succeeded' ? 'Pagamento simulado confirmado.' : 'O provedor simulado recusou o pagamento.');
+      if (result.payment.checkoutUrl) {
+        window.location.assign(result.payment.checkoutUrl);
+        return;
+      }
+      alert(result.payment.status === 'succeeded' ? 'Pagamento confirmado.' : 'Pagamento aguardando confirmação.');
     } catch (error) {
       alert(error.message);
     } finally {
@@ -1490,7 +1507,7 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
     {!ownPost && isSale && negotiation?.status === 'interested' && negotiation.proposalStatus === 'none' ? <section className="review-form-card proposal-card"><span className="eyebrow">Oferta com pagamento</span><h2>Envie sua proposta</h2><p>Informe o valor e a forma de pagamento. O vendedor receberá sua proposta para análise.</p><form onSubmit={submitProposal}><label>Valor da oferta (R$)<input inputMode="decimal" value={proposalForm.amount} onChange={(event) => setProposalForm((current) => ({ ...current, amount: formatMoneyInput(event.target.value) }))} placeholder="10,00" required /></label><label>Forma de pagamento<select value={proposalForm.method} onChange={(event) => setProposalForm((current) => ({ ...current, method: event.target.value }))}><option value="pix">PIX simulado</option><option value="card">Cartão simulado</option><option value="boleto">Boleto simulado</option></select></label><button className="primary-btn" disabled={proposalBusy}>{proposalBusy ? 'Enviando...' : 'Enviar proposta'}<span className="material-symbols-outlined">send</span></button></form></section> : null}
     {!ownPost && isSale && negotiation?.status === 'interested' && negotiation.proposalStatus === 'pending' ? <section className="payment-waiting-card"><div className="payment-waiting-icon"><span className="material-symbols-outlined">hourglass_top</span></div><div><span className="eyebrow">Proposta enviada</span><h2>Aguardando resposta do vendedor</h2><p>Sua oferta de R$ {((negotiation.proposalAmountCents || 0) / 100).toFixed(2).replace('.', ',')} foi enviada. O pagamento ficará disponível depois que o vendedor aceitar e reservar o item.</p></div><button className="secondary-btn" onClick={startConversation}><span className="material-symbols-outlined">chat_bubble</span>Conversar com o anunciante</button></section> : null}
     {!ownPost && isSale && negotiation?.status === 'reserved' && !payment ? <section className="review-form-card proposal-card"><span className="eyebrow">Pagamento liberado</span><h2>Finalize sua contribuição</h2><p>O vendedor reservou este anúncio para você. Escolha a forma de pagamento simulado para concluir.</p><form onSubmit={submitPayment}><label>Valor do pagamento (R$)<input inputMode="decimal" value={paymentForm.amount || (negotiation.proposalAmountCents ? formatMoneyInput(String(negotiation.proposalAmountCents)) : '')} onChange={(event) => setPaymentForm((current) => ({ ...current, amount: formatMoneyInput(event.target.value) }))} placeholder="10,00" required /></label><label>Forma de pagamento<select value={paymentForm.method} onChange={(event) => setPaymentForm((current) => ({ ...current, method: event.target.value }))}><option value="pix">PIX simulado</option><option value="card">Cartão simulado</option><option value="boleto">Boleto simulado</option></select></label><button className="primary-btn" disabled={paymentBusy}>{paymentBusy ? 'Processando...' : 'Pagar simulação'}<span className="material-symbols-outlined">payments</span></button></form></section> : null}
-    {!ownPost && isSale && payment ? <section className="payment-waiting-card"><div className="payment-waiting-icon"><span className="material-symbols-outlined">{payment.status === 'succeeded' ? 'check_circle' : 'error'}</span></div><div><span className="eyebrow">Pagamento simulado</span><h2>{payment.status === 'succeeded' ? 'Pagamento confirmado' : 'Pagamento não aprovado'}</h2><p>Valor: R$ {(payment.amountCents / 100).toFixed(2).replace('.', ',')} · Método: {payment.method.toUpperCase()}</p></div></section> : null}
+    {!ownPost && isSale && payment ? <section className="payment-waiting-card"><div className="payment-waiting-icon"><span className="material-symbols-outlined">{payment.status === 'succeeded' ? 'check_circle' : payment.status === 'processing' ? 'hourglass_top' : 'error'}</span></div><div><span className="eyebrow">Mercado Pago</span><h2>{payment.status === 'succeeded' ? 'Pagamento confirmado' : payment.status === 'processing' ? 'Aguardando confirmação do pagamento' : 'Pagamento não aprovado'}</h2><p>Valor: R$ {(payment.amountCents / 100).toFixed(2).replace('.', ',')} · Método: {payment.method.toUpperCase()}</p></div>{payment.status === 'processing' && payment.checkoutUrl ? <a className="secondary-btn" href={payment.checkoutUrl}>Abrir checkout</a> : null}</section> : null}
     {negotiation?.status === 'completed' && !reviewed ? <section className="review-form-card"><span className="eyebrow">Negociação concluída</span><h2>Como foi a experiência?</h2><form onSubmit={submitReview}><label>Nota<select value={reviewForm.rating} onChange={(event) => setReviewForm((current) => ({ ...current, rating: Number(event.target.value) }))}>{[5, 4, 3, 2, 1].map((rating) => <option key={rating} value={rating}>{'⭐'.repeat(rating)} ({rating})</option>)}</select></label><textarea value={reviewForm.comment} onChange={(event) => setReviewForm((current) => ({ ...current, comment: event.target.value }))} maxLength="500" placeholder="Comentário opcional" /><button className="primary-btn">Enviar avaliação</button></form></section> : null}
     <section className="detail-comments"><div className="section-title"><h2>Comentários ({post.comments || 0})</h2></div>{comments.length ? comments.map((comment) => <article className="detail-comment" key={comment.id}><span className="avatar-placeholder material-symbols-outlined">person</span><div><strong>{comment.name}</strong><p>{comment.text}</p></div><button className="text-btn" onClick={() => openReport('comment', comment.id)}>Denunciar</button></article>) : <EmptyState icon="chat_bubble" title="Ainda não há comentários" text="Seja a primeira pessoa a conversar sobre este item." /> }<form className="comment-form" onSubmit={submitComment}><input value={commentText} onChange={(event) => setCommentText(event.target.value)} maxLength="500" placeholder="Escreva um comentário..." /><button className="send-btn" aria-label="Enviar comentário"><span className="material-symbols-outlined">send</span></button></form></section>
     {reportOpen ? <form className="report-panel" onSubmit={submitReport}><h2>Denunciar anúncio</h2><select value={reportReason} onChange={(event) => setReportReason(event.target.value)}>{['Spam', 'Informação falsa', 'Conteúdo impróprio', 'Tentativa de golpe', 'Material proibido', 'Comportamento ofensivo', 'Outro'].map((reason) => <option key={reason}>{reason}</option>)}</select><textarea value={reportDetails} onChange={(event) => setReportDetails(event.target.value)} maxLength="1000" placeholder="Conte mais detalhes (opcional)" /><div><button type="button" className="secondary-btn" onClick={() => setReportOpen(false)}>Cancelar</button><button className="primary-btn">Enviar denúncia</button></div></form> : null}
