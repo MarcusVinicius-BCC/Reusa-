@@ -1319,6 +1319,9 @@ button, input, select, textarea { max-width: 100%; }
 .payment-item > div { min-width: 0; flex: 1; }
 .payment-item strong, .payment-item small { display: block; }
 .payment-item small { margin-top: 3px; color: var(--text-variant); font-size: 12px; }
+.payment-item-action { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 40px; padding: 9px 13px; border: 0; border-radius: 12px; color: white; background: var(--primary); font: 800 12px/1.1 inherit; cursor: pointer; transition: .2s ease; white-space: nowrap; }
+.payment-item-action:hover { background: color-mix(in srgb, var(--primary) 84%, black); transform: translateY(-1px); }
+.payment-item-action .material-symbols-outlined { font-size: 18px; }
 .payment-item-icon { display: grid; width: 38px; height: 38px; place-items: center; border-radius: 12px; color: var(--primary); background: var(--secondary-container); }
 .settings-panel-icon.payments { color: #17653f; background: #e8f7ed; }
 .marketplace-connection { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 18px; padding: 15px; border: 1px solid #e5c875; border-radius: 15px; background: #fffaf0; }

@@ -34,11 +34,13 @@ function isConfigured() {
 }
 
 function oauthConfigured() {
-  return Boolean(process.env.MERCADOPAGO_CLIENT_ID && process.env.MERCADOPAGO_CLIENT_SECRET && appBaseUrl());
+  return Boolean(String(process.env.MERCADOPAGO_CLIENT_ID || '').trim() && String(process.env.MERCADOPAGO_CLIENT_SECRET || '').trim());
 }
 
 function authorizationUrl(state, redirectUri) {
-  if (!oauthConfigured()) throw Object.assign(new Error('Mercado Pago OAuth is not configured'), { status: 503 });
+  if (!oauthConfigured()) {
+    throw Object.assign(new Error('Configure MERCADOPAGO_CLIENT_ID and MERCADOPAGO_CLIENT_SECRET no ambiente do backend'), { status: 503 });
+  }
   const query = new URLSearchParams({
     client_id: String(process.env.MERCADOPAGO_CLIENT_ID),
     response_type: 'code',

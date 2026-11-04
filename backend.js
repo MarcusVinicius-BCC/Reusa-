@@ -1720,7 +1720,7 @@ async function start() {
       if (req.query.format === 'json') return res.json({ authorizationUrl });
       return res.redirect(authorizationUrl);
     } catch (error) {
-      return res.status(error.status || 503).json({ error: 'Mercado Pago seller connection is not configured' });
+      return res.status(error.status || 503).json({ error: error.message || 'Mercado Pago seller connection is not configured' });
     }
   });
 
