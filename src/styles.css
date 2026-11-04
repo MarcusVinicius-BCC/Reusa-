@@ -116,6 +116,8 @@ img { display: block; max-width: 100%; }
 .landing-footer { display: flex; width: 100%; align-items: center; justify-content: space-between; gap: clamp(12px, 3vw, 32px); margin: 0; padding: 20px 24px; border-top: 1px solid rgba(148,163,154,.25); color: #8a9691; font-size: 11px; }.landing-footer p { max-width: 100%; margin: 0; }.landing-footer div { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px clamp(14px, 2.5vw, 22px); }.landing-footer span { color: inherit; white-space: nowrap; }
 
 .interest-modal-backdrop { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 20px; background: rgba(3, 28, 19, .64); backdrop-filter: blur(8px); }
+.feed-shell .post-card.modal-open:hover { transform: none; }
+.feed-shell .post-card.modal-open { isolation: isolate; }
 .interest-modal { position: relative; width: min(100%, 460px); padding: 30px 24px 22px; border: 1px solid rgba(184, 240, 205, .55); border-radius: 28px; background: #f8fcf9; box-shadow: 0 28px 80px rgba(2, 25, 16, .38); text-align: center; animation: interest-modal-enter 180ms ease-out both; }
 .interest-modal-heading { display: grid; justify-items: center; gap: 8px; }
 .interest-modal-badge { display: grid; place-items: center; width: 54px; height: 54px; border-radius: 18px; color: #063c26; background: linear-gradient(145deg, #b8f0cd, #79dca4); box-shadow: 0 10px 22px rgba(8, 120, 72, .18); }

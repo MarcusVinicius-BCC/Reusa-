@@ -874,7 +874,7 @@ function FeedCard({ post, onNavigate, onOpenChat, onOpenPayment }) {
   }
 
   return (
-    <article className={isSale ? 'card post-card is-sale' : 'card post-card'}>
+    <article className={`${isSale ? 'card post-card is-sale' : 'card post-card'}${interestOptionsOpen || proposalOpen ? ' modal-open' : ''}`}>
       <div className="post-head">
         <button className={saved ? 'icon-btn saved-btn' : 'icon-btn'} onClick={favorite} aria-label={saved ? 'Remover dos salvos' : 'Salvar anúncio'}><span key={saveAnimationKey} className={saved ? 'material-symbols-outlined save-icon saved-bookmark' : 'material-symbols-outlined save-icon'}>{saved ? 'bookmark' : 'bookmark_border'}</span></button>
         {post.author.avatar ? <img className="avatar" src={post.author.avatar} alt={post.author.name} /> : <span className="avatar avatar-placeholder material-symbols-outlined" aria-label={`Perfil de ${post.author.name}`}>person</span>}
