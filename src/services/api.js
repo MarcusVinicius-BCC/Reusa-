@@ -34,7 +34,11 @@ async function request(path, options = {}) {
   const payload = contentType.includes('application/json') ? await response.json() : await response.text();
 
   if (!response.ok) {
-    throw new Error(payload?.error || 'Request failed');
+    const requestId = response.headers.get('x-correlation-id') || payload?.requestId;
+    const message = payload?.error || 'Request failed';
+    const error = new Error(requestId ? `${message} (ID: ${requestId})` : message);
+    error.requestId = requestId || '';
+    throw error;
   }
 
   return payload;

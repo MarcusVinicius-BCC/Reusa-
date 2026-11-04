@@ -1945,7 +1945,12 @@ async function start() {
       const delivery = await sendVerificationEmail(user.email, user.name, verification.raw, `${req.protocol}://${req.get('host')}`);
       return res.status(201).json({ token: createToken(user.id), user: { ...user, passwordHash: undefined, emailVerified: false }, verificationRequired: true, emailDelivered: delivery.delivered });
     } catch (error) {
-      return next(error);
+      const requestId = req.correlationId || uid('request');
+      console.error(`[registration-email-error] ${requestId}:`, error);
+      return res.status(503).json({
+        error: 'A conta foi criada, mas não foi possível enviar o e-mail de confirmação. Configure RESEND_API_KEY e EMAIL_FROM e tente reenviar a confirmação.',
+        requestId
+      });
     }
   });
 
@@ -3126,8 +3131,9 @@ async function start() {
       return res.status(400).json({ error: error.message });
     }
     if (req.path.startsWith('/api/')) {
-      console.error(error);
-      return res.status(500).json({ error: 'Internal server error' });
+      const requestId = req.correlationId || uid('request');
+      console.error(`[api-error] ${requestId} ${req.method} ${req.originalUrl}:`, error);
+      return res.status(500).json({ error: 'Internal server error', requestId });
     }
     return next(error);
   });
