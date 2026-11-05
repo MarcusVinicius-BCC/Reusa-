@@ -372,15 +372,46 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
   });
   app.patch('/api/negotiations/:id/proposal', authenticate, async (req, res, next) => {
     try {
-      const negotiation = await db.one('SELECT * FROM negotiations WHERE id=$1', [req.params.id]);
       const decision = String(req.body?.decision || '').trim().toLowerCase();
-      if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
-      if (negotiation.owner_id !== req.user.id) return res.status(403).json({ error: 'Only the seller can decide this proposal' });
-      if (negotiation.proposal_status !== 'pending') return res.status(400).json({ error: 'There is no pending proposal to decide' });
       if (!['accepted', 'rejected'].includes(decision)) return res.status(400).json({ error: 'Decision must be accepted or rejected' });
-      const updated = await db.one('UPDATE negotiations SET proposal_status=$1,updated_at=now() WHERE id=$2 RETURNING *', [decision, negotiation.id]);
-      return res.json({ proposal: { negotiationId: updated.id, status: updated.proposal_status, amountCents: updated.proposal_amount_cents, method: updated.proposal_method, createdAt: updated.proposal_created_at } });
-    } catch (error) { return next(error); }
+      const result = await db.transaction(async (client) => {
+        // Lock the post before the negotiation so competing offers cannot both reserve it.
+        const target = (await client.query('SELECT post_id FROM negotiations WHERE id=$1', [req.params.id])).rows[0];
+        if (!target) throw Object.assign(new Error('Negotiation not found'), { status: 404 });
+        const post = (await client.query('SELECT * FROM posts WHERE id=$1 FOR UPDATE', [target.post_id])).rows[0];
+        if (!post) throw Object.assign(new Error('Post not found'), { status: 404 });
+        const negotiation = (await client.query('SELECT * FROM negotiations WHERE id=$1 FOR UPDATE', [req.params.id])).rows[0];
+        if (negotiation.owner_id !== req.user.id || post.author_id !== req.user.id) throw Object.assign(new Error('Only the seller can decide this proposal'), { status: 403 });
+        if (negotiation.proposal_status !== 'pending') throw Object.assign(new Error('There is no pending proposal to decide'), { status: 400 });
+        if (decision === 'accepted') {
+          if (post.goal !== SALE_GOAL) throw Object.assign(new Error('Only sale offers can be accepted here'), { status: 400 });
+          if (!['Disponível', 'Reservado'].includes(post.status) ||
+              (post.status === 'Reservado' && post.reserved_by !== negotiation.interested_id) ||
+              !['interested', 'reserved'].includes(negotiation.status)) {
+            throw Object.assign(new Error('Este anúncio já está reservado para outra pessoa ou não está disponível.'), { status: 409 });
+          }
+          if (mercadoPago.isConfigured()) {
+            const seller = (await client.query('SELECT mercado_pago_access_token FROM users WHERE id=$1', [req.user.id])).rows[0];
+            if (!mercadoPago.checkoutSellerToken(seller?.mercado_pago_access_token)) {
+              throw Object.assign(new Error('Conecte sua conta Mercado Pago para receber pagamentos.'), { status: 409 });
+            }
+          }
+          await client.query("UPDATE negotiations SET status='interested',proposal_status=CASE WHEN proposal_status='pending' THEN 'rejected' ELSE proposal_status END,updated_at=now() WHERE post_id=$1 AND id<>$2 AND status='reserved'", [post.id, negotiation.id]);
+          await client.query("UPDATE negotiations SET proposal_status='rejected',updated_at=now() WHERE post_id=$1 AND id<>$2 AND proposal_status='pending'", [post.id, negotiation.id]);
+          await client.query("UPDATE negotiations SET proposal_status='accepted',status='reserved',updated_at=now() WHERE id=$1", [negotiation.id]);
+          await client.query("UPDATE posts SET status='Reservado',reserved_by=$1,updated_at=now() WHERE id=$2", [negotiation.interested_id, post.id]);
+          await emit(client, 'negotiation.reserved', { negotiationId: negotiation.id, postId: post.id, postTitle: post.title, ownerId: post.author_id, interestedId: negotiation.interested_id, status: 'reserved' }, req.correlationId);
+        } else {
+          await client.query("UPDATE negotiations SET proposal_status='rejected',updated_at=now() WHERE id=$1", [negotiation.id]);
+        }
+        return { negotiation, decision };
+      });
+      queueMicrotask(() => publisher?.flush?.());
+      return res.json({ proposal: { negotiationId: result.negotiation.id, status: result.decision, amountCents: result.negotiation.proposal_amount_cents, method: result.negotiation.proposal_method, createdAt: result.negotiation.proposal_created_at }, reserved: decision === 'accepted' });
+    } catch (error) {
+      if (error?.status) return res.status(error.status).json({ error: error.message });
+      return next(error);
+    }
   });
   app.get('/api/negotiations/:id/payment', authenticate, async (req, res, next) => {
     try {
