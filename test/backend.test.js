@@ -385,12 +385,19 @@ test('sale posts allow money offers and are completed as sold', async () => {
   assert.equal(proposal.response.status, 201);
   assert.equal(proposal.payload.proposal.status, 'pending');
 
-  const reserved = await request(`/api/posts/${postId}/reserve`, {
-    method: 'POST', headers: ownerAuth,
-    body: JSON.stringify({ interestedId: interested.payload.user.id })
+  const accepted = await request(`/api/negotiations/${negotiation.payload.negotiation.id}/proposal`, {
+    method: 'PATCH', headers: ownerAuth,
+    body: JSON.stringify({ decision: 'accepted' })
   });
+  assert.equal(accepted.response.status, 200);
+  assert.equal(accepted.payload.proposal.status, 'accepted');
+  assert.equal(accepted.payload.reserved, true);
+  const reserved = await request(`/api/posts/${postId}`, { headers: ownerAuth });
   assert.equal(reserved.response.status, 200);
   assert.equal(reserved.payload.post.status, 'Reservado');
+  const buyerNegotiation = await request(`/api/posts/${postId}/negotiation`, { headers: interestedAuth });
+  assert.equal(buyerNegotiation.payload.negotiation.proposalStatus, 'accepted');
+  assert.equal(buyerNegotiation.payload.negotiation.status, 'reserved');
 
   const payment = await request(`/api/negotiations/${negotiation.payload.negotiation.id}/payment`, {
     method: 'POST', headers: interestedAuth,

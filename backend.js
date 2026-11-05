@@ -2211,12 +2211,40 @@ async function start() {
     if (negotiation.proposal_status !== 'pending') return res.status(400).json({ error: 'There is no pending proposal to decide' });
     if (!['accepted', 'rejected'].includes(decision)) return res.status(400).json({ error: 'Decision must be accepted or rejected' });
     const now = new Date().toISOString();
-    run('UPDATE negotiations SET proposal_status = ?, updated_at = ? WHERE id = ?', [decision, now, negotiation.id]);
-    if (decision === 'rejected' && !eventPublisher.enabled()) notification(negotiation.interested_id, 'negotiation', 'Proposta recusada', 'O vendedor recusou sua proposta.', `/anuncios/${negotiation.post_id}`);
+    if (decision === 'accepted') {
+      const post = get('SELECT * FROM posts WHERE id = ?', [negotiation.post_id]);
+      if (!post || post.goal !== SALE_GOAL) return res.status(400).json({ error: 'Only sale offers can be accepted here' });
+      if (!['Disponível', 'Reservado'].includes(post.status || 'Disponível') ||
+          (post.status === 'Reservado' && post.reserved_by !== negotiation.interested_id) ||
+          !['interested', 'reserved'].includes(negotiation.status)) {
+        return res.status(409).json({ error: 'Este anúncio já está reservado para outra pessoa ou não está disponível.' });
+      }
+      if (mercadoPago.isConfigured()) {
+        const seller = get('SELECT mercado_pago_access_token FROM users WHERE id = ?', [req.user.id]);
+        if (!mercadoPago.checkoutSellerToken(seller?.mercado_pago_access_token)) {
+          return res.status(409).json({ error: 'Conecte sua conta Mercado Pago para receber pagamentos.' });
+        }
+      }
+      try {
+        db.exec('BEGIN TRANSACTION');
+        run("UPDATE negotiations SET status='interested',proposal_status=CASE WHEN proposal_status='pending' THEN 'rejected' ELSE proposal_status END,updated_at=? WHERE post_id=? AND id<>? AND status='reserved'", [now, post.id, negotiation.id]);
+        run("UPDATE negotiations SET proposal_status='rejected',updated_at=? WHERE post_id=? AND id<>? AND proposal_status='pending'", [now, post.id, negotiation.id]);
+        run("UPDATE negotiations SET proposal_status='accepted',status='reserved',updated_at=? WHERE id=?", [now, negotiation.id]);
+        run("UPDATE posts SET status='Reservado',reserved_by=?,updated_at=? WHERE id=?", [negotiation.interested_id, now, post.id]);
+        emitDomainEvent('negotiation.reserved', { negotiationId: negotiation.id, postId: post.id, postTitle: post.title, ownerId: post.author_id, interestedId: negotiation.interested_id, status: 'reserved' }, req.correlationId);
+        db.exec('COMMIT');
+      } catch (error) {
+        try { db.exec('ROLLBACK'); } catch {}
+        return res.status(500).json({ error: 'Não foi possível reservar o anúncio.' });
+      }
+      if (!eventPublisher.enabled()) notification(negotiation.interested_id, 'negotiation', 'Oferta aceita e item reservado', `Você já pode pagar pelo anúncio ${post.title}.`, `/anuncios/${post.id}`);
+    } else {
+      run('UPDATE negotiations SET proposal_status = ?, updated_at = ? WHERE id = ?', [decision, now, negotiation.id]);
+      if (!eventPublisher.enabled()) notification(negotiation.interested_id, 'negotiation', 'Proposta recusada', 'O vendedor recusou sua proposta.', `/anuncios/${negotiation.post_id}`);
+    }
     persistDb();
-    return res.json({ proposal: { negotiationId: negotiation.id, status: decision, amountCents: negotiation.proposal_amount_cents, method: negotiation.proposal_method, createdAt: negotiation.proposal_created_at } });
+    return res.json({ proposal: { negotiationId: negotiation.id, status: decision, amountCents: negotiation.proposal_amount_cents, method: negotiation.proposal_method, createdAt: negotiation.proposal_created_at }, reserved: decision === 'accepted' });
   });
-
   app.get('/api/negotiations/:id/payment', authMiddleware, (req, res) => {
     const negotiation = get('SELECT * FROM negotiations WHERE id = ?', [req.params.id]);
     if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
@@ -2340,31 +2368,31 @@ async function start() {
         updatedAt: existing.updated_at, paidAt: existing.paid_at
       }, idempotentReplay: true });
     }
-    if (negotiation.proposal_status === 'accepted' &&
-        (negotiation.proposal_amount_cents !== amountCents || negotiation.proposal_method !== method)) {
+    if (negotiation.proposal_status !== 'accepted' ||
+        negotiation.proposal_amount_cents !== amountCents || negotiation.proposal_method !== method) {
       return res.status(400).json({ error: 'Payment must use the accepted proposal amount and method' });
     }
     if (get("SELECT id FROM payments WHERE negotiation_id = ? AND status = 'succeeded'", [negotiation.id])) return res.status(409).json({ error: 'This negotiation already has a successful payment' });
 
     const now = new Date().toISOString();
-    const paymentId = uid('payment');
+    const paymentId = 'payment-' + crypto.createHash('sha256').update(`${negotiation.id}:${idempotencyKey}`).digest('hex').slice(0, 40);
     let provider;
     if (mercadoPago.isConfigured()) {
       try {
         const post = get('SELECT title FROM posts WHERE id = ?', [negotiation.post_id]);
         const payer = get('SELECT email FROM users WHERE id = ?', [negotiation.interested_id]);
         const seller = get('SELECT mercado_pago_access_token FROM users WHERE id = ?', [negotiation.owner_id]);
-        provider = await mercadoPago.createPreference({
+        provider = await mercadoPago.createOrder({
           paymentId,
           postId: negotiation.post_id,
           title: post?.title,
           amountCents,
           payerEmail: payer?.email,
           method,
-          sellerAccessToken: mercadoPago.revealToken(seller?.mercado_pago_access_token)
+          sellerAccessToken: mercadoPago.checkoutSellerToken(seller?.mercado_pago_access_token)
         });
       } catch (error) {
-        console.error('Mercado Pago preference failed', error);
+        console.error('Mercado Pago order creation failed', error);
         return res.status(error.status && error.status >= 400 && error.status < 500 ? error.status : 502).json({ error: 'Mercado Pago could not create the checkout' });
       }
     } else if (process.env.NODE_ENV === 'test') {
@@ -2413,35 +2441,32 @@ async function start() {
   });
 
   app.post('/api/payments/mercadopago/webhook', async (req, res) => {
-    const externalId = req.body?.data?.id || req.body?.id;
-    if (String(req.body?.type || req.body?.topic || '').toLowerCase() !== 'payment' || !externalId) {
-      return res.sendStatus(200);
-    }
-    if (!mercadoPago.webhookIsValid({ dataId: externalId, requestId: req.get('x-request-id'), signature: req.get('x-signature') })) {
-      return res.sendStatus(401);
-    }
+    const orderId = String(req.query?.['data.id'] || req.body?.data?.id || '').trim();
+    const topic = String(req.query?.type || req.body?.type || '').toLowerCase();
+    if (topic !== 'order' || !orderId) return res.sendStatus(200);
+    if (!mercadoPago.webhookIsValid({ dataId: orderId, requestId: req.get('x-request-id'), signature: req.get('x-signature') })) return res.sendStatus(401);
     try {
-      const currentPayment = get('SELECT * FROM payments WHERE provider_reference = ?', [String(externalId)]);
-      const seller = currentPayment && get('SELECT mercado_pago_access_token FROM users WHERE id = ?', [currentPayment.payee_id]);
-      const providerPayment = await mercadoPago.payment(externalId, mercadoPago.revealToken(seller?.mercado_pago_access_token));
-      const paymentId = String(providerPayment.external_reference || '');
-      const current = get('SELECT * FROM payments WHERE id = ?', [paymentId]);
-      if (!current) return res.sendStatus(200);
-      const statusMap = { approved: 'succeeded', pending: 'processing', in_process: 'processing', rejected: 'failed', cancelled: 'failed', refunded: 'refunded' };
-      const status = statusMap[providerPayment.status];
+      const current = get('SELECT * FROM payments WHERE provider_reference = ?', [orderId]);
+      if (!current) return res.sendStatus(503); // Retry: the order may not yet be persisted locally.
+      const seller = get('SELECT mercado_pago_access_token FROM users WHERE id = ?', [current.payee_id]);
+      const sellerToken = mercadoPago.checkoutSellerToken(seller?.mercado_pago_access_token);
+      if (!sellerToken) return res.sendStatus(503);
+      const providerOrder = await mercadoPago.order(orderId, sellerToken);
+      const status = mercadoPago.verifiedOrderStatus(providerOrder, current);
       if (!status || current.status === status) return res.sendStatus(200);
+      if (['succeeded', 'refunded'].includes(current.status) && status !== 'refunded') return res.sendStatus(200);
       const now = new Date().toISOString();
-      const failureCode = status === 'failed' ? String(providerPayment.status_detail || providerPayment.status) : null;
-      run('UPDATE payments SET status = ?, failure_code = ?, updated_at = ?, paid_at = ? WHERE id = ?', [status, failureCode, now, status === 'succeeded' ? now : current.paid_at, paymentId]);
-      run('INSERT INTO payment_audit_events (id, payment_id, from_status, to_status, reason, correlation_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', [uid('payment-audit'), paymentId, current.status, status, `mercado_pago_${providerPayment.status}`, uid('webhook'), now]);
+      const failureCode = status === 'failed' ? String(providerOrder.status_detail || providerOrder.status) : null;
+      run('UPDATE payments SET status = ?, failure_code = ?, updated_at = ?, paid_at = ?, refunded_at = ? WHERE id = ?', [status, failureCode, now, status === 'succeeded' ? now : current.paid_at, status === 'refunded' ? now : current.refunded_at, current.id]);
+      run('INSERT INTO payment_audit_events (id, payment_id, from_status, to_status, reason, correlation_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', [uid('payment-audit'), current.id, current.status, status, `mercado_pago_order_${providerOrder.status}`, uid('webhook'), now]);
       if (status === 'succeeded' && !eventPublisher.enabled()) {
         notification(current.payee_id, 'payment', 'Pagamento recebido', `Um pagamento de R$ ${(current.amount_cents / 100).toFixed(2).replace('.', ',')} foi confirmado.`, `/anuncios/${current.negotiation_id}`);
       }
       persistDb();
       return res.sendStatus(200);
     } catch (error) {
-      console.error('Mercado Pago webhook failed', error);
-      return res.sendStatus(500);
+      console.error('Mercado Pago order webhook failed', error);
+      return res.sendStatus(error.status === 409 ? 200 : 500);
     }
   });
 
@@ -2452,7 +2477,7 @@ async function start() {
     if (post.author_id !== req.user.id) return res.status(403).json({ error: 'Only the owner can reserve this post' });
     if (mercadoPago.isConfigured()) {
       const seller = get('SELECT mercado_pago_access_token FROM users WHERE id = ?', [req.user.id]);
-      if (!mercadoPago.revealToken(seller?.mercado_pago_access_token)) {
+      if (!mercadoPago.checkoutSellerToken(seller?.mercado_pago_access_token)) {
         return res.status(409).json({ error: 'Conecte sua conta Mercado Pago antes de reservar este item para receber o pagamento.' });
       }
     }
@@ -3133,6 +3158,16 @@ async function start() {
     if (req.path.startsWith('/api/')) {
       const requestId = req.correlationId || uid('request');
       console.error(`[api-error] ${requestId} ${req.method} ${req.originalUrl}:`, error);
+      const status = Number(error?.status);
+      if (Number.isInteger(status) && status >= 400 && status < 500) {
+        const safePaymentErrors = {
+          'Payment must use the accepted proposal amount and method': 'O valor ou a forma de pagamento não coincide com a proposta aceita.',
+          'The idempotency key was already used with different payment data': 'Esta tentativa de pagamento já foi utilizada com dados diferentes.',
+          'This negotiation already has a successful payment': 'Esta negociação já possui um pagamento concluído.'
+        };
+        const message = safePaymentErrors[error?.message];
+        if (message) return res.status(status).json({ error: message, requestId });
+      }
       return res.status(500).json({ error: 'Internal server error', requestId });
     }
     return next(error);

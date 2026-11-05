@@ -426,49 +426,75 @@ GET|POST|PATCH|DELETE /api/admin/*
 Rotas protegidas exigem `Authorization: Bearer <token>`. Rotas administrativas
 exigem, além do token, um usuário com `role=admin`.
 
-## Pagamentos com Mercado Pago
+## Pagamentos com Mercado Pago (Checkout Pro via Orders API)
 
-O pagamento usa o **Mercado Pago Checkout Pro**. O usuário é redirecionado para
-o checkout oficial, e o status é confirmado por webhook antes de ser considerado
-concluído. A aplicação não recebe nem armazena dados de cartão.
+O ReUsa+ usa **Checkout Pro via Orders API** (`POST /v1/orders`), que devolve
+`checkout_url`. O frontend já redireciona o comprador ao Mercado Pago, sem receber
+ou armazenar dados de cartão. O sistema só confirma um pagamento após o webhook
+assinado e uma consulta à order na API do Mercado Pago, conferindo referência,
+moeda, valor esperado e valor efetivamente pago.
 
-Configure no ambiente do backend:
+**Modelo existente:** o anunciante conecta sua própria conta Mercado Pago
+em **Configurações > Ofertas e pagamentos > Conectar conta**. O backend usa
+o token autorizado desse vendedor para criar as orders. Esta integração
+**não** implementa divisão automática de comissões nem custódia dos valores
+pela plataforma; valide a elegibilidade da aplicação para OAuth/marketplace
+no painel antes de habilitar vendas reais.
+
+### Configuração no Railway / backend
+
+Configure as variáveis (nunca envie tokens ao GitHub):
 
 ```text
-MERCADOPAGO_ACCESS_TOKEN=APP_USR-...
-MERCADOPAGO_CLIENT_ID=...
-MERCADOPAGO_CLIENT_SECRET=...
-MERCADOPAGO_WEBHOOK_SECRET=...
+MERCADOPAGO_ACCESS_TOKEN=seu-access-token-da-aplicacao
+MERCADOPAGO_CLIENT_ID=seu-client-id
+MERCADOPAGO_CLIENT_SECRET=seu-client-secret
+MERCADOPAGO_WEBHOOK_SECRET=assinatura-secreta-do-webhook
 APP_BASE_URL=https://seu-dominio-publico.example
-# Opcional, mas recomendado quando a URL pública tiver proxy:
 MERCADOPAGO_REDIRECT_URI=https://seu-dominio-publico.example/api/payments/mercadopago/callback
 ```
 
-O `APP_BASE_URL` precisa ser público e usar HTTPS para que o Mercado Pago consiga
-enviar o webhook em `/api/payments/mercadopago/webhook`. Configure o segredo de
-assinatura exibido no painel do Mercado Pago em `MERCADOPAGO_WEBHOOK_SECRET`.
-Em desenvolvimento,
-use as credenciais de teste do Mercado Pago e um túnel HTTPS público.
+O painel Mercado Pago deve autorizar a URL exata de redirecionamento OAuth:
+`https://seu-dominio-publico.example/api/payments/mercadopago/callback`.
 
-Vendedores devem conectar suas próprias contas na seção **Configurações >
-Ofertas e pagamentos > Conectar conta**. O sistema usa OAuth e armazena os
-tokens protegidos; sem essa conexão, uma venda não pode criar checkout para
-repassar o valor ao vendedor.
+Em **Configuração de Webhooks**, selecione o ambiente correto (Teste ou
+Produção), a URL pública HTTPS
+`https://seu-dominio-publico.example/api/payments/mercadopago/webhook`
+e o evento **Order (Mercado Pago)**, não somente o evento Payment.
+Use a assinatura secreta daquele ambiente na variável
+`MERCADOPAGO_WEBHOOK_SECRET`. A verificação da assinatura inclui
+o parâmetro `data.id` e o header `x-request-id`.
 
-No painel da aplicação Mercado Pago, cadastre exatamente a mesma URL usada em
-`MERCADOPAGO_REDIRECT_URI` (sem barra final). A aplicação também precisa estar
-ativa/pronta para OAuth e ter o produto de marketplace habilitado; essas etapas
-são obrigatórias antes de autorizar uma conta de vendedor.
+### Fluxo existente
+
+1. Comprador propõe um valor em centavos, e o vendedor aceita e reserva o item.
+2. Backend verifica a proposta aceita e cria uma order no token do vendedor,
+   com `external_reference` apontando para o pagamento no ReUsa+.
+3. Backend salva `provider_reference` (ID da order) e `checkout_url`.
+4. Comprador abre o Checkout Pro. Retorno no navegador **não é confirmação**.
+5. Webhook `order` assinado aciona `GET /v1/orders/{id}`, e o backend
+   só registra sucesso quando a order e o valor pago são validados.
+
+Rotas:
 
 ```text
 GET  /api/negotiations/:id/payment
 POST /api/negotiations/:id/payment
 POST /api/payments/mercadopago/webhook
+GET  /api/payments/mercadopago/connect
+GET  /api/payments/mercadopago/callback
 ```
 
-O fluxo usa valores em centavos, chave de idempotência e métodos `pix`,
-`card` ou `boleto`. O pagamento começa como `processing` e passa para
-`succeeded`, `failed` ou `refunded` conforme a notificação oficial do provedor.
+**Antes de produção:** executar `npm test` e `npm run build`,
+realizar testes reais no ambiente de teste do Mercado Pago, revisar
+concorrência e recuperação de webhooks que chegam antes de a order
+ser persistida, rotação/renovação de tokens OAuth e tratamento de
+estornos parciais. Não faça merge nem deploy antes dessa validação.
+
+Documentação oficial:
+- https://www.mercadopago.com.br/developers/pt/docs/checkout-pro-orders/create-order
+- https://www.mercadopago.com.br/developers/pt/docs/checkout-pro-orders/notifications
+- https://www.mercadopago.com.br/developers/pt/docs/checkout-pro-orders/web-integration/configure-back-urls
 
 ## Testes e validação
 
