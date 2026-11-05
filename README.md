@@ -441,6 +441,31 @@ o token autorizado desse vendedor para criar as orders. Esta integração
 pela plataforma; valide a elegibilidade da aplicação para OAuth/marketplace
 no painel antes de habilitar vendas reais.
 
+### Apresentação acadêmica: pagamentos em modo de demonstração
+
+Para apresentar o fluxo completo sem CNPJ, conta de vendedor real ou OAuth,
+utilize **exclusivamente** o Access Token de **TESTE** da aplicação e configure
+`MERCADOPAGO_TEST_MODE=true` no serviço backend do Railway.
+
+- O modo de teste usa a conta sandbox da aplicação em todas as orders; não faz
+  repasses a contas individuais de vendedores e não requer OAuth.
+- O perfil mostra **Modo de demonstração — pagamentos de teste**, em vez de
+  induzir vendedores a conectar contas reais.
+- O Checkout Pro pode ser demonstrado com cartões de **teste**; a aprovação
+  vem do provedor sandbox e o ReUsa+ atualiza o estado via webhook.
+- O Pix de teste pode mostrar QR Code, mas **não deve ser pago por aplicativo
+  bancário real**. Não prometa conclusão da transação Pix no sandbox.
+- Em nenhuma hipótese use credenciais de produção para esta apresentação.
+  `MERCADOPAGO_TEST_MODE` não transforma um token de produção em sandbox.
+- Ao encerrar a apresentação, desligue o serviço público no Railway ou
+  desabilite os fluxos de pagamento. Não basta mudar a variável para false:
+  isso ativaria o caminho de produção que ainda depende de OAuth de vendedores.
+
+A interface usa a indicação de modo teste enviada pelo backend autenticado,
+e a indicação é exibida somente quando as credenciais estão configuradas e
+`MERCADOPAGO_TEST_MODE=true`. A remoção da demonstração não afeta anúncios,
+negociações e o restante da plataforma.
+
 ### Configuração no Railway / backend
 
 Configure as variáveis (nunca envie tokens ao GitHub):

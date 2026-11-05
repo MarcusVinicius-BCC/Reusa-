@@ -565,7 +565,8 @@ function userFromRow(row) {
     role: row.role || 'user',
     suspended: Boolean(row.suspended),
     notificationPreferences: jsonArray(row.notification_preferences_json)
-    , mercadoPagoConnected: Boolean(row.mercado_pago_user_id)
+    , mercadoPagoConnected: Boolean(row.mercado_pago_user_id),
+    mercadoPagoDemoMode: mercadoPago.testMode() && mercadoPago.isConfigured()
   };
 }
 
