@@ -246,3 +246,40 @@ test('Checkout Pro sandbox card order uses an isolated buyer email but productio
     }
   }
 });
+
+
+test('Checkout Pro quality fields are sent only with available account information', async () => {
+  const oldFetch = global.fetch, oldMode = process.env.MERCADOPAGO_TEST_MODE;
+  const oldToken = process.env.MERCADOPAGO_ACCESS_TOKEN, oldBase = process.env.APP_BASE_URL;
+  const bodies = [];
+  process.env.MERCADOPAGO_ACCESS_TOKEN = 'test-token';
+  process.env.APP_BASE_URL = 'https://reusa.example';
+  global.fetch = async (_url, opts) => {
+    bodies.push(JSON.parse(opts.body));
+    return { ok: true, json: async () => ({ id: 'ORDTST', checkout_url: 'https://www.mercadopago.com.br/checkout/v1/redirect?order_id=ORDTST' }) };
+  };
+  try {
+    const args = { paymentId: 'p-1', postId: 'post-1', title: 'Notebook', description: 'Notebook usado', category: 'Eletrônicos', amountCents: 2000, payerEmail: 'real@example.com', payerName: 'Maria Silva', payerRegisteredAt: '2026-09-15T12:00:00.000Z', method: 'card', sellerAccessToken: 'seller-token' };
+    process.env.MERCADOPAGO_TEST_MODE = 'true';
+    await mercadoPago.createOrder(args);
+    assert.equal(bodies[0].config.statement_descriptor, 'REUSA PLUS');
+    assert.equal(bodies[0].items[0].category_id, 'electronics');
+    assert.equal(bodies[0].items[0].description, 'Notebook usado');
+    assert.equal(bodies[0].items[0].external_code, 'post-1');
+    assert.equal(bodies[0].additional_info['payer.registration_date'], args.payerRegisteredAt);
+    assert.match(bodies[0].payer.email, /^reusa-teste-/);
+    assert.equal(bodies[0].payer.first_name, 'Comprador');
+    assert.equal(bodies[0].payer.last_name, 'Teste');
+    assert.equal(bodies[0].payer.identification, undefined);
+    process.env.MERCADOPAGO_TEST_MODE = 'false';
+    await mercadoPago.createOrder({ ...args, paymentId: 'p-2' });
+    assert.equal(bodies[1].payer.email, args.payerEmail);
+    assert.equal(bodies[1].payer.first_name, 'Maria');
+    assert.equal(bodies[1].payer.last_name, 'Silva');
+  } finally {
+    global.fetch = oldFetch;
+    for (const [key, value] of Object.entries({ MERCADOPAGO_TEST_MODE: oldMode, MERCADOPAGO_ACCESS_TOKEN: oldToken, APP_BASE_URL: oldBase })) {
+      if (value === undefined) delete process.env[key]; else process.env[key] = value;
+    }
+  }
+});
