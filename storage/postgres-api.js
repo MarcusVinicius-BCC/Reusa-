@@ -485,7 +485,7 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       if (mercadoPago.isConfigured()) {
         const payer = await db.one('SELECT email FROM users WHERE id=$1', [negotiation.interested_id]);
         const seller = await db.one('SELECT mercado_pago_access_token FROM users WHERE id=$1', [negotiation.owner_id]);
-        provider = await mercadoPago.createOrder({ paymentId, postId: negotiation.post_id, title: post.title, amountCents, payerEmail: payer?.email, method, sellerAccessToken: mercadoPago.revealToken(seller?.mercado_pago_access_token) });
+        provider = await mercadoPago.createOrder({ paymentId, postId: negotiation.post_id, title: post.title, amountCents, payerEmail: payer?.email, method, sellerAccessToken: mercadoPago.checkoutSellerToken(seller?.mercado_pago_access_token) });
       } else if (process.env.NODE_ENV === 'test') {
         provider = { id: `test_${crypto.randomUUID()}`, checkoutUrl: null };
       } else {
@@ -525,7 +525,7 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       const current = await db.one('SELECT * FROM payments WHERE provider_reference=$1', [orderId]);
       if (!current) return res.sendStatus(503); // Retry: the order may not yet be persisted locally.
       const seller = await db.one('SELECT mercado_pago_access_token FROM users WHERE id=$1', [current.payee_id]);
-      const sellerToken = mercadoPago.revealToken(seller?.mercado_pago_access_token);
+      const sellerToken = mercadoPago.checkoutSellerToken(seller?.mercado_pago_access_token);
       if (!sellerToken) return res.sendStatus(503);
       const providerOrder = await mercadoPago.order(orderId, sellerToken);
       const status = mercadoPago.verifiedOrderStatus(providerOrder, current);
@@ -568,7 +568,7 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
         if (post.author_id !== req.user.id) throw Object.assign(new Error('Only the owner can reserve this post'), { status: 403 });
         if (mercadoPago.isConfigured()) {
           const seller = (await client.query('SELECT mercado_pago_access_token FROM users WHERE id=$1', [req.user.id])).rows[0];
-          if (!mercadoPago.revealToken(seller?.mercado_pago_access_token)) {
+          if (!mercadoPago.checkoutSellerToken(seller?.mercado_pago_access_token)) {
             throw Object.assign(new Error('Conecte sua conta Mercado Pago antes de reservar este item para receber o pagamento.'), { status: 409 });
           }
         }
