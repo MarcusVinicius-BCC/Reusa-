@@ -359,7 +359,7 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       const post = await db.one('SELECT title,goal FROM posts WHERE id=$1', [negotiation.post_id]);
       if (!post || post.goal !== SALE_GOAL) return res.status(400).json({ error: 'Money offers are only available for items marked for sale' });
       if (!Number.isSafeInteger(amountCents) || amountCents < 100 || amountCents > 100000000) return res.status(400).json({ error: 'Amount must be between R$ 1,00 and R$ 1.000.000,00' });
-      if (!['pix', 'card', 'boleto'].includes(method)) return res.status(400).json({ error: 'Use pix, card or boleto' });
+      if (!['pix', 'card'].includes(method)) return res.status(400).json({ error: 'Use pix ou cartão' });
       const createdAt = new Date().toISOString();
       const updated = await db.transaction(async (client) => {
         const result = await client.query('UPDATE negotiations SET proposal_status=$1,proposal_amount_cents=$2,proposal_method=$3,proposal_created_at=$4,updated_at=$4 WHERE id=$5 RETURNING *', ['pending', amountCents, method, createdAt, negotiation.id]);
@@ -519,7 +519,7 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       if (negotiation.status !== 'reserved') return res.status(400).json({ error: 'The negotiation must be reserved before payment' });
       const post = await db.one('SELECT title,goal FROM posts WHERE id=$1', [negotiation.post_id]);
       if (!post || post.goal !== SALE_GOAL) return res.status(400).json({ error: 'Payments are only available for items marked for sale' });
-      if (!Number.isSafeInteger(amountCents) || amountCents < 100 || amountCents > 100000000 || currency !== 'BRL' || !['pix', 'card', 'boleto'].includes(method)) return res.status(400).json({ error: 'Use a valid BRL amount and pix, card or boleto' });
+      if (!Number.isSafeInteger(amountCents) || amountCents < 100 || amountCents > 100000000 || currency !== 'BRL' || !['pix', 'card'].includes(method)) return res.status(400).json({ error: 'Use a valid BRL amount and pix ou cartão' });
       if (!/^[A-Za-z0-9._:-]{16,128}$/.test(idempotencyKey)) return res.status(400).json({ error: 'A valid idempotency key is required' });
       // Validate the accepted proposal before contacting Mercado Pago.
       // Keep the locked validation below to guard concurrent updates.
