@@ -75,7 +75,8 @@ function userView(row) {
     received: Number(row.received || 0), carbonSavedPercent: Number(row.carbon_saved_percent || 0),
     achievements: json(row.achievements_json), role: row.role || 'user',
     suspended: Boolean(row.suspended), notificationPreferences: json(row.notification_preferences_json),
-    mercadoPagoConnected: Boolean(row.mercado_pago_user_id)
+    mercadoPagoConnected: Boolean(row.mercado_pago_user_id),
+    mercadoPagoDemoMode: mercadoPago.testMode() && mercadoPago.isConfigured()
   };
 }
 
