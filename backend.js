@@ -2390,13 +2390,17 @@ async function start() {
     let provider;
     if (mercadoPago.isConfigured()) {
       try {
-        const post = get('SELECT title FROM posts WHERE id = ?', [negotiation.post_id]);
-        const payer = get('SELECT email FROM users WHERE id = ?', [negotiation.interested_id]);
+        const post = get('SELECT title, description, category FROM posts WHERE id = ?', [negotiation.post_id]);
+        const payer = get('SELECT email, name, created_at FROM users WHERE id = ?', [negotiation.interested_id]);
         const seller = get('SELECT mercado_pago_access_token FROM users WHERE id = ?', [negotiation.owner_id]);
         provider = await (method === 'pix' && mercadoPago.pixEnabled() ? mercadoPago.createPixOrder : mercadoPago.createOrder)({
           paymentId,
           postId: negotiation.post_id,
           title: post?.title,
+          description: post?.description,
+          category: post?.category,
+          payerName: payer?.name,
+          payerRegisteredAt: payer?.created_at,
           amountCents,
           payerEmail: payer?.email,
           method,
