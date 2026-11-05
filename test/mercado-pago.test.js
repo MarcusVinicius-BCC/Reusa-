@@ -1,0 +1,70 @@
+const assert = require('node:assert/strict');
+const { test } = require('node:test');
+const crypto = require('node:crypto');
+const mercadoPago = require('../services/mercado-pago');
+
+test('a processed accredited order with exact amount is confirmed', () => {
+  const recorded = { id: 'payment-1', provider_reference: 'ORD123', amount_cents: 2500, currency: 'BRL' };
+  const provider = { id: 'ORD123', external_reference: 'payment-1', currency: 'BRL', total_amount: '25.00', total_paid_amount: '25.00', status: 'processed', status_detail: 'accredited' };
+  assert.equal(mercadoPago.verifiedOrderStatus(provider, recorded), 'succeeded');
+});
+
+test('an unconfirmed or differently priced order cannot be approved', () => {
+  const recorded = { id: 'payment-1', provider_reference: 'ORD123', amount_cents: 2500, currency: 'BRL' };
+  const provider = { id: 'ORD123', external_reference: 'payment-1', currency: 'BRL', total_amount: '25.00', total_paid_amount: '0.00', status: 'created', status_detail: 'created' };
+  assert.equal(mercadoPago.verifiedOrderStatus(provider, recorded), 'processing');
+  assert.throws(() => mercadoPago.verifiedOrderStatus({ ...provider, status: 'processed', status_detail: 'accredited' }, recorded));
+  assert.throws(() => mercadoPago.verifiedOrderStatus({ ...provider, total_amount: '24.99' }, recorded));
+  assert.throws(() => mercadoPago.verifiedOrderStatus({ ...provider, external_reference: 'payment-2' }, recorded));
+  assert.throws(() => mercadoPago.verifiedOrderStatus({ ...provider, currency: 'USD' }, recorded));
+});
+
+test('webhook signature is verified against the official manifest', () => {
+  const original = process.env.MERCADOPAGO_WEBHOOK_SECRET;
+  process.env.MERCADOPAGO_WEBHOOK_SECRET = 'test-secret';
+  try {
+    const dataId = 'ORDABC123';
+    const requestId = 'request-123';
+    const ts = '1742505638683';
+    const manifest = `id:ordabc123;request-id:${requestId};ts:${ts};`;
+    const v1 = crypto.createHmac('sha256', 'test-secret').update(manifest).digest('hex');
+    assert.equal(mercadoPago.webhookIsValid({ dataId, requestId, signature: `ts=${ts},v1=${v1}` }), true);
+    assert.equal(mercadoPago.webhookIsValid({ dataId: 'ORDWRONG', requestId, signature: `ts=${ts},v1=${v1}` }), false);
+  } finally {
+    if (original === undefined) delete process.env.MERCADOPAGO_WEBHOOK_SECRET;
+    else process.env.MERCADOPAGO_WEBHOOK_SECRET = original;
+  }
+});
+
+test('createOrder produces a checkout order and does not expose tokens', async () => {
+  const oldFetch = global.fetch;
+  const env = {
+    MERCADOPAGO_ACCESS_TOKEN: process.env.MERCADOPAGO_ACCESS_TOKEN,
+    APP_BASE_URL: process.env.APP_BASE_URL
+  };
+  process.env.MERCADOPAGO_ACCESS_TOKEN = 'test-platform-token';
+  process.env.APP_BASE_URL = 'https://reusa.example';
+  try {
+    global.fetch = async (url, options) => {
+      assert.equal(url, 'https://api.mercadopago.com/v1/orders');
+      assert.equal(options.headers.Authorization, 'Bearer seller-token');
+      assert.equal(options.headers['X-Idempotency-Key'], 'payment-1');
+      const body = JSON.parse(options.body);
+      assert.equal(body.type, 'online');
+      assert.equal(body.processing_mode, 'manual');
+      assert.equal(body.total_amount, '25.00');
+      assert.equal(body.external_reference, 'payment-1');
+      assert.equal(body.config.online.success_url, 'https://reusa.example/anuncios/post-1');
+      return { ok: true, json: async () => ({ id: 'ORD123', checkout_url: 'https://www.mercadopago.com.br/checkout/v1/redirect?order_id=ORD123' }) };
+    };
+    const order = await mercadoPago.createOrder({ paymentId: 'payment-1', postId: 'post-1', title: 'Item ReUsa+', amountCents: 2500, method: 'pix', payerEmail: 'comprador@example.test', sellerAccessToken: 'seller-token' });
+    assert.equal(order.id, 'ORD123');
+    assert.match(order.checkoutUrl, /^https:\/\/www\.mercadopago\.com\.br/);
+  } finally {
+    global.fetch = oldFetch;
+    for (const [key, value] of Object.entries(env)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
