@@ -132,9 +132,11 @@ test('Pix automatic order provides QR code and does not expose access tokens', a
   const original = {
     MERCADOPAGO_PIX_ENABLED: process.env.MERCADOPAGO_PIX_ENABLED,
     MERCADOPAGO_ACCESS_TOKEN: process.env.MERCADOPAGO_ACCESS_TOKEN,
-    APP_BASE_URL: process.env.APP_BASE_URL
+    APP_BASE_URL: process.env.APP_BASE_URL,
+    MERCADOPAGO_TEST_MODE: process.env.MERCADOPAGO_TEST_MODE
   };
   const previousFetch = global.fetch;
+  process.env.MERCADOPAGO_TEST_MODE = 'true';
   process.env.MERCADOPAGO_PIX_ENABLED = 'true';
   process.env.MERCADOPAGO_ACCESS_TOKEN = 'test-token';
   process.env.APP_BASE_URL = 'https://reusa.example';
@@ -145,6 +147,7 @@ test('Pix automatic order provides QR code and does not expose access tokens', a
       assert.equal(options.headers['X-Idempotency-Key'], 'payment-pix-1');
       const body = JSON.parse(options.body);
       assert.equal(body.processing_mode, 'automatic');
+      assert.equal(body.payer.first_name, 'APRO');
       assert.equal(body.total_amount, '2.90');
       assert.equal(body.transactions.payments[0].payment_method.id, 'pix');
       assert.equal(body.transactions.payments[0].payment_method.type, 'bank_transfer');
@@ -182,4 +185,13 @@ test('Pix webhook validates amount and country and never approves a pending tran
   assert.throws(() => mercadoPago.verifiedOrderStatus({ ...approved, country_code: 'ARG' }, recorded));
   assert.throws(() => mercadoPago.verifiedOrderStatus({ ...approved, transactions: { payments: [{ ...approved.transactions.payments[0], amount: '2.89' }] } }, recorded));
   assert.throws(() => mercadoPago.verifiedOrderStatus({ ...approved, transactions: { payments: [{ ...approved.transactions.payments[0], payment_method: { id: 'card' } }] } }, recorded));
+});
+
+test('Pix sandbox QR image is generated when the provider only returns a copy-and-paste code', async () => {
+  const details = await mercadoPago.pixDisplay({ transactions: { payments: [{
+    payment_method: { id: 'pix', qr_code: '00020126580014br.gov.bcb.pix' }
+  }] } });
+  assert.equal(details.qrCode, '00020126580014br.gov.bcb.pix');
+  assert.ok(details.qrCodeBase64.length > 100);
+  assert.equal(Buffer.from(details.qrCodeBase64, 'base64').subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
 });
