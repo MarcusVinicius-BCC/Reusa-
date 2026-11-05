@@ -33,6 +33,14 @@ function isConfigured() {
   return Boolean(accessToken() && appBaseUrl());
 }
 
+function testMode() {
+  return process.env.MERCADOPAGO_TEST_MODE === 'true';
+}
+
+function checkoutSellerToken(encryptedToken) {
+  return testMode() ? accessToken() : revealToken(encryptedToken);
+}
+
 function oauthConfigured() {
   return Boolean(String(process.env.MERCADOPAGO_CLIENT_ID || '').trim() && String(process.env.MERCADOPAGO_CLIENT_SECRET || '').trim());
 }
@@ -190,4 +198,4 @@ async function payment(paymentId, sellerAccessToken) {
   return mercadoPagoRequest(`/v1/payments/${encodeURIComponent(paymentId)}`, {}, sellerAccessToken || accessToken());
 }
 
-module.exports = { authorizationUrl, createOrder, exchangeCode, isConfigured, oauthConfigured, order, payment, protectToken, revealToken, verifiedOrderStatus, webhookIsValid };
+module.exports = { authorizationUrl, checkoutSellerToken, createOrder, exchangeCode, isConfigured, oauthConfigured, order, payment, protectToken, revealToken, testMode, verifiedOrderStatus, webhookIsValid };
