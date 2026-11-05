@@ -424,7 +424,7 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
         try {
           const seller = await db.one('SELECT mercado_pago_access_token FROM users WHERE id=$1', [payment.payee_id]);
           const token = mercadoPago.checkoutSellerToken(seller?.mercado_pago_access_token);
-          if (token) pix = mercadoPago.pixDetails(await mercadoPago.order(payment.provider_reference, token));
+          if (token) pix = await mercadoPago.pixDisplay(await mercadoPago.order(payment.provider_reference, token));
         } catch (error) {
           console.warn('[mercadopago-pix] Pix instructions temporarily unavailable', { status: error.status || 502 });
         }
