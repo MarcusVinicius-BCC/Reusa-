@@ -511,13 +511,13 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
         const lockedNegotiation = (await client.query('SELECT * FROM negotiations WHERE id=$1 FOR UPDATE', [negotiation.id])).rows[0];
         const existing = (await client.query('SELECT * FROM payments WHERE negotiation_id=$1 AND idempotency_key=$2', [lockedNegotiation.id, idempotencyKey])).rows[0];
         if (existing) {
-          if (existing.amount_cents !== amountCents || existing.currency !== currency || existing.method !== method) {
+          if (Number(existing.amount_cents) !== amountCents || existing.currency !== currency || existing.method !== method) {
             throw Object.assign(new Error('The idempotency key was already used with different payment data'), { status: 409 });
           }
           return { payment: existing, idempotentReplay: true };
         }
         if (lockedNegotiation.proposal_status !== 'accepted' ||
-            lockedNegotiation.proposal_amount_cents !== amountCents || lockedNegotiation.proposal_method !== method) {
+            Number(lockedNegotiation.proposal_amount_cents) !== amountCents || lockedNegotiation.proposal_method !== method) {
           throw Object.assign(new Error('Payment must use the accepted proposal amount and method'), { status: 400 });
         }
         if ((await client.query("SELECT id FROM payments WHERE negotiation_id=$1 AND status='succeeded'", [lockedNegotiation.id])).rowCount) {
