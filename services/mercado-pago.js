@@ -119,7 +119,7 @@ async function createOrder({ paymentId, postId, title, amountCents, payerEmail, 
   }
   const amount = (amountCents / 100).toFixed(2);
   const returnUrl = `${appBaseUrl()}/anuncios/${encodeURIComponent(postId)}`;
-  // Checkout Pro via Orders: restrict the checkout to the payment method the buyer selected.
+  // Match the accepted payment method; keep wallet and account money available.
   const excludedTypes = method === 'pix'
     ? ['credit_card', 'debit_card', 'ticket']
     : method === 'card'
@@ -169,7 +169,7 @@ function verifiedOrderStatus(providerOrder, storedPayment) {
       toCents(providerOrder.total_amount) !== Number(storedPayment.amount_cents)) {
     throw Object.assign(new Error('Mercado Pago order does not match the recorded payment'), { status: 409 });
   }
-  const status = String(providerOrder.status || '');
+  const status = String(providerOrder.status || '').toLowerCase();
   const detail = String(providerOrder.status_detail || '');
   if (status === 'processed' && detail === 'accredited') {
     if (toCents(providerOrder.total_paid_amount) !== Number(storedPayment.amount_cents)) {
@@ -177,9 +177,11 @@ function verifiedOrderStatus(providerOrder, storedPayment) {
     }
     return 'succeeded';
   }
-  if (status === 'refunded' || detail === 'partially_refunded') return 'refunded';
-  if (status === 'failed' || status === 'canceled' || status === 'cancelled') return 'failed';
-  if (['created', 'processing', 'action_required'].includes(status)) return 'processing';
+  if (status === 'refunded') return 'refunded';
+  // Partial refunds require a separate reconciliation flow; do not claim a full refund.
+  if (detail === 'partially_refunded') return null;
+  if (status === 'failed' || status === 'canceled' || status === 'cancelled' || status === 'expired') return 'failed';
+  if (['created', 'processing', 'action_required', 'pending'].includes(status)) return 'processing';
   return null;
 }
 
