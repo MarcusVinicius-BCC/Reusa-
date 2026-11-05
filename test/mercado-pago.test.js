@@ -88,7 +88,7 @@ test('sandbox mode always uses the application test token instead of a seller OA
   }
 });
 
-test('order restricts boleto to tickets and card to card types', async () => {
+test('order permits card but rejects boleto', async () => {
   const oldFetch = global.fetch;
   const oldToken = process.env.MERCADOPAGO_ACCESS_TOKEN;
   const oldBaseUrl = process.env.APP_BASE_URL;
@@ -100,11 +100,10 @@ test('order restricts boleto to tickets and card to card types', async () => {
       captured.push(JSON.parse(options.body).config.payment_method);
       return { ok: true, json: async () => ({ id: 'ORD123', checkout_url: 'https://www.mercadopago.com.br/checkout/v1/redirect?order_id=ORD123' }) };
     };
-    for (const method of ['boleto', 'card']) {
-      await mercadoPago.createOrder({ paymentId: 'payment-'+method, postId: 'post-1', title: 'Item ReUsa+', amountCents: 2500, method, payerEmail: 'buyer@example.test', sellerAccessToken: 'seller-token' });
-    }
-    assert.deepEqual(captured[0], { not_allowed_types: ['credit_card', 'debit_card', 'bank_transfer'] });
-    assert.deepEqual(captured[1], { not_allowed_types: ['ticket', 'bank_transfer'] });
+    await assert.rejects(mercadoPago.createOrder({ paymentId: 'payment-boleto', postId: 'post-1', title: 'Item ReUsa+', amountCents: 2500, method: 'boleto', payerEmail: 'buyer@example.test', sellerAccessToken: 'seller-token' }), /Unsupported payment method/);
+    assert.equal(captured.length, 0);
+    await mercadoPago.createOrder({ paymentId: 'payment-card', postId: 'post-1', title: 'Item ReUsa+', amountCents: 2500, method: 'card', payerEmail: 'buyer@example.test', sellerAccessToken: 'seller-token' });
+    assert.deepEqual(captured[0], { not_allowed_types: ['ticket', 'bank_transfer'] });
   } finally {
     global.fetch = oldFetch;
     if (oldToken === undefined) delete process.env.MERCADOPAGO_ACCESS_TOKEN;
