@@ -356,7 +356,7 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       if (negotiation.interested_id !== req.user.id) return res.status(403).json({ error: 'Only the interested user can send this proposal' });
       if (negotiation.proposal_status && negotiation.proposal_status !== 'none') return res.status(409).json({ error: 'Você já enviou uma oferta para este anúncio.' });
       if (negotiation.status !== 'interested') return res.status(400).json({ error: 'This negotiation is no longer accepting proposals' });
-      const post = await db.one('SELECT title,description,category,goal FROM posts WHERE id=$1', [negotiation.post_id]);
+      const post = await db.one('SELECT title,goal FROM posts WHERE id=$1', [negotiation.post_id]);
       if (!post || post.goal !== SALE_GOAL) return res.status(400).json({ error: 'Money offers are only available for items marked for sale' });
       if (!Number.isSafeInteger(amountCents) || amountCents < 100 || amountCents > 100000000) return res.status(400).json({ error: 'Amount must be between R$ 1,00 and R$ 1.000.000,00' });
       if (!['pix', 'card'].includes(method)) return res.status(400).json({ error: 'Use pix ou cartão' });
@@ -540,9 +540,9 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       const paymentId = 'payment-' + crypto.createHash('sha256').update(`${negotiation.id}:${idempotencyKey}`).digest('hex').slice(0, 40);
       let provider;
       if (mercadoPago.isConfigured()) {
-        const payer = await db.one('SELECT email,name,created_at FROM users WHERE id=$1', [negotiation.interested_id]);
+        const payer = await db.one('SELECT email FROM users WHERE id=$1', [negotiation.interested_id]);
         const seller = await db.one('SELECT mercado_pago_access_token FROM users WHERE id=$1', [negotiation.owner_id]);
-        provider = await (method === 'pix' && mercadoPago.pixEnabled() ? mercadoPago.createPixOrder : mercadoPago.createOrder)({ paymentId, postId: negotiation.post_id, title: post.title, description: post.description, category: post.category, amountCents, payerEmail: payer?.email, payerName: payer?.name, payerRegisteredAt: payer?.created_at, method, sellerAccessToken: mercadoPago.checkoutSellerToken(seller?.mercado_pago_access_token) });
+        provider = await (method === 'pix' && mercadoPago.pixEnabled() ? mercadoPago.createPixOrder : mercadoPago.createOrder)({ paymentId, postId: negotiation.post_id, title: post.title, amountCents, payerEmail: payer?.email, method, sellerAccessToken: mercadoPago.checkoutSellerToken(seller?.mercado_pago_access_token) });
       } else if (process.env.NODE_ENV === 'test') {
         provider = { id: `test_${crypto.randomUUID()}`, checkoutUrl: null };
       } else {
