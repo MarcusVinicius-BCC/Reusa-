@@ -163,6 +163,207 @@ img { display: block; max-width: 100%; }
 .payment-waiting-card h2 { margin: 5px 0 6px; color: #102d20; font: 800 19px/1.2 'Hanken Grotesk', sans-serif; }
 .payment-waiting-card p { margin: 0; color: #527264; font-size: 13px; line-height: 1.5; }
 .payment-waiting-card > .secondary-btn { grid-column: 2; justify-self: start; margin-top: 2px; }
+
+/* Pagamento Pix: segue os cartões e a paleta verde do ReUsa+. */
+.payment-waiting-summary { min-width: 0; }
+.payment-waiting-card--pix { grid-template-columns: 46px minmax(0, 1fr); }
+.payment-waiting-card--pix .pix-instructions {
+  grid-column: 1 / -1;
+  min-width: 0;
+  width: 100%;
+  overflow: hidden;
+  margin-top: 4px;
+  border: 1px solid #cce6d6;
+  border-radius: 18px;
+  background: #fff;
+  box-shadow: 0 8px 22px rgba(4, 65, 38, .055);
+}
+.pix-instructions-heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 19px 20px;
+  background: linear-gradient(120deg, #e7f8ed, #f4fcf8);
+  border-bottom: 1px solid #d4e9dc;
+}
+.pix-instructions-symbol {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 43px;
+  height: 43px;
+  border-radius: 13px;
+  background: #d0f0db;
+  color: #087848;
+  font-size: 25px;
+}
+.pix-instructions-heading h3 {
+  margin: 0 0 4px;
+  font: 800 19px/1.25 'Hanken Grotesk', sans-serif;
+  color: #102d20;
+}
+.payment-waiting-card .pix-instructions-heading p {
+  color: #456957;
+  font-size: 13px;
+  line-height: 1.55;
+}
+.pix-instructions-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 280px) minmax(0, 1fr);
+  gap: 20px;
+  align-items: stretch;
+  padding: 20px;
+}
+.pix-qr-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 7px;
+  min-width: 0;
+  padding: 17px 13px;
+  border: 1px solid #d7e8dd;
+  border-radius: 15px;
+  text-align: center;
+  background: #f8fcf9;
+}
+.pix-qr-frame {
+  display: grid;
+  place-items: center;
+  width: min(100%, 234px);
+  aspect-ratio: 1;
+  padding: 9px;
+  margin-bottom: 5px;
+  border-radius: 12px;
+  border: 1px solid #d9e9df;
+  background: #fff;
+}
+.pix-qr-frame img { display: block; width: 100%; height: auto; max-height: 100%; object-fit: contain; }
+.pix-qr-placeholder { display: grid; place-items: center; width: 180px; height: 180px; color: #8db6a0; font-size: 88px; }
+.pix-qr-panel strong { color: #153d28; font-size: 14px; font-weight: 800; }
+.pix-qr-panel > span:not(.pix-qr-placeholder) {
+  max-width: 235px;
+  color: #577264;
+  font-size: 12px;
+  line-height: 1.55;
+}
+.pix-copy-panel {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 12px;
+  padding: 4px 0;
+}
+.pix-copy-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: #0b784a;
+}
+.pix-copy-panel-title .material-symbols-outlined { font-size: 21px; }
+.pix-copy-panel-title h4 { margin: 0; color: #153d28; font: 800 16px/1.35 'Hanken Grotesk', sans-serif; }
+.pix-copy-panel label { color: #355846; font-size: 12px; font-weight: 800; }
+.pix-copy-panel textarea {
+  box-sizing: border-box;
+  display: block;
+  width: 100%;
+  min-width: 0;
+  min-height: 102px;
+  resize: vertical;
+  padding: 13px;
+  border: 1px solid #c8ddd0;
+  border-radius: 12px;
+  color: #2d4b3a;
+  background: #f8faf9;
+  font: 500 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+.pix-copy-panel textarea:focus { outline: 2px solid #8cdbac; outline-offset: 1px; }
+.pix-copy-panel .pix-copy-button,
+.pix-instructions-footer .pix-refresh-button {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  justify-content: center;
+  min-height: 43px;
+  width: fit-content;
+  max-width: 100%;
+  padding: 10px 17px;
+  border-radius: 12px;
+  font-size: 13px;
+  font-weight: 800;
+  line-height: 1.2;
+  text-align: center;
+  white-space: normal;
+}
+.pix-copy-button .material-symbols-outlined, .pix-refresh-button .material-symbols-outlined { font-size: 18px; }
+.pix-copy-panel .pix-copy-button {
+  background: #087848;
+  color: #fff;
+  border: 1px solid #087848;
+}
+.pix-copy-panel .pix-copy-button:hover { background: #08633e; }
+.pix-copy-panel .pix-instructions-link {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 6px;
+  color: #087848;
+  font-size: 12px;
+  font-weight: 800;
+  text-decoration: none;
+}
+.pix-instructions-link:hover { text-decoration: underline; }
+.pix-instructions-link .material-symbols-outlined { font-size: 17px; }
+.payment-waiting-card .pix-copy-help,
+.payment-waiting-card .pix-copy-empty { color: #5b7566; font-size: 12px; line-height: 1.6; }
+.pix-instructions-footer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 14px;
+  padding: 14px 20px;
+  border-top: 1px solid #e0eee4;
+  background: #f7fbf8;
+}
+.pix-instructions-footer > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1 1 220px;
+  min-width: 0;
+}
+.pix-instructions-footer > div .material-symbols-outlined { color: #21805b; font-size: 22px; flex: none; }
+.pix-instructions-footer small { color: #527264; font-size: 11px; line-height: 1.45; }
+.pix-instructions-footer .pix-refresh-button {
+  border: 1px solid #b7d9c3;
+  color: #12623f;
+  background: #fff;
+  margin: 0;
+  flex: 0 1 auto;
+}
+.pix-instructions-footer .pix-refresh-button:hover { background: #e9f7ee; }
+
+@media (max-width: 680px) {
+  .pix-instructions-grid { grid-template-columns: minmax(0, 1fr); gap: 17px; padding: 15px; }
+  .pix-qr-panel { padding: 16px 12px; }
+  .pix-qr-frame { width: min(100%, 218px); }
+  .pix-instructions-heading { padding: 16px; }
+  .pix-instructions-footer { padding: 14px 16px; }
+}
+@media (max-width: 420px) {
+  .payment-waiting-card--pix { gap: 10px; padding: 13px; }
+  .payment-waiting-card--pix .payment-waiting-icon { width: 38px; height: 38px; border-radius: 12px; }
+  .payment-waiting-card--pix { grid-template-columns: 38px minmax(0, 1fr); }
+  .payment-waiting-card--pix h2 { font-size: 16px; }
+  .pix-instructions-heading h3 { font-size: 17px; }
+  .pix-instructions-heading p { font-size: 12px; }
+  .pix-copy-panel .pix-copy-button, .pix-instructions-footer .pix-refresh-button { width: 100%; }
+}
+
 .proposal-card form { display: grid; gap: 12px; margin-top: 16px; }
 .proposal-card label { display: grid; gap: 6px; color: #315644; font-size: 12px; font-weight: 700; }
 .proposal-card input, .proposal-card select { width: 100%; min-height: 46px; padding: 0 12px; border: 1px solid var(--app-line); border-radius: 12px; background: #fff; color: var(--text); }
