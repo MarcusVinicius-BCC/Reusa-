@@ -485,7 +485,7 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       if (mercadoPago.isConfigured()) {
         const payer = await db.one('SELECT email FROM users WHERE id=$1', [negotiation.interested_id]);
         const seller = await db.one('SELECT mercado_pago_access_token FROM users WHERE id=$1', [negotiation.owner_id]);
-        provider = await mercadoPago.createPreference({ paymentId, postId: negotiation.post_id, title: post.title, amountCents, payerEmail: payer?.email, method, sellerAccessToken: mercadoPago.revealToken(seller?.mercado_pago_access_token) });
+        provider = await mercadoPago.createOrder({ paymentId, postId: negotiation.post_id, title: post.title, amountCents, payerEmail: payer?.email, method, sellerAccessToken: mercadoPago.revealToken(seller?.mercado_pago_access_token) });
       } else if (process.env.NODE_ENV === 'test') {
         provider = { id: `test_${crypto.randomUUID()}`, checkoutUrl: null };
       } else {
@@ -500,8 +500,8 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
           }
           return { payment: existing, idempotentReplay: true };
         }
-        if (lockedNegotiation.proposal_status === 'accepted' &&
-            (lockedNegotiation.proposal_amount_cents !== amountCents || lockedNegotiation.proposal_method !== method)) {
+        if (lockedNegotiation.proposal_status !== 'accepted' ||
+            lockedNegotiation.proposal_amount_cents !== amountCents || lockedNegotiation.proposal_method !== method) {
           throw Object.assign(new Error('Payment must use the accepted proposal amount and method'), { status: 400 });
         }
         if ((await client.query("SELECT id FROM payments WHERE negotiation_id=$1 AND status='succeeded'", [lockedNegotiation.id])).rowCount) {
@@ -517,29 +517,32 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
     } catch (error) { return next(error); }
   });
   app.post('/api/payments/mercadopago/webhook', async (req, res) => {
-    const externalId = req.body?.data?.id || req.body?.id;
-    if (String(req.body?.type || req.body?.topic || '').toLowerCase() !== 'payment' || !externalId) return res.sendStatus(200);
-    if (!mercadoPago.webhookIsValid({ dataId: externalId, requestId: req.get('x-request-id'), signature: req.get('x-signature') })) return res.sendStatus(401);
+    const orderId = String(req.query?.['data.id'] || req.body?.data?.id || '').trim();
+    const topic = String(req.query?.type || req.body?.type || '').toLowerCase();
+    if (topic !== 'order' || !orderId) return res.sendStatus(200);
+    if (!mercadoPago.webhookIsValid({ dataId: orderId, requestId: req.get('x-request-id'), signature: req.get('x-signature') })) return res.sendStatus(401);
     try {
-      const currentPayment = await db.one('SELECT * FROM payments WHERE provider_reference=$1', [String(externalId)]);
-      const seller = currentPayment && await db.one('SELECT mercado_pago_access_token FROM users WHERE id=$1', [currentPayment.payee_id]);
-      const providerPayment = await mercadoPago.payment(externalId, mercadoPago.revealToken(seller?.mercado_pago_access_token));
-      const paymentId = String(providerPayment.external_reference || '');
-      const current = await db.one('SELECT * FROM payments WHERE id=$1', [paymentId]);
+      const current = await db.one('SELECT * FROM payments WHERE provider_reference=$1', [orderId]);
       if (!current) return res.sendStatus(200);
-      const statusMap = { approved: 'succeeded', pending: 'processing', in_process: 'processing', rejected: 'failed', cancelled: 'failed', refunded: 'refunded' };
-      const status = statusMap[providerPayment.status];
+      const seller = await db.one('SELECT mercado_pago_access_token FROM users WHERE id=$1', [current.payee_id]);
+      const sellerToken = mercadoPago.revealToken(seller?.mercado_pago_access_token);
+      if (!sellerToken) return res.sendStatus(503);
+      const providerOrder = await mercadoPago.order(orderId, sellerToken);
+      const status = mercadoPago.verifiedOrderStatus(providerOrder, current);
       if (!status || current.status === status) return res.sendStatus(200);
+      if (['succeeded', 'refunded'].includes(current.status) && status !== 'refunded') return res.sendStatus(200);
       const now = new Date().toISOString();
-      const failureCode = status === 'failed' ? String(providerPayment.status_detail || providerPayment.status) : null;
+      const failureCode = status === 'failed' ? String(providerOrder.status_detail || providerOrder.status) : null;
       await db.transaction(async (client) => {
-        await client.query('UPDATE payments SET status=$1,failure_code=$2,updated_at=$3,paid_at=$4 WHERE id=$5', [status, failureCode, now, status === 'succeeded' ? now : current.paid_at, paymentId]);
-        await client.query('INSERT INTO payment_audit_events(id,payment_id,from_status,to_status,reason,correlation_id,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)', [id('payment-audit'), paymentId, current.status, status, `mercado_pago_${providerPayment.status}`, id('webhook'), now]);
+        const locked = (await client.query('SELECT * FROM payments WHERE id=$1 FOR UPDATE', [current.id])).rows[0];
+        if (!locked || locked.status === status || (['succeeded', 'refunded'].includes(locked.status) && status !== 'refunded')) return;
+        await client.query('UPDATE payments SET status=$1,failure_code=$2,updated_at=$3,paid_at=$4,refunded_at=$5 WHERE id=$6', [status, failureCode, now, status === 'succeeded' ? now : locked.paid_at, status === 'refunded' ? now : locked.refunded_at, locked.id]);
+        await client.query('INSERT INTO payment_audit_events(id,payment_id,from_status,to_status,reason,correlation_id,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)', [id('payment-audit'), locked.id, locked.status, status, `mercado_pago_order_${providerOrder.status}`, id('webhook'), now]);
       });
       return res.sendStatus(200);
     } catch (error) {
-      console.error('Mercado Pago webhook failed', error);
-      return res.sendStatus(500);
+      console.error('Mercado Pago order webhook failed', error);
+      return res.sendStatus(error.status === 409 ? 200 : 500);
     }
   });
   app.patch('/api/posts/:id/status', authenticate, async (req, res, next) => {
