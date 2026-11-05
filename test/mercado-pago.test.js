@@ -68,3 +68,20 @@ test('createOrder produces a checkout order and does not expose tokens', async (
     }
   }
 });
+
+test('sandbox mode always uses the application test token instead of a seller OAuth token', () => {
+  const originalMode = process.env.MERCADOPAGO_TEST_MODE;
+  const originalToken = process.env.MERCADOPAGO_ACCESS_TOKEN;
+  try {
+    process.env.MERCADOPAGO_TEST_MODE = 'true';
+    process.env.MERCADOPAGO_ACCESS_TOKEN = 'application-test-token';
+    assert.equal(mercadoPago.checkoutSellerToken('encrypted-seller-production-token'), 'application-test-token');
+    process.env.MERCADOPAGO_TEST_MODE = 'false';
+    assert.equal(mercadoPago.checkoutSellerToken('invalid-token'), '');
+  } finally {
+    if (originalMode === undefined) delete process.env.MERCADOPAGO_TEST_MODE;
+    else process.env.MERCADOPAGO_TEST_MODE = originalMode;
+    if (originalToken === undefined) delete process.env.MERCADOPAGO_ACCESS_TOKEN;
+    else process.env.MERCADOPAGO_ACCESS_TOKEN = originalToken;
+  }
+});
