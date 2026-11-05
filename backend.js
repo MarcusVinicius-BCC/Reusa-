@@ -2195,7 +2195,7 @@ async function start() {
     if (!post || post.goal !== SALE_GOAL) return res.status(400).json({ error: 'Money offers are only available for items marked for sale' });
     if (negotiation.proposal_status && negotiation.proposal_status !== 'none') return res.status(409).json({ error: 'Você já enviou uma oferta para este anúncio.' });
     if (!Number.isSafeInteger(amountCents) || amountCents < 100 || amountCents > 100000000) return res.status(400).json({ error: 'Amount must be between R$ 1,00 and R$ 1.000.000,00' });
-    if (!['pix', 'card', 'boleto'].includes(method)) return res.status(400).json({ error: 'Use pix, card or boleto' });
+    if (!['pix', 'card'].includes(method)) return res.status(400).json({ error: 'Use pix ou cartão' });
     const now = new Date().toISOString();
     run("UPDATE negotiations SET proposal_status = 'pending', proposal_amount_cents = ?, proposal_method = ?, proposal_created_at = ?, updated_at = ? WHERE id = ?", [amountCents, method, now, now, negotiation.id]);
     if (!eventPublisher.enabled()) notification(negotiation.owner_id, 'negotiation', 'Nova proposta recebida', `Uma proposta de ${formatMoney(amountCents)} foi enviada.`, `/anuncios/${negotiation.post_id}`);
@@ -2365,7 +2365,7 @@ async function start() {
     const post = get('SELECT goal FROM posts WHERE id = ?', [negotiation.post_id]);
     if (!post || post.goal !== SALE_GOAL) return res.status(400).json({ error: 'Payments are only available for items marked for sale' });
     if (!Number.isSafeInteger(amountCents) || amountCents < 100 || amountCents > 100000000) return res.status(400).json({ error: 'Amount must be between R$ 1,00 and R$ 1.000.000,00' });
-    if (currency !== 'BRL' || !['pix', 'card', 'boleto'].includes(method)) return res.status(400).json({ error: 'Use BRL and pix, card or boleto' });
+    if (currency !== 'BRL' || !['pix', 'card'].includes(method)) return res.status(400).json({ error: 'Use BRL and pix ou cartão' });
     if (!/^[A-Za-z0-9._:-]{16,128}$/.test(idempotencyKey)) return res.status(400).json({ error: 'A valid idempotency key is required' });
     const existing = get('SELECT * FROM payments WHERE negotiation_id = ? AND idempotency_key = ?', [negotiation.id, idempotencyKey]);
     if (existing) {
