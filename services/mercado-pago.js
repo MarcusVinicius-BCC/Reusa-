@@ -133,7 +133,7 @@ function toCents(value) {
   return Number.isSafeInteger(cents) ? cents : null;
 }
 
-async function createOrder({ paymentId, postId, title, amountCents, payerEmail, method, sellerAccessToken }) {
+async function createOrder({ paymentId, postId, title, description, category, amountCents, payerEmail, payerName, payerRegisteredAt, method, sellerAccessToken }) {
   if (!isConfigured() || !sellerAccessToken) {
     throw Object.assign(new Error('Mercado Pago platform credentials and a connected seller account are required'), { status: 503 });
   }
@@ -150,6 +150,32 @@ async function createOrder({ paymentId, postId, title, amountCents, payerEmail, 
     pix: { not_allowed_types: ['credit_card', 'debit_card', 'ticket'] },
     card: { not_allowed_types: ['ticket', 'bank_transfer'] }
   };
+  const fullName = String(payerName || '').trim().replace(/\s+/g, ' ').slice(0, 120);
+  const nameParts = fullName.split(' ').filter(Boolean);
+  const sandboxCard = testMode() && method === 'card';
+  const payerDetails = {
+    email: sandboxCard
+      ? `reusa-teste-${crypto.createHash('sha256').update(paymentId).digest('hex').slice(0, 12)}@example.com`
+      : payerEmail,
+    ...(sandboxCard
+      ? { first_name: 'Comprador', last_name: 'Teste' }
+      : nameParts.length
+        ? { first_name: nameParts[0], ...(nameParts.length > 1 ? { last_name: nameParts.slice(1).join(' ') } : {}) }
+        : {})
+  };
+  const categoryMap = {
+    'móveis': 'home', 'moveis': 'home',
+    'eletrônicos': 'electronics', 'eletronicos': 'electronics',
+    'roupas': 'fashion', 'livros': 'books',
+    'plástico': 'recycling', 'plastico': 'recycling',
+    'outros': 'others'
+  };
+  const itemCategory = categoryMap[String(category || '').trim().toLowerCase()] || 'others';
+  const itemDescription = String(description || title || 'Item anunciado no ReUsa+').replace(/\s+/g, ' ').trim().slice(0, 256);
+  const registeredAt = payerRegisteredAt ? new Date(payerRegisteredAt) : null;
+  const additionalInfo = registeredAt && !Number.isNaN(registeredAt.getTime()) && registeredAt.getTime() <= Date.now()
+    ? { 'payer.registration_date': registeredAt.toISOString() }
+    : undefined;
   const selectedPaymentRule = paymentRules[method];
   if (!selectedPaymentRule) {
     throw Object.assign(new Error('Unsupported payment method for checkout'), { status: 400 });
@@ -163,15 +189,18 @@ async function createOrder({ paymentId, postId, title, amountCents, payerEmail, 
       total_amount: amount,
       external_reference: paymentId,
       description: String(title || 'Compra ReUsa+').slice(0, 256),
-      // Isolate the buyer identity in the Checkout Pro test sandbox.
-      // Some real Mercado Pago accounts trigger a real/test-party conflict
-      // even when their email is passed to an ORDTST checkout.
-      // Keep real buyer email unchanged in production and for Pix orders.
-      payer: { email: testMode() && method === 'card'
-        ? `reusa-teste-${crypto.createHash('sha256').update(paymentId).digest('hex').slice(0, 12)}@example.com`
-        : payerEmail },
-      items: [{ title: String(title || 'Compra ReUsa+').slice(0, 256), unit_price: amount, quantity: 1 }],
+      payer: payerDetails,
+      items: [{
+        external_code: String(postId).slice(0, 64),
+        title: String(title || 'Compra ReUsa+').slice(0, 256),
+        description: itemDescription,
+        category_id: itemCategory,
+        unit_price: amount,
+        quantity: 1
+      }],
+      ...(additionalInfo ? { additional_info: additionalInfo } : {}),
       config: {
+        statement_descriptor: 'REUSA PLUS',
         online: {
           success_url: returnUrl,
           pending_url: returnUrl,
