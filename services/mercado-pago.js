@@ -127,14 +127,17 @@ async function createOrder({ paymentId, postId, title, amountCents, payerEmail, 
   }
   const amount = (amountCents / 100).toFixed(2);
   const returnUrl = `${appBaseUrl()}/anuncios/${encodeURIComponent(postId)}`;
-  // Match the accepted payment method; keep wallet and account money available.
-  const excludedTypes = method === 'pix'
-    ? ['credit_card', 'debit_card', 'ticket']
-    : method === 'card'
-      ? ['ticket', 'bank_transfer']
-      : method === 'boleto'
-        ? ['credit_card', 'debit_card', 'bank_transfer']
-        : [];
+  // Checkout Pro uses exclusion rules. Remove alternate payment methods to honor
+  // the payment type accepted by the seller; this is separate from sandbox availability.
+  const paymentRules = {
+    pix: { default_type: 'bank_transfer', not_allowed_types: ['credit_card', 'debit_card', 'ticket', 'account_money', 'wallet'] },
+    boleto: { default_type: 'ticket', not_allowed_types: ['credit_card', 'debit_card', 'bank_transfer', 'account_money', 'wallet'] },
+    card: { default_type: 'credit_card', not_allowed_types: ['ticket', 'bank_transfer', 'account_money', 'wallet'] }
+  };
+  const selectedPaymentRule = paymentRules[method];
+  if (!selectedPaymentRule) {
+    throw Object.assign(new Error('Unsupported payment method for checkout'), { status: 400 });
+  }
   const result = await mercadoPagoRequest('/v1/orders', {
     method: 'POST',
     headers: { 'X-Idempotency-Key': paymentId },
@@ -153,7 +156,7 @@ async function createOrder({ paymentId, postId, title, amountCents, payerEmail, 
           failure_url: returnUrl,
           auto_return: 'approved'
         },
-        payment_method: { not_allowed_types: excludedTypes }
+        payment_method: selectedPaymentRule
       }
     })
   }, sellerAccessToken);
