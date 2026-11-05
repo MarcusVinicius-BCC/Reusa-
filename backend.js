@@ -3130,6 +3130,16 @@ async function start() {
     if (req.path.startsWith('/api/')) {
       const requestId = req.correlationId || uid('request');
       console.error(`[api-error] ${requestId} ${req.method} ${req.originalUrl}:`, error);
+      const status = Number(error?.status);
+      if (Number.isInteger(status) && status >= 400 && status < 500) {
+        const safePaymentErrors = {
+          'Payment must use the accepted proposal amount and method': 'O valor ou a forma de pagamento não coincide com a proposta aceita.',
+          'The idempotency key was already used with different payment data': 'Esta tentativa de pagamento já foi utilizada com dados diferentes.',
+          'This negotiation already has a successful payment': 'Esta negociação já possui um pagamento concluído.'
+        };
+        const message = safePaymentErrors[error?.message];
+        if (message) return res.status(status).json({ error: message, requestId });
+      }
       return res.status(500).json({ error: 'Internal server error', requestId });
     }
     return next(error);
