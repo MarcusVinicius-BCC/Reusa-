@@ -480,6 +480,22 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       if (!post || post.goal !== SALE_GOAL) return res.status(400).json({ error: 'Payments are only available for items marked for sale' });
       if (!Number.isSafeInteger(amountCents) || amountCents < 100 || amountCents > 100000000 || currency !== 'BRL' || !['pix', 'card', 'boleto'].includes(method)) return res.status(400).json({ error: 'Use a valid BRL amount and pix, card or boleto' });
       if (!/^[A-Za-z0-9._:-]{16,128}$/.test(idempotencyKey)) return res.status(400).json({ error: 'A valid idempotency key is required' });
+      // Validate the accepted proposal before contacting Mercado Pago.
+      // Keep the locked validation below to guard concurrent updates.
+      if (negotiation.proposal_status !== 'accepted' ||
+          Number(negotiation.proposal_amount_cents) !== amountCents ||
+          negotiation.proposal_method !== method) {
+        return res.status(400).json({ error: 'O pagamento deve usar exatamente o valor e a forma de pagamento da proposta aceita. Confira a proposta e tente novamente.' });
+      }
+      const previousPayment = await db.one('SELECT * FROM payments WHERE negotiation_id=$1 AND idempotency_key=$2', [negotiation.id, idempotencyKey]);
+      if (previousPayment) {
+        if (Number(previousPayment.amount_cents) !== amountCents || previousPayment.currency !== currency || previousPayment.method !== method) {
+          return res.status(409).json({ error: 'Esta chave de pagamento já foi utilizada com outros dados.' });
+        }
+        return res.status(200).json({ payment: paymentView(previousPayment), idempotentReplay: true });
+      }
+      const successfulPayment = await db.one("SELECT id FROM payments WHERE negotiation_id=$1 AND status='succeeded'", [negotiation.id]);
+      if (successfulPayment) return res.status(409).json({ error: 'Esta negociação já possui um pagamento concluído.' });
       const paymentId = 'payment-' + crypto.createHash('sha256').update(`${negotiation.id}:${idempotencyKey}`).digest('hex').slice(0, 40);
       let provider;
       if (mercadoPago.isConfigured()) {
