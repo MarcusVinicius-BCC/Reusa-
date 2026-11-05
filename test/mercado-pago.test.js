@@ -195,3 +195,20 @@ test('Pix sandbox QR image is generated when the provider only returns a copy-an
   assert.ok(details.qrCodeBase64.length > 100);
   assert.equal(Buffer.from(details.qrCodeBase64, 'base64').subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
 });
+
+test('Pix pilot cannot be enabled with production credentials', () => {
+  const oldMode = process.env.MERCADOPAGO_TEST_MODE;
+  const oldFlag = process.env.MERCADOPAGO_PIX_ENABLED;
+  try {
+    process.env.MERCADOPAGO_PIX_ENABLED = 'true';
+    process.env.MERCADOPAGO_TEST_MODE = 'false';
+    assert.equal(mercadoPago.pixEnabled(), false);
+    process.env.MERCADOPAGO_TEST_MODE = 'true';
+    assert.equal(mercadoPago.pixEnabled(), true);
+  } finally {
+    if (oldMode === undefined) delete process.env.MERCADOPAGO_TEST_MODE;
+    else process.env.MERCADOPAGO_TEST_MODE = oldMode;
+    if (oldFlag === undefined) delete process.env.MERCADOPAGO_PIX_ENABLED;
+    else process.env.MERCADOPAGO_PIX_ENABLED = oldFlag;
+  }
+});
