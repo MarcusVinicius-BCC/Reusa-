@@ -607,6 +607,36 @@ https://seu-dominio/api/auth/google/callback
 Depois configure `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
 `GOOGLE_REDIRECT_URI` e `APP_BASE_URL`.
 
+## Pix integrado — testes controlados
+
+O desenvolvimento do Pix por QR Code está isolado na branch `feat/pix-in-site`,
+que preserva o Checkout Pro para cartão. **Não ative para clientes reais** até
+validar a configuração da aplicação Mercado Pago e a reconciliação financeira.
+
+No Railway, utilizando exclusivamente o Access Token de teste da aplicação:
+
+```env
+MERCADOPAGO_TEST_MODE=true
+MERCADOPAGO_PIX_ENABLED=true
+```
+
+O fluxo de teste envia `payer.first_name=APRO` apenas no modo de teste,
+conforme a documentação de testes do Mercado Pago para Pix via Orders API:
+https://www.mercadopago.com.br/developers/pt/docs/checkout-api-orders/integration-test/pix
+
+A ordem Pix automática usa `POST /v1/orders`, com `payment_method.id=pix`.
+A resposta fornece `qr_code` e possivelmente `qr_code_base64`; quando a
+imagem Base64 vem vazia, o servidor gera uma imagem QR **a partir do próprio
+código retornado pela API**, sem inventar uma cobrança. O comprador consulta
+o estado por sua sessão; a confirmação definitiva depende da order consultada
+no webhook autenticado.
+
+**Limitações:** a simulação do Mercado Pago não equivale a uma transferência
+Pix real. A disponibilidade da funcionalidade na mesma aplicação cadastrada
+para Checkout Pro precisa ser validada com credenciais de teste. A reconciliação
+contra falhas externas, duplicidade concorrente e expiração ainda requer testes
+de integração com PostgreSQL e cenários de produção.
+
 ## Segurança
 
 O projeto inclui:
