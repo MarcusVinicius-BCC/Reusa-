@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const QRCode = require('qrcode');
 const MERCADO_PAGO_API = 'https://api.mercadopago.com';
 const MERCADO_PAGO_AUTH = 'https://auth.mercadopago.com/authorization';
 
@@ -199,6 +200,18 @@ function pixDetails(providerOrder) {
   return { qrCode: qrCode.slice(0, 5000), qrCodeBase64, ticketUrl };
 }
 
+async function pixDisplay(providerOrder) {
+  const details = pixDetails(providerOrder);
+  if (!details) return null;
+  // Pix sandbox commonly omits qr_code_base64. Generate the image from the
+  // returned Pix copy-and-paste payload, never inventing the payment itself.
+  if (details.qrCode && !details.qrCodeBase64) {
+    const png = await QRCode.toDataURL(details.qrCode, { errorCorrectionLevel: 'M', margin: 2, width: 320 });
+    details.qrCodeBase64 = png.replace(/^data:image\/png;base64,/, '');
+  }
+  return details;
+}
+
 async function createPixOrder({ paymentId, amountCents, payerEmail, sellerAccessToken }) {
   if (!pixEnabled()) throw Object.assign(new Error('O Pix integrado ainda não está habilitado.'), { status: 503 });
   if (!isConfigured() || !sellerAccessToken) throw Object.assign(new Error('Mercado Pago is not configured'), { status: 503 });
@@ -214,7 +227,7 @@ async function createPixOrder({ paymentId, amountCents, payerEmail, sellerAccess
       processing_mode: 'automatic',
       total_amount: amount,
       external_reference: paymentId,
-      payer: { email: payerEmail },
+      payer: { email: payerEmail, ...(testMode() ? { first_name: 'APRO' } : {}) },
       transactions: { payments: [{
         amount,
         payment_method: { id: 'pix', type: 'bank_transfer' }
@@ -224,7 +237,7 @@ async function createPixOrder({ paymentId, amountCents, payerEmail, sellerAccess
   if (!response?.id || response.external_reference && response.external_reference !== paymentId) {
     throw Object.assign(new Error('Mercado Pago returned an invalid Pix order'), { status: 502 });
   }
-  const pix = pixDetails(response);
+  const pix = await pixDisplay(response);
   if (!pix || (!pix.qrCode && !pix.ticketUrl)) {
     throw Object.assign(new Error('Mercado Pago did not return Pix instructions'), { status: 502 });
   }
@@ -271,4 +284,4 @@ async function payment(paymentId, sellerAccessToken) {
   return mercadoPagoRequest(`/v1/payments/${encodeURIComponent(paymentId)}`, {}, sellerAccessToken || accessToken());
 }
 
-module.exports = { authorizationUrl, checkoutSellerToken, createOrder, createPixOrder, exchangeCode, isConfigured, oauthConfigured, order, payment, pixDetails, pixEnabled, protectToken, revealToken, testMode, verifiedOrderStatus, webhookIsValid };
+module.exports = { authorizationUrl, checkoutSellerToken, createOrder, createPixOrder, exchangeCode, isConfigured, oauthConfigured, order, payment, pixDetails, pixDisplay, pixEnabled, protectToken, revealToken, testMode, verifiedOrderStatus, webhookIsValid };
