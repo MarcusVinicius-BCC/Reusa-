@@ -523,7 +523,7 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
     if (!mercadoPago.webhookIsValid({ dataId: orderId, requestId: req.get('x-request-id'), signature: req.get('x-signature') })) return res.sendStatus(401);
     try {
       const current = await db.one('SELECT * FROM payments WHERE provider_reference=$1', [orderId]);
-      if (!current) return res.sendStatus(200);
+      if (!current) return res.sendStatus(503); // Retry: the order may not yet be persisted locally.
       const seller = await db.one('SELECT mercado_pago_access_token FROM users WHERE id=$1', [current.payee_id]);
       const sellerToken = mercadoPago.revealToken(seller?.mercado_pago_access_token);
       if (!sellerToken) return res.sendStatus(503);
