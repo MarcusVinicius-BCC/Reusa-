@@ -2361,7 +2361,7 @@ async function start() {
           amountCents,
           payerEmail: payer?.email,
           method,
-          sellerAccessToken: mercadoPago.revealToken(seller?.mercado_pago_access_token)
+          sellerAccessToken: mercadoPago.checkoutSellerToken(seller?.mercado_pago_access_token)
         });
       } catch (error) {
         console.error('Mercado Pago order creation failed', error);
@@ -2421,7 +2421,7 @@ async function start() {
       const current = get('SELECT * FROM payments WHERE provider_reference = ?', [orderId]);
       if (!current) return res.sendStatus(503); // Retry: the order may not yet be persisted locally.
       const seller = get('SELECT mercado_pago_access_token FROM users WHERE id = ?', [current.payee_id]);
-      const sellerToken = mercadoPago.revealToken(seller?.mercado_pago_access_token);
+      const sellerToken = mercadoPago.checkoutSellerToken(seller?.mercado_pago_access_token);
       if (!sellerToken) return res.sendStatus(503);
       const providerOrder = await mercadoPago.order(orderId, sellerToken);
       const status = mercadoPago.verifiedOrderStatus(providerOrder, current);
@@ -2449,7 +2449,7 @@ async function start() {
     if (post.author_id !== req.user.id) return res.status(403).json({ error: 'Only the owner can reserve this post' });
     if (mercadoPago.isConfigured()) {
       const seller = get('SELECT mercado_pago_access_token FROM users WHERE id = ?', [req.user.id]);
-      if (!mercadoPago.revealToken(seller?.mercado_pago_access_token)) {
+      if (!mercadoPago.checkoutSellerToken(seller?.mercado_pago_access_token)) {
         return res.status(409).json({ error: 'Conecte sua conta Mercado Pago antes de reservar este item para receber o pagamento.' });
       }
     }
