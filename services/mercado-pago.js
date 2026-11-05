@@ -104,7 +104,7 @@ async function mercadoPagoRequest(path, options = {}, bearerToken = accessToken(
 
 function toCents(value) {
   const text = String(value ?? '').trim();
-  if (!/^\\d+(?:\\.\\d{1,2})?$/.test(text)) return null;
+  if (!/^[0-9]+(?:[.][0-9]{1,2})?$/.test(text)) return null;
   const [whole, fraction = ''] = text.split('.');
   const cents = Number(whole) * 100 + Number(fraction.padEnd(2, '0'));
   return Number.isSafeInteger(cents) ? cents : null;
