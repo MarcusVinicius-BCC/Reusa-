@@ -1311,17 +1311,19 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
   async function submitPayment(event) {
     event.preventDefault();
     if (!isSale || !negotiation || paymentBusy) return;
-    const amountInput = paymentForm.amount || (negotiation.proposalAmountCents
-      ? formatMoneyInput(String(negotiation.proposalAmountCents))
-      : '');
-    const amountCents = Number(String(amountInput).replace(/\D/g, ''));
-    if (!Number.isSafeInteger(amountCents) || amountCents < 100) return alert('Informe um valor válido a partir de R$ 1,00.');
+    // The accepted proposal is authoritative: buyers cannot change its amount or method at checkout.
+    const amountCents = Number(negotiation.proposalAmountCents);
+    const method = negotiation.proposalMethod;
+    if (negotiation.proposalStatus !== 'accepted' || !Number.isSafeInteger(amountCents) || amountCents < 100 ||
+        !['pix', 'card', 'boleto'].includes(method)) {
+      return alert('A proposta aceita está incompleta ou desatualizada. Atualize a página e confira a negociação.');
+    }
     setPaymentBusy(true);
     try {
       const result = await api.createPayment(negotiation.id, {
         amountCents,
         currency: 'BRL',
-        method: paymentForm.method || negotiation.proposalMethod || 'pix',
+        method,
         idempotencyKey: `web-${session.id}-${negotiation.id}-${Date.now()}`
       });
       setPayment(result.payment);
@@ -1329,7 +1331,6 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
         window.location.assign(result.payment.checkoutUrl);
         return;
       }
-
       alert(result.payment.status === 'succeeded' ? 'Pagamento confirmado.' : 'Pagamento aguardando confirmação.');
     } catch (error) {
       alert(error.message);
@@ -1588,7 +1589,7 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
     </section> : null}
     {!ownPost && isSale && negotiation?.status === 'interested' && negotiation.proposalStatus === 'none' ? <section className="review-form-card proposal-card"><span className="eyebrow">Oferta com pagamento</span><h2>Envie sua proposta</h2><p>Informe o valor e a forma de pagamento. O vendedor receberá sua proposta para análise.</p><form onSubmit={submitProposal}><label>Valor da oferta (R$)<input inputMode="decimal" value={proposalForm.amount} onChange={(event) => setProposalForm((current) => ({ ...current, amount: formatMoneyInput(event.target.value) }))} placeholder="10,00" required /></label>    <label>Forma de pagamento<select value={proposalForm.method} onChange={(event) => setProposalForm((current) => ({ ...current, method: event.target.value }))}><option value="pix">PIX</option><option value="card">Cartão</option><option value="boleto">Boleto</option></select></label><button className="primary-btn" disabled={proposalBusy}>{proposalBusy ? 'Enviando...' : 'Enviar proposta'}<span className="material-symbols-outlined">send</span></button></form></section> : null}
     {!ownPost && isSale && negotiation?.status === 'interested' && negotiation.proposalStatus === 'pending' ? <section className="payment-waiting-card"><div className="payment-waiting-icon"><span className="material-symbols-outlined">hourglass_top</span></div><div><span className="eyebrow">Proposta enviada</span><h2>Aguardando resposta do vendedor</h2><p>Sua oferta de R$ {((negotiation.proposalAmountCents || 0) / 100).toFixed(2).replace('.', ',')} foi enviada. O pagamento ficará disponível depois que o vendedor aceitar e reservar o item.</p></div><button className="secondary-btn" onClick={startConversation}><span className="material-symbols-outlined">chat_bubble</span>Conversar com o anunciante</button></section> : null}
-    {!ownPost && isSale && negotiation?.status === 'reserved' && !payment ? <section className="review-form-card proposal-card"><span className="eyebrow">Pagamento liberado</span><h2>Finalize seu pagamento</h2><p>O vendedor reservou este anúncio para você. Escolha uma forma de pagamento para continuar no Mercado Pago.</p><form onSubmit={submitPayment}><label>Valor do pagamento (R$)<input inputMode="decimal" value={paymentForm.amount || (negotiation.proposalAmountCents ? formatMoneyInput(String(negotiation.proposalAmountCents)) : '')} onChange={(event) => setPaymentForm((current) => ({ ...current, amount: formatMoneyInput(event.target.value) }))} placeholder="10,00" required /></label><label>Forma de pagamento<select value={paymentForm.method} onChange={(event) => setPaymentForm((current) => ({ ...current, method: event.target.value }))}><option value="pix">PIX</option><option value="card">Cartão</option><option value="boleto">Boleto</option></select></label><button className="primary-btn" disabled={paymentBusy}>{paymentBusy ? 'Abrindo checkout...' : 'Continuar para pagamento'}<span className="material-symbols-outlined">payments</span></button></form></section> : null}
+    {!ownPost && isSale && negotiation?.status === 'reserved' && !payment ? <section className="review-form-card proposal-card"><span className="eyebrow">Pagamento liberado</span><h2>Finalize seu pagamento</h2><p>O vendedor aceitou a proposta. O pagamento seguirá o valor e o método já combinados.</p><form onSubmit={submitPayment}><label>Valor aceito (R$)<input readOnly value={(Number(negotiation.proposalAmountCents || 0) / 100).toFixed(2).replace('.', ',')} /></label><label>Forma de pagamento aceita<input readOnly value={({ pix: 'PIX', card: 'Cartão', boleto: 'Boleto' })[negotiation.proposalMethod] || 'Não informada'} /></label><button className="primary-btn" disabled={paymentBusy}>{paymentBusy ? 'Abrindo checkout...' : 'Continuar para pagamento'}<span className="material-symbols-outlined">payments</span></button></form></section> : null}
     {!ownPost && isSale && payment ? <section className="payment-waiting-card"><div className="payment-waiting-icon"><span className="material-symbols-outlined">{payment.status === 'succeeded' ? 'check_circle' : payment.status === 'processing' ? 'hourglass_top' : 'error'}</span></div><div><span className="eyebrow">Mercado Pago</span><h2>{payment.status === 'succeeded' ? 'Pagamento confirmado' : payment.status === 'processing' ? 'Aguardando confirmação do pagamento' : 'Pagamento não aprovado'}</h2><p>Valor: R$ {(payment.amountCents / 100).toFixed(2).replace('.', ',')} · Método: {payment.method.toUpperCase()}</p></div>{payment.status === 'processing' && payment.checkoutUrl ? <a className="secondary-btn" href={payment.checkoutUrl}>Abrir checkout</a> : null}</section> : null}
     {negotiation?.status === 'completed' && !reviewed ? <section className="review-form-card"><span className="eyebrow">Negociação concluída</span><h2>Como foi a experiência?</h2><form onSubmit={submitReview}><label>Nota<select value={reviewForm.rating} onChange={(event) => setReviewForm((current) => ({ ...current, rating: Number(event.target.value) }))}>{[5, 4, 3, 2, 1].map((rating) => <option key={rating} value={rating}>{'⭐'.repeat(rating)} ({rating})</option>)}</select></label><textarea value={reviewForm.comment} onChange={(event) => setReviewForm((current) => ({ ...current, comment: event.target.value }))} maxLength="500" placeholder="Comentário opcional" /><button className="primary-btn">Enviar avaliação</button></form></section> : null}
     <section className="detail-comments"><div className="section-title"><h2>Comentários ({post.comments || 0})</h2></div>{comments.length ? comments.map((comment) => <article className="detail-comment" key={comment.id}><span className="avatar-placeholder material-symbols-outlined">person</span><div><strong>{comment.name}</strong><p>{comment.text}</p></div><button className="text-btn" onClick={() => openReport('comment', comment.id)}>Denunciar</button></article>) : <EmptyState icon="chat_bubble" title="Ainda não há comentários" text="Seja a primeira pessoa a conversar sobre este item." /> }<form className="comment-form" onSubmit={submitComment}><input value={commentText} onChange={(event) => setCommentText(event.target.value)} maxLength="500" placeholder="Escreva um comentário..." /><button className="send-btn" aria-label="Enviar comentário"><span className="material-symbols-outlined">send</span></button></form></section>
