@@ -2195,7 +2195,7 @@ async function start() {
     if (!post || post.goal !== SALE_GOAL) return res.status(400).json({ error: 'Money offers are only available for items marked for sale' });
     if (negotiation.proposal_status && negotiation.proposal_status !== 'none') return res.status(409).json({ error: 'Você já enviou uma oferta para este anúncio.' });
     if (!Number.isSafeInteger(amountCents) || amountCents < 100 || amountCents > 100000000) return res.status(400).json({ error: 'Amount must be between R$ 1,00 and R$ 1.000.000,00' });
-    if (!['pix', 'card', 'boleto'].includes(method)) return res.status(400).json({ error: 'Use pix, card or boleto' });
+    if (!['pix', 'card'].includes(method)) return res.status(400).json({ error: 'Use pix ou cartão' });
     const now = new Date().toISOString();
     run("UPDATE negotiations SET proposal_status = 'pending', proposal_amount_cents = ?, proposal_method = ?, proposal_created_at = ?, updated_at = ? WHERE id = ?", [amountCents, method, now, now, negotiation.id]);
     if (!eventPublisher.enabled()) notification(negotiation.owner_id, 'negotiation', 'Nova proposta recebida', `Uma proposta de ${formatMoney(amountCents)} foi enviada.`, `/anuncios/${negotiation.post_id}`);
@@ -2245,11 +2245,21 @@ async function start() {
     persistDb();
     return res.json({ proposal: { negotiationId: negotiation.id, status: decision, amountCents: negotiation.proposal_amount_cents, method: negotiation.proposal_method, createdAt: negotiation.proposal_created_at }, reserved: decision === 'accepted' });
   });
-  app.get('/api/negotiations/:id/payment', authMiddleware, (req, res) => {
+  app.get('/api/negotiations/:id/payment', authMiddleware, async (req, res) => {
     const negotiation = get('SELECT * FROM negotiations WHERE id = ?', [req.params.id]);
     if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
     if (![negotiation.owner_id, negotiation.interested_id].includes(req.user.id)) return res.status(403).json({ error: 'Payment access denied' });
     const payment = get('SELECT * FROM payments WHERE negotiation_id = ? ORDER BY created_at DESC LIMIT 1', [negotiation.id]);
+    let pix = null;
+    if (payment && payment.method === 'pix' && payment.status === 'processing' && payment.payer_id === req.user.id && !payment.checkout_url && mercadoPago.pixEnabled()) {
+      try {
+        const seller = get('SELECT mercado_pago_access_token FROM users WHERE id = ?', [payment.payee_id]);
+        const token = mercadoPago.checkoutSellerToken(seller?.mercado_pago_access_token);
+        if (token) pix = await mercadoPago.pixDisplay(await mercadoPago.order(payment.provider_reference, token));
+      } catch (error) {
+        console.warn('[mercadopago-pix] QR instructions unavailable', { status: error.status || 502 });
+      }
+    }
     return res.json({ payment: payment ? {
       id: payment.id,
       negotiationId: payment.negotiation_id,
@@ -2264,7 +2274,8 @@ async function start() {
       failureCode: payment.failure_code,
       createdAt: payment.created_at,
       updatedAt: payment.updated_at,
-      paidAt: payment.paid_at
+      paidAt: payment.paid_at,
+      ...(pix ? { pix } : {})
     } : null });
   });
 
@@ -2354,7 +2365,7 @@ async function start() {
     const post = get('SELECT goal FROM posts WHERE id = ?', [negotiation.post_id]);
     if (!post || post.goal !== SALE_GOAL) return res.status(400).json({ error: 'Payments are only available for items marked for sale' });
     if (!Number.isSafeInteger(amountCents) || amountCents < 100 || amountCents > 100000000) return res.status(400).json({ error: 'Amount must be between R$ 1,00 and R$ 1.000.000,00' });
-    if (currency !== 'BRL' || !['pix', 'card', 'boleto'].includes(method)) return res.status(400).json({ error: 'Use BRL and pix, card or boleto' });
+    if (currency !== 'BRL' || !['pix', 'card'].includes(method)) return res.status(400).json({ error: 'Use BRL and pix ou cartão' });
     if (!/^[A-Za-z0-9._:-]{16,128}$/.test(idempotencyKey)) return res.status(400).json({ error: 'A valid idempotency key is required' });
     const existing = get('SELECT * FROM payments WHERE negotiation_id = ? AND idempotency_key = ?', [negotiation.id, idempotencyKey]);
     if (existing) {
@@ -2382,7 +2393,7 @@ async function start() {
         const post = get('SELECT title FROM posts WHERE id = ?', [negotiation.post_id]);
         const payer = get('SELECT email FROM users WHERE id = ?', [negotiation.interested_id]);
         const seller = get('SELECT mercado_pago_access_token FROM users WHERE id = ?', [negotiation.owner_id]);
-        provider = await mercadoPago.createOrder({
+        provider = await (method === 'pix' && mercadoPago.pixEnabled() ? mercadoPago.createPixOrder : mercadoPago.createOrder)({
           paymentId,
           postId: negotiation.post_id,
           title: post?.title,
@@ -2436,7 +2447,8 @@ async function start() {
       id: payment.id, negotiationId: payment.negotiation_id, payerId: payment.payer_id, payeeId: payment.payee_id,
       amountCents: payment.amount_cents, currency: payment.currency, method: payment.method, status: payment.status,
       providerReference: payment.provider_reference, checkoutUrl: payment.checkout_url, failureCode: payment.failure_code, createdAt: payment.created_at,
-      updatedAt: payment.updated_at, paidAt: payment.paid_at
+      updatedAt: payment.updated_at, paidAt: payment.paid_at,
+      ...(provider.pix ? { pix: provider.pix } : {})
     }, idempotentReplay: false });
   });
 

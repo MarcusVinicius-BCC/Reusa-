@@ -359,7 +359,7 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       const post = await db.one('SELECT title,goal FROM posts WHERE id=$1', [negotiation.post_id]);
       if (!post || post.goal !== SALE_GOAL) return res.status(400).json({ error: 'Money offers are only available for items marked for sale' });
       if (!Number.isSafeInteger(amountCents) || amountCents < 100 || amountCents > 100000000) return res.status(400).json({ error: 'Amount must be between R$ 1,00 and R$ 1.000.000,00' });
-      if (!['pix', 'card', 'boleto'].includes(method)) return res.status(400).json({ error: 'Use pix, card or boleto' });
+      if (!['pix', 'card'].includes(method)) return res.status(400).json({ error: 'Use pix ou cartão' });
       const createdAt = new Date().toISOString();
       const updated = await db.transaction(async (client) => {
         const result = await client.query('UPDATE negotiations SET proposal_status=$1,proposal_amount_cents=$2,proposal_method=$3,proposal_created_at=$4,updated_at=$4 WHERE id=$5 RETURNING *', ['pending', amountCents, method, createdAt, negotiation.id]);
@@ -419,7 +419,17 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
       if (![negotiation.owner_id, negotiation.interested_id].includes(req.user.id)) return res.status(403).json({ error: 'Payment access denied' });
       const payment = await db.one('SELECT * FROM payments WHERE negotiation_id=$1 ORDER BY created_at DESC LIMIT 1', [negotiation.id]);
-      return res.json({ payment: payment ? paymentView(payment) : null });
+      let pix = null;
+      if (payment && payment.method === 'pix' && payment.status === 'processing' && payment.payer_id === req.user.id && !payment.checkout_url && mercadoPago.pixEnabled()) {
+        try {
+          const seller = await db.one('SELECT mercado_pago_access_token FROM users WHERE id=$1', [payment.payee_id]);
+          const token = mercadoPago.checkoutSellerToken(seller?.mercado_pago_access_token);
+          if (token) pix = await mercadoPago.pixDisplay(await mercadoPago.order(payment.provider_reference, token));
+        } catch (error) {
+          console.warn('[mercadopago-pix] Pix instructions temporarily unavailable', { status: error.status || 502 });
+        }
+      }
+      return res.json({ payment: payment ? { ...paymentView(payment), ...(pix ? { pix } : {}) } : null });
     } catch (error) { return next(error); }
   });
   const collectionView = async (row, includeQr = true) => {
@@ -509,7 +519,7 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       if (negotiation.status !== 'reserved') return res.status(400).json({ error: 'The negotiation must be reserved before payment' });
       const post = await db.one('SELECT title,goal FROM posts WHERE id=$1', [negotiation.post_id]);
       if (!post || post.goal !== SALE_GOAL) return res.status(400).json({ error: 'Payments are only available for items marked for sale' });
-      if (!Number.isSafeInteger(amountCents) || amountCents < 100 || amountCents > 100000000 || currency !== 'BRL' || !['pix', 'card', 'boleto'].includes(method)) return res.status(400).json({ error: 'Use a valid BRL amount and pix, card or boleto' });
+      if (!Number.isSafeInteger(amountCents) || amountCents < 100 || amountCents > 100000000 || currency !== 'BRL' || !['pix', 'card'].includes(method)) return res.status(400).json({ error: 'Use a valid BRL amount and pix ou cartão' });
       if (!/^[A-Za-z0-9._:-]{16,128}$/.test(idempotencyKey)) return res.status(400).json({ error: 'A valid idempotency key is required' });
       // Validate the accepted proposal before contacting Mercado Pago.
       // Keep the locked validation below to guard concurrent updates.
@@ -532,7 +542,7 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       if (mercadoPago.isConfigured()) {
         const payer = await db.one('SELECT email FROM users WHERE id=$1', [negotiation.interested_id]);
         const seller = await db.one('SELECT mercado_pago_access_token FROM users WHERE id=$1', [negotiation.owner_id]);
-        provider = await mercadoPago.createOrder({ paymentId, postId: negotiation.post_id, title: post.title, amountCents, payerEmail: payer?.email, method, sellerAccessToken: mercadoPago.checkoutSellerToken(seller?.mercado_pago_access_token) });
+        provider = await (method === 'pix' && mercadoPago.pixEnabled() ? mercadoPago.createPixOrder : mercadoPago.createOrder)({ paymentId, postId: negotiation.post_id, title: post.title, amountCents, payerEmail: payer?.email, method, sellerAccessToken: mercadoPago.checkoutSellerToken(seller?.mercado_pago_access_token) });
       } else if (process.env.NODE_ENV === 'test') {
         provider = { id: `test_${crypto.randomUUID()}`, checkoutUrl: null };
       } else {
@@ -560,7 +570,7 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
         await client.query('INSERT INTO payment_audit_events (id,payment_id,from_status,to_status,reason,correlation_id,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)', [id('payment-audit'), payment.id, null, payment.status, mercadoPago.isConfigured() ? 'mercado_pago_checkout_created' : 'test_payment_approved', req.correlationId, now]);
         return { payment, idempotentReplay: false };
       });
-      return res.status(result.idempotentReplay ? 200 : 201).json({ payment: paymentView(result.payment), idempotentReplay: result.idempotentReplay });
+      return res.status(result.idempotentReplay ? 200 : 201).json({ payment: { ...paymentView(result.payment), ...(result.idempotentReplay ? {} : provider.pix ? { pix: provider.pix } : {}) }, idempotentReplay: result.idempotentReplay });
     } catch (error) { return next(error); }
   });
   app.post('/api/payments/mercadopago/webhook', async (req, res) => {

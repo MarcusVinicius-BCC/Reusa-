@@ -1,4 +1,5 @@
 const crypto = require('crypto');
+const QRCode = require('qrcode');
 const MERCADO_PAGO_API = 'https://api.mercadopago.com';
 const MERCADO_PAGO_AUTH = 'https://auth.mercadopago.com/authorization';
 
@@ -147,7 +148,6 @@ async function createOrder({ paymentId, postId, title, amountCents, payerEmail, 
     // Avoid aggressive exclusions until the provider confirms the available
     // payment methods for this seller and environment.
     pix: { not_allowed_types: ['credit_card', 'debit_card', 'ticket'] },
-    boleto: { not_allowed_types: ['credit_card', 'debit_card', 'bank_transfer'] },
     card: { not_allowed_types: ['ticket', 'bank_transfer'] }
   };
   const selectedPaymentRule = paymentRules[method];
@@ -182,6 +182,68 @@ async function createOrder({ paymentId, postId, title, amountCents, payerEmail, 
   return { id: String(result.id), checkoutUrl: String(result.checkout_url) };
 }
 
+
+function pixEnabled() {
+  // Explicit opt-in, because test Pix orders cannot emulate a real transfer.
+  // Pilot safety guard: do not allow direct Pix charges using production credentials.
+  return testMode() && process.env.MERCADOPAGO_PIX_ENABLED === 'true';
+}
+
+function pixDetails(providerOrder) {
+  const method = providerOrder?.transactions?.payments?.[0]?.payment_method;
+  if (method?.id !== 'pix') return null;
+  const qrCode = typeof method.qr_code === 'string' ? method.qr_code : '';
+  const qrCodeBase64 = typeof method.qr_code_base64 === 'string' && /^[a-zA-Z0-9+/=]+$/.test(method.qr_code_base64) && method.qr_code_base64.length <= 500000
+    ? method.qr_code_base64 : '';
+  const ticketUrl = typeof method.ticket_url === 'string' && /^https:\/\/(?:[a-z0-9-]+\.)*mercadopago\.com(?:\.br)?\//i.test(method.ticket_url)
+    ? method.ticket_url : null;
+  return { qrCode: qrCode.slice(0, 5000), qrCodeBase64, ticketUrl };
+}
+
+async function pixDisplay(providerOrder) {
+  const details = pixDetails(providerOrder);
+  if (!details) return null;
+  // Pix sandbox commonly omits qr_code_base64. Generate the image from the
+  // returned Pix copy-and-paste payload, never inventing the payment itself.
+  if (details.qrCode && !details.qrCodeBase64) {
+    const png = await QRCode.toDataURL(details.qrCode, { errorCorrectionLevel: 'M', margin: 2, width: 320 });
+    details.qrCodeBase64 = png.replace(/^data:image\/png;base64,/, '');
+  }
+  return details;
+}
+
+async function createPixOrder({ paymentId, amountCents, payerEmail, sellerAccessToken }) {
+  if (!pixEnabled()) throw Object.assign(new Error('O Pix integrado ainda não está habilitado.'), { status: 503 });
+  if (!isConfigured() || !sellerAccessToken) throw Object.assign(new Error('Mercado Pago is not configured'), { status: 503 });
+  if (!Number.isSafeInteger(amountCents) || amountCents < 100 || !payerEmail) {
+    throw Object.assign(new Error('Invalid Pix amount or payer email'), { status: 400 });
+  }
+  const amount = (amountCents / 100).toFixed(2);
+  const response = await mercadoPagoRequest('/v1/orders', {
+    method: 'POST',
+    headers: { 'X-Idempotency-Key': paymentId },
+    body: JSON.stringify({
+      type: 'online',
+      processing_mode: 'automatic',
+      total_amount: amount,
+      external_reference: paymentId,
+      payer: { email: payerEmail, ...(testMode() ? { first_name: 'APRO' } : {}) },
+      transactions: { payments: [{
+        amount,
+        payment_method: { id: 'pix', type: 'bank_transfer' }
+      }] }
+    })
+  }, sellerAccessToken);
+  if (!response?.id || response.external_reference && response.external_reference !== paymentId) {
+    throw Object.assign(new Error('Mercado Pago returned an invalid Pix order'), { status: 502 });
+  }
+  const pix = await pixDisplay(response);
+  if (!pix || (!pix.qrCode && !pix.ticketUrl)) {
+    throw Object.assign(new Error('Mercado Pago did not return Pix instructions'), { status: 502 });
+  }
+  return { id: String(response.id), checkoutUrl: null, pix };
+}
+
 async function order(orderId, sellerAccessToken) {
   if (!sellerAccessToken) throw Object.assign(new Error('Seller access token is required'), { status: 503 });
   return mercadoPagoRequest(`/v1/orders/${encodeURIComponent(orderId)}`, {}, sellerAccessToken);
@@ -189,17 +251,22 @@ async function order(orderId, sellerAccessToken) {
 
 // No payment is accepted based solely on webhook payloads or browser redirects.
 function verifiedOrderStatus(providerOrder, storedPayment) {
+  const pixPayment = providerOrder?.transactions?.payments?.[0];
+  const isPix = storedPayment?.method === 'pix' && pixPayment?.payment_method?.id === 'pix';
+  const correctCurrency = String(providerOrder?.currency) === String(storedPayment?.currency) ||
+    (isPix && storedPayment?.currency === 'BRL' && providerOrder?.country_code === 'BRA');
   if (!providerOrder || !storedPayment ||
       String(providerOrder.id) !== String(storedPayment.provider_reference) ||
       String(providerOrder.external_reference) !== String(storedPayment.id) ||
-      String(providerOrder.currency) !== String(storedPayment.currency) ||
+      !correctCurrency ||
       toCents(providerOrder.total_amount) !== Number(storedPayment.amount_cents)) {
     throw Object.assign(new Error('Mercado Pago order does not match the recorded payment'), { status: 409 });
   }
   const status = String(providerOrder.status || '').toLowerCase();
   const detail = String(providerOrder.status_detail || '');
   if (status === 'processed' && detail === 'accredited') {
-    if (toCents(providerOrder.total_paid_amount) !== Number(storedPayment.amount_cents)) {
+    const paidAmount = providerOrder.total_paid_amount ?? (isPix && pixPayment.status === 'processed' && pixPayment.status_detail === 'accredited' ? pixPayment.amount : undefined);
+    if (toCents(paidAmount) !== Number(storedPayment.amount_cents)) {
       throw Object.assign(new Error('Mercado Pago reported a different paid amount'), { status: 409 });
     }
     return 'succeeded';
@@ -217,4 +284,4 @@ async function payment(paymentId, sellerAccessToken) {
   return mercadoPagoRequest(`/v1/payments/${encodeURIComponent(paymentId)}`, {}, sellerAccessToken || accessToken());
 }
 
-module.exports = { authorizationUrl, checkoutSellerToken, createOrder, exchangeCode, isConfigured, oauthConfigured, order, payment, protectToken, revealToken, testMode, verifiedOrderStatus, webhookIsValid };
+module.exports = { authorizationUrl, checkoutSellerToken, createOrder, createPixOrder, exchangeCode, isConfigured, oauthConfigured, order, payment, pixDetails, pixDisplay, pixEnabled, protectToken, revealToken, testMode, verifiedOrderStatus, webhookIsValid };

@@ -12,6 +12,7 @@ on:
   push:
     branches:
       - feat/mercadopago-orders-checkout
+      - feat/pix-in-site
 
 jobs:
   test-and-build:
