@@ -55,6 +55,8 @@ test('createOrder produces a checkout order and does not expose tokens', async (
       assert.equal(body.total_amount, '25.00');
       assert.equal(body.external_reference, 'payment-1');
       assert.equal(body.config.online.success_url, 'https://reusa.example/anuncios/post-1');
+      assert.equal(body.config.payment_method.default_type, 'bank_transfer');
+      assert.deepEqual(body.config.payment_method.not_allowed_types, ['credit_card', 'debit_card', 'ticket', 'account_money', 'wallet']);
       return { ok: true, json: async () => ({ id: 'ORD123', checkout_url: 'https://www.mercadopago.com.br/checkout/v1/redirect?order_id=ORD123' }) };
     };
     const order = await mercadoPago.createOrder({ paymentId: 'payment-1', postId: 'post-1', title: 'Item ReUsa+', amountCents: 2500, method: 'pix', payerEmail: 'comprador@example.test', sellerAccessToken: 'seller-token' });
@@ -83,5 +85,31 @@ test('sandbox mode always uses the application test token instead of a seller OA
     else process.env.MERCADOPAGO_TEST_MODE = originalMode;
     if (originalToken === undefined) delete process.env.MERCADOPAGO_ACCESS_TOKEN;
     else process.env.MERCADOPAGO_ACCESS_TOKEN = originalToken;
+  }
+});
+
+test('order restricts boleto to tickets and card to card types', async () => {
+  const oldFetch = global.fetch;
+  const oldToken = process.env.MERCADOPAGO_ACCESS_TOKEN;
+  const oldBaseUrl = process.env.APP_BASE_URL;
+  process.env.MERCADOPAGO_ACCESS_TOKEN = 'test-platform-token';
+  process.env.APP_BASE_URL = 'https://reusa.example';
+  const captured = [];
+  try {
+    global.fetch = async (_url, options) => {
+      captured.push(JSON.parse(options.body).config.payment_method);
+      return { ok: true, json: async () => ({ id: 'ORD123', checkout_url: 'https://www.mercadopago.com.br/checkout/v1/redirect?order_id=ORD123' }) };
+    };
+    for (const method of ['boleto', 'card']) {
+      await mercadoPago.createOrder({ paymentId: 'payment-'+method, postId: 'post-1', title: 'Item ReUsa+', amountCents: 2500, method, payerEmail: 'buyer@example.test', sellerAccessToken: 'seller-token' });
+    }
+    assert.deepEqual(captured[0], { default_type: 'ticket', not_allowed_types: ['credit_card', 'debit_card', 'bank_transfer', 'account_money', 'wallet'] });
+    assert.deepEqual(captured[1], { default_type: 'credit_card', not_allowed_types: ['ticket', 'bank_transfer', 'account_money', 'wallet'] });
+  } finally {
+    global.fetch = oldFetch;
+    if (oldToken === undefined) delete process.env.MERCADOPAGO_ACCESS_TOKEN;
+    else process.env.MERCADOPAGO_ACCESS_TOKEN = oldToken;
+    if (oldBaseUrl === undefined) delete process.env.APP_BASE_URL;
+    else process.env.APP_BASE_URL = oldBaseUrl;
   }
 });
