@@ -1,6 +1,6 @@
 const crypto = require('crypto');
 const MERCADO_PAGO_API = 'https://api.mercadopago.com';
-const MERCADO_PAGO_AUTH = 'https://auth.mercadopago.com.br/authorization';
+const MERCADO_PAGO_AUTH = 'https://auth.mercadopago.com/authorization';
 
 function accessToken() {
   return String(process.env.MERCADOPAGO_ACCESS_TOKEN || '').trim();
