@@ -2245,11 +2245,21 @@ async function start() {
     persistDb();
     return res.json({ proposal: { negotiationId: negotiation.id, status: decision, amountCents: negotiation.proposal_amount_cents, method: negotiation.proposal_method, createdAt: negotiation.proposal_created_at }, reserved: decision === 'accepted' });
   });
-  app.get('/api/negotiations/:id/payment', authMiddleware, (req, res) => {
+  app.get('/api/negotiations/:id/payment', authMiddleware, async (req, res) => {
     const negotiation = get('SELECT * FROM negotiations WHERE id = ?', [req.params.id]);
     if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
     if (![negotiation.owner_id, negotiation.interested_id].includes(req.user.id)) return res.status(403).json({ error: 'Payment access denied' });
     const payment = get('SELECT * FROM payments WHERE negotiation_id = ? ORDER BY created_at DESC LIMIT 1', [negotiation.id]);
+    let pix = null;
+    if (payment && payment.method === 'pix' && payment.status === 'processing' && payment.payer_id === req.user.id && !payment.checkout_url && mercadoPago.pixEnabled()) {
+      try {
+        const seller = get('SELECT mercado_pago_access_token FROM users WHERE id = ?', [payment.payee_id]);
+        const token = mercadoPago.checkoutSellerToken(seller?.mercado_pago_access_token);
+        if (token) pix = await mercadoPago.pixDisplay(await mercadoPago.order(payment.provider_reference, token));
+      } catch (error) {
+        console.warn('[mercadopago-pix] QR instructions unavailable', { status: error.status || 502 });
+      }
+    }
     return res.json({ payment: payment ? {
       id: payment.id,
       negotiationId: payment.negotiation_id,
@@ -2264,7 +2274,8 @@ async function start() {
       failureCode: payment.failure_code,
       createdAt: payment.created_at,
       updatedAt: payment.updated_at,
-      paidAt: payment.paid_at
+      paidAt: payment.paid_at,
+      ...(pix ? { pix } : {})
     } : null });
   });
 
@@ -2382,7 +2393,7 @@ async function start() {
         const post = get('SELECT title FROM posts WHERE id = ?', [negotiation.post_id]);
         const payer = get('SELECT email FROM users WHERE id = ?', [negotiation.interested_id]);
         const seller = get('SELECT mercado_pago_access_token FROM users WHERE id = ?', [negotiation.owner_id]);
-        provider = await mercadoPago.createOrder({
+        provider = await (method === 'pix' && mercadoPago.pixEnabled() ? mercadoPago.createPixOrder : mercadoPago.createOrder)({
           paymentId,
           postId: negotiation.post_id,
           title: post?.title,
@@ -2436,7 +2447,8 @@ async function start() {
       id: payment.id, negotiationId: payment.negotiation_id, payerId: payment.payer_id, payeeId: payment.payee_id,
       amountCents: payment.amount_cents, currency: payment.currency, method: payment.method, status: payment.status,
       providerReference: payment.provider_reference, checkoutUrl: payment.checkout_url, failureCode: payment.failure_code, createdAt: payment.created_at,
-      updatedAt: payment.updated_at, paidAt: payment.paid_at
+      updatedAt: payment.updated_at, paidAt: payment.paid_at,
+      ...(provider.pix ? { pix: provider.pix } : {})
     }, idempotentReplay: false });
   });
 
