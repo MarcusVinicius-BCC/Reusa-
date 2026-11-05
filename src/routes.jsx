@@ -1195,6 +1195,7 @@ function PostStatusControls({ post, isSale, statusUpdating, statusMessage, onCha
 
 function PostDetailScreen({ postId, onBack, onNavigate }) {
   const session = useAppStore((state) => state.session);
+  const paymentDemoMode = useAppStore((state) => Boolean(state.profile?.user?.mercadoPagoDemoMode));
   const toggleFavorite = useAppStore((state) => state.toggleFavorite);
   const [post, setPost] = useState(null);
   const [comments, setComments] = useState([]);
@@ -1602,12 +1603,12 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
     </section> : null}
     {!ownPost && isSale && negotiation?.status === 'interested' && negotiation.proposalStatus === 'none' ? <section className="review-form-card proposal-card"><span className="eyebrow">Oferta com pagamento</span><h2>Envie sua proposta</h2><p>Informe o valor e a forma de pagamento. O vendedor receberá sua proposta para análise.</p><form onSubmit={submitProposal}><label>Valor da oferta (R$)<input inputMode="decimal" value={proposalForm.amount} onChange={(event) => setProposalForm((current) => ({ ...current, amount: formatMoneyInput(event.target.value) }))} placeholder="10,00" required /></label>    <label>Forma de pagamento<select value={proposalForm.method} onChange={(event) => setProposalForm((current) => ({ ...current, method: event.target.value }))}><option value="pix">PIX</option><option value="card">Cartão</option></select></label><button className="primary-btn" disabled={proposalBusy}>{proposalBusy ? 'Enviando...' : 'Enviar proposta'}<span className="material-symbols-outlined">send</span></button></form></section> : null}
     {!ownPost && isSale && negotiation?.status === 'interested' && negotiation.proposalStatus === 'pending' ? <section className="payment-waiting-card"><div className="payment-waiting-icon"><span className="material-symbols-outlined">hourglass_top</span></div><div><span className="eyebrow">Proposta enviada</span><h2>Aguardando resposta do vendedor</h2><p>Sua oferta de R$ {((negotiation.proposalAmountCents || 0) / 100).toFixed(2).replace('.', ',')} foi enviada. O pagamento ficará disponível depois que o vendedor aceitar e reservar o item.</p></div><button className="secondary-btn" onClick={startConversation}><span className="material-symbols-outlined">chat_bubble</span>Conversar com o anunciante</button></section> : null}
-    {!ownPost && isSale && negotiation?.status === 'reserved' && negotiation?.proposalStatus === 'accepted' && !payment ? <section className="review-form-card proposal-card"><span className="eyebrow">Pagamento liberado</span><h2>Finalize seu pagamento</h2><p>O vendedor aceitou a proposta. O pagamento seguirá o valor e o método já combinados.</p><form onSubmit={submitPayment}><label>Valor aceito (R$)<input readOnly value={(Number(negotiation.proposalAmountCents || 0) / 100).toFixed(2).replace('.', ',')} /></label><label>Forma de pagamento aceita<input readOnly value={({ pix: 'PIX', card: 'Cartão' })[negotiation.proposalMethod] || 'Não informada'} /></label><button className="primary-btn" disabled={paymentBusy}>{paymentBusy ? 'Abrindo checkout...' : 'Continuar para pagamento'}<span className="material-symbols-outlined">payments</span></button></form></section> : null}
+    {!ownPost && isSale && negotiation?.status === 'reserved' && negotiation?.proposalStatus === 'accepted' && !payment ? <section className="review-form-card proposal-card"><span className="eyebrow">Pagamento liberado</span><h2>Finalize seu pagamento</h2><p>O vendedor aceitou a proposta. O pagamento seguirá o valor e o método já combinados.</p>{paymentDemoMode ? <p role="status"><strong>Demonstração:</strong> o pagamento é de teste e não transfere dinheiro ao vendedor. Para cartão, use somente dados de teste do Mercado Pago; não pague o QR Pix com um banco real.</p> : null}<form onSubmit={submitPayment}><label>Valor aceito (R$)<input readOnly value={(Number(negotiation.proposalAmountCents || 0) / 100).toFixed(2).replace('.', ',')} /></label><label>Forma de pagamento aceita<input readOnly value={({ pix: 'PIX', card: 'Cartão' })[negotiation.proposalMethod] || 'Não informada'} /></label><button className="primary-btn" disabled={paymentBusy}>{paymentBusy ? 'Abrindo checkout...' : 'Continuar para pagamento'}<span className="material-symbols-outlined">payments</span></button></form></section> : null}
     {!ownPost && isSale && payment ? <section className={`payment-waiting-card${payment.method === 'pix' && payment.status === 'processing' ? ' payment-waiting-card--pix' : ''}`}>
       <div className="payment-waiting-icon"><span className="material-symbols-outlined">{payment.status === 'succeeded' ? 'check_circle' : payment.status === 'processing' ? 'hourglass_top' : 'error'}</span></div>
       <div className="payment-waiting-summary">
         <span className="eyebrow">Mercado Pago</span>
-        <h2>{payment.status === 'succeeded' ? 'Pagamento confirmado' : payment.status === 'processing' ? 'Aguardando confirmação do pagamento' : 'Pagamento não aprovado'}</h2>
+        <h2>{payment.status === 'succeeded' ? (paymentDemoMode ? 'Pagamento de teste confirmado' : 'Pagamento confirmado') : payment.status === 'processing' ? 'Aguardando confirmação do pagamento' : 'Pagamento não aprovado'}</h2>{paymentDemoMode ? <small>Simulação: nenhum valor é transferido ao vendedor.</small> : null}
         <p>Valor: R$ {(payment.amountCents / 100).toFixed(2).replace('.', ',')} · Método: {payment.method.toUpperCase()}</p>
       </div>
       {payment.status === 'processing' && payment.checkoutUrl ? <a className="secondary-btn" href={payment.checkoutUrl}>Abrir checkout</a> : null}
@@ -2147,6 +2148,7 @@ function SettingsScreen({ onBack, onLogout }) {
   const [activeSection, setActiveSection] = useState('perfil');
   const [paymentItems, setPaymentItems] = useState([]);
   const [paymentConnected, setPaymentConnected] = useState(Boolean(profile?.user?.mercadoPagoConnected));
+  const paymentDemoMode = Boolean(profile?.user?.mercadoPagoDemoMode);
   const [form, setForm] = useState({ name: profile?.user?.name || '', city: profile?.user?.city || '', neighborhood: profile?.user?.neighborhood || '', cep: profile?.user?.cep || '', address: profile?.user?.address || '', businessName: profile?.user?.businessName || '' });
   const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '' });
   const [preferences, setPreferences] = useState(profile?.user?.notificationPreferences || ['Curtidas', 'Comentários', 'Interesse', 'Mensagens', 'Negociações', 'Avaliações', 'Sistema']);
@@ -2246,7 +2248,27 @@ function SettingsScreen({ onBack, onLogout }) {
             </section> : null}
             {activeSection === 'pagamentos' ? <section className="card settings-card settings-panel" id="pagamentos">
               <div className="settings-panel-heading"><div><span className="settings-panel-icon payments"><span className="material-symbols-outlined">payments</span></span><div><h2>Ofertas e pagamentos</h2><p>Acompanhe os itens que aguardam sua decisão ou pagamento.</p></div></div></div>
-              <div className={`marketplace-connection ${paymentConnected ? 'is-connected' : ''}`}><div><strong>{paymentConnected ? 'Conta Mercado Pago conectada' : 'Receba suas vendas pelo Mercado Pago'}</strong><small>{paymentConnected ? 'Sua conta está pronta para receber pagamentos.' : 'Conecte sua conta para receber os valores das suas vendas com segurança.'}</small></div>{paymentConnected ? <span className="connection-status"><span className="material-symbols-outlined">check_circle</span>Conectada</span> : <button className="primary-btn" onClick={connectMercadoPago}><span className="material-symbols-outlined">account_balance_wallet</span>Conectar conta</button>}</div>
+              <div className={`marketplace-connection ${paymentConnected || paymentDemoMode ? 'is-connected' : ''}`}>
+                {paymentDemoMode ? (
+                  <>
+                    <div>
+                      <strong>Modo de demonstração — pagamentos de teste</strong>
+                      <small>As vendas são simuladas usando a conta de teste do projeto. Nenhum vendedor conecta uma conta real ou recebe repasses.</small>
+                    </div>
+                    <span className="connection-status"><span className="material-symbols-outlined">science</span>Simulação</span>
+                  </>
+                ) : (
+                  <>
+                    <div>
+                      <strong>{paymentConnected ? 'Conta Mercado Pago conectada' : 'Receba suas vendas pelo Mercado Pago'}</strong>
+                      <small>{paymentConnected ? 'Sua conta está pronta para receber pagamentos.' : 'Conecte sua conta para receber os valores das suas vendas com segurança.'}</small>
+                    </div>
+                    {paymentConnected
+                      ? <span className="connection-status"><span className="material-symbols-outlined">check_circle</span>Conectada</span>
+                      : <button className="primary-btn" onClick={connectMercadoPago}><span className="material-symbols-outlined">account_balance_wallet</span>Conectar conta</button>}
+                  </>
+                )}
+              </div>
               <div className="payment-items-list">{paymentItems.length ? paymentItems.map((item) => <article className="payment-item" key={item.negotiationId}><span className="payment-item-icon material-symbols-outlined">shopping_bag</span><div><strong>{item.title}</strong><small>R$ {((item.amountCents || 0) / 100).toFixed(2).replace('.', ',')} · {item.method === 'pix' ? 'PIX' : item.method === 'card' ? 'Cartão' : 'Boleto'}</small><small>{item.negotiationStatus === 'reserved' ? 'Reserva confirmada: pagamento liberado' : 'Oferta enviada: aguardando resposta'}</small></div><button className="payment-item-action" onClick={() => window.location.assign(`/anuncios/${item.postId}`)}><span className="material-symbols-outlined">{item.negotiationStatus === 'reserved' ? 'payments' : 'open_in_new'}</span><span>{item.negotiationStatus === 'reserved' ? 'Pagar agora' : 'Acompanhar oferta'}</span></button></article>) : <EmptyState icon="payments" title="Nenhum pagamento pendente" text="Quando você enviar uma oferta, ela aparecerá aqui para acompanhamento." />}</div>
             </section> : null}
           </div>
