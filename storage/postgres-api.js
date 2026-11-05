@@ -480,7 +480,7 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       if (!post || post.goal !== SALE_GOAL) return res.status(400).json({ error: 'Payments are only available for items marked for sale' });
       if (!Number.isSafeInteger(amountCents) || amountCents < 100 || amountCents > 100000000 || currency !== 'BRL' || !['pix', 'card', 'boleto'].includes(method)) return res.status(400).json({ error: 'Use a valid BRL amount and pix, card or boleto' });
       if (!/^[A-Za-z0-9._:-]{16,128}$/.test(idempotencyKey)) return res.status(400).json({ error: 'A valid idempotency key is required' });
-      const paymentId = id('payment');
+      const paymentId = 'payment-' + crypto.createHash('sha256').update(`${negotiation.id}:${idempotencyKey}`).digest('hex').slice(0, 40);
       let provider;
       if (mercadoPago.isConfigured()) {
         const payer = await db.one('SELECT email FROM users WHERE id=$1', [negotiation.interested_id]);
