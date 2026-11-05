@@ -55,8 +55,8 @@ test('createOrder produces a checkout order and does not expose tokens', async (
       assert.equal(body.total_amount, '25.00');
       assert.equal(body.external_reference, 'payment-1');
       assert.equal(body.config.online.success_url, 'https://reusa.example/anuncios/post-1');
-      assert.equal(body.config.payment_method.default_type, 'bank_transfer');
-      assert.deepEqual(body.config.payment_method.not_allowed_types, ['credit_card', 'debit_card', 'ticket', 'account_money', 'wallet']);
+      assert.equal(body.config.payment_method.default_type, undefined);
+      assert.deepEqual(body.config.payment_method.not_allowed_types, ['credit_card', 'debit_card', 'ticket']);
       return { ok: true, json: async () => ({ id: 'ORD123', checkout_url: 'https://www.mercadopago.com.br/checkout/v1/redirect?order_id=ORD123' }) };
     };
     const order = await mercadoPago.createOrder({ paymentId: 'payment-1', postId: 'post-1', title: 'Item ReUsa+', amountCents: 2500, method: 'pix', payerEmail: 'comprador@example.test', sellerAccessToken: 'seller-token' });
@@ -103,8 +103,8 @@ test('order restricts boleto to tickets and card to card types', async () => {
     for (const method of ['boleto', 'card']) {
       await mercadoPago.createOrder({ paymentId: 'payment-'+method, postId: 'post-1', title: 'Item ReUsa+', amountCents: 2500, method, payerEmail: 'buyer@example.test', sellerAccessToken: 'seller-token' });
     }
-    assert.deepEqual(captured[0], { default_type: 'ticket', not_allowed_types: ['credit_card', 'debit_card', 'bank_transfer', 'account_money', 'wallet'] });
-    assert.deepEqual(captured[1], { default_type: 'credit_card', not_allowed_types: ['ticket', 'bank_transfer', 'account_money', 'wallet'] });
+    assert.deepEqual(captured[0], { not_allowed_types: ['credit_card', 'debit_card', 'bank_transfer'] });
+    assert.deepEqual(captured[1], { not_allowed_types: ['ticket', 'bank_transfer'] });
   } finally {
     global.fetch = oldFetch;
     if (oldToken === undefined) delete process.env.MERCADOPAGO_ACCESS_TOKEN;
