@@ -113,3 +113,73 @@ test('order restricts boleto to tickets and card to card types', async () => {
     else process.env.APP_BASE_URL = oldBaseUrl;
   }
 });
+
+test('Pix is opt-in and never silently creates an order', async () => {
+  const oldFlag = process.env.MERCADOPAGO_PIX_ENABLED;
+  try {
+    delete process.env.MERCADOPAGO_PIX_ENABLED;
+    assert.equal(mercadoPago.pixEnabled(), false);
+    await assert.rejects(mercadoPago.createPixOrder({
+      paymentId: 'payment-1', amountCents: 290, payerEmail: 'buyer@example.test', sellerAccessToken: 'seller-token'
+    }), /não está habilitado/);
+  } finally {
+    if (oldFlag === undefined) delete process.env.MERCADOPAGO_PIX_ENABLED;
+    else process.env.MERCADOPAGO_PIX_ENABLED = oldFlag;
+  }
+});
+
+test('Pix automatic order provides QR code and does not expose access tokens', async () => {
+  const original = {
+    MERCADOPAGO_PIX_ENABLED: process.env.MERCADOPAGO_PIX_ENABLED,
+    MERCADOPAGO_ACCESS_TOKEN: process.env.MERCADOPAGO_ACCESS_TOKEN,
+    APP_BASE_URL: process.env.APP_BASE_URL
+  };
+  const previousFetch = global.fetch;
+  process.env.MERCADOPAGO_PIX_ENABLED = 'true';
+  process.env.MERCADOPAGO_ACCESS_TOKEN = 'test-token';
+  process.env.APP_BASE_URL = 'https://reusa.example';
+  try {
+    global.fetch = async (url, options) => {
+      assert.equal(url, 'https://api.mercadopago.com/v1/orders');
+      assert.equal(options.headers.Authorization, 'Bearer seller-token');
+      assert.equal(options.headers['X-Idempotency-Key'], 'payment-pix-1');
+      const body = JSON.parse(options.body);
+      assert.equal(body.processing_mode, 'automatic');
+      assert.equal(body.total_amount, '2.90');
+      assert.equal(body.transactions.payments[0].payment_method.id, 'pix');
+      assert.equal(body.transactions.payments[0].payment_method.type, 'bank_transfer');
+      return { ok: true, json: async () => ({
+        id: 'ORDPIX123', external_reference: 'payment-pix-1',
+        transactions: { payments: [{ payment_method: { id: 'pix', type: 'bank_transfer', qr_code: '000201', qr_code_base64: 'aGVsbG8=', ticket_url: 'https://www.mercadopago.com.br/sandbox/payments/123/ticket' } }] }
+      }) };
+    };
+    const order = await mercadoPago.createPixOrder({ paymentId: 'payment-pix-1', amountCents: 290, payerEmail: 'buyer@example.test', sellerAccessToken: 'seller-token' });
+    assert.equal(order.id, 'ORDPIX123');
+    assert.equal(order.checkoutUrl, null);
+    assert.equal(order.pix.qrCode, '000201');
+    assert.equal(order.pix.qrCodeBase64, 'aGVsbG8=');
+    assert.doesNotMatch(JSON.stringify(order), /seller-token|test-token/);
+  } finally {
+    global.fetch = previousFetch;
+    for (const [key, value] of Object.entries(original)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
+
+test('Pix webhook validates amount and country and never approves a pending transfer', () => {
+  const recorded = { id: 'payment-pix-1', provider_reference: 'ORDPIX123', amount_cents: 290, currency: 'BRL', method: 'pix' };
+  const provider = {
+    id: 'ORDPIX123', external_reference: 'payment-pix-1', country_code: 'BRA', total_amount: '2.90',
+    status: 'action_required', status_detail: 'waiting_transfer',
+    transactions: { payments: [{ amount: '2.90', status: 'action_required', status_detail: 'waiting_transfer', payment_method: { id: 'pix' } }] }
+  };
+  assert.equal(mercadoPago.verifiedOrderStatus(provider, recorded), 'processing');
+  const approved = { ...provider, status: 'processed', status_detail: 'accredited',
+    transactions: { payments: [{ ...provider.transactions.payments[0], status: 'processed', status_detail: 'accredited' }] } };
+  assert.equal(mercadoPago.verifiedOrderStatus(approved, recorded), 'succeeded');
+  assert.throws(() => mercadoPago.verifiedOrderStatus({ ...approved, country_code: 'ARG' }, recorded));
+  assert.throws(() => mercadoPago.verifiedOrderStatus({ ...approved, transactions: { payments: [{ ...approved.transactions.payments[0], amount: '2.89' }] } }, recorded));
+  assert.throws(() => mercadoPago.verifiedOrderStatus({ ...approved, transactions: { payments: [{ ...approved.transactions.payments[0], payment_method: { id: 'card' } }] } }, recorded));
+});
