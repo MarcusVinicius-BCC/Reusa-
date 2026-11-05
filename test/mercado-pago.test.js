@@ -211,3 +211,38 @@ test('Pix pilot cannot be enabled with production credentials', () => {
     else process.env.MERCADOPAGO_PIX_ENABLED = oldFlag;
   }
 });
+
+test('Checkout Pro sandbox card order uses an isolated buyer email but production keeps the original', async () => {
+  const original = {
+    MERCADOPAGO_TEST_MODE: process.env.MERCADOPAGO_TEST_MODE,
+    MERCADOPAGO_ACCESS_TOKEN: process.env.MERCADOPAGO_ACCESS_TOKEN,
+    APP_BASE_URL: process.env.APP_BASE_URL
+  };
+  const oldFetch = global.fetch;
+  const emails = [];
+  process.env.MERCADOPAGO_ACCESS_TOKEN = 'sandbox-test-token';
+  process.env.APP_BASE_URL = 'https://reusa.example';
+  try {
+    global.fetch = async (_url, options) => {
+      emails.push(JSON.parse(options.body).payer.email);
+      return { ok: true, json: async () => ({ id: 'ORDTST123', checkout_url: 'https://www.mercadopago.com.br/checkout/v1/redirect?order_id=ORDTST123' }) };
+    };
+    const args = { paymentId: 'payment-isolated-payer-test', postId: 'test-post', title: 'Item', amountCents: 300, method: 'card', payerEmail: 'real-buyer@gmail.com', sellerAccessToken: 'seller-token' };
+    process.env.MERCADOPAGO_TEST_MODE = 'true';
+    await mercadoPago.createOrder(args);
+    assert.match(emails[0], /^reusa-teste-[a-f0-9]{12}@example\.com$/);
+    assert.notEqual(emails[0], args.payerEmail);
+    process.env.MERCADOPAGO_TEST_MODE = 'false';
+    await mercadoPago.createOrder({ ...args, paymentId: 'payment-prod-payer-test' });
+    assert.equal(emails[1], args.payerEmail);
+    process.env.MERCADOPAGO_TEST_MODE = 'true';
+    await mercadoPago.createOrder({ ...args, paymentId: 'payment-pix-payer-test', method: 'pix' });
+    assert.equal(emails[2], args.payerEmail);
+  } finally {
+    global.fetch = oldFetch;
+    for (const [key, value] of Object.entries(original)) {
+      if (value === undefined) delete process.env[key];
+      else process.env[key] = value;
+    }
+  }
+});
