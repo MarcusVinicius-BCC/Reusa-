@@ -102,8 +102,22 @@ async function mercadoPagoRequest(path, options = {}, bearerToken = accessToken(
   });
   const body = await response.json().catch(() => null);
   if (!response.ok) {
-    const error = new Error(body?.message || `Mercado Pago request failed with status ${response.status}`);
+    // Log only the provider's validation codes/field hints, never credentials
+    // or the raw request/response (which may contain personal information).
+    const causes = Array.isArray(body?.cause) ? body.cause : [];
+    const diagnostics = {
+      status: response.status,
+      code: typeof body?.code === 'string' ? body.code.slice(0, 100) : undefined,
+      message: typeof body?.message === 'string' ? body.message.slice(0, 300) : undefined,
+      causes: causes.slice(0, 5).map((cause) => ({
+        code: typeof cause?.code === 'string' || typeof cause?.code === 'number' ? String(cause.code).slice(0, 80) : undefined,
+        description: typeof cause?.description === 'string' ? cause.description.slice(0, 250) : undefined
+      }))
+    };
+    console.error('[mercadopago-api] order request rejected', diagnostics);
+    const error = new Error('Mercado Pago rejected the order creation request');
     error.status = response.status;
+    error.providerCode = diagnostics.code;
     throw error;
   }
   return body;
@@ -130,9 +144,11 @@ async function createOrder({ paymentId, postId, title, amountCents, payerEmail, 
   // Checkout Pro uses exclusion rules. Remove alternate payment methods to honor
   // the payment type accepted by the seller; this is separate from sandbox availability.
   const paymentRules = {
-    pix: { default_type: 'bank_transfer', not_allowed_types: ['credit_card', 'debit_card', 'ticket', 'account_money', 'wallet'] },
-    boleto: { default_type: 'ticket', not_allowed_types: ['credit_card', 'debit_card', 'bank_transfer', 'account_money', 'wallet'] },
-    card: { default_type: 'credit_card', not_allowed_types: ['ticket', 'bank_transfer', 'account_money', 'wallet'] }
+    // Avoid aggressive exclusions until the provider confirms the available
+    // payment methods for this seller and environment.
+    pix: { not_allowed_types: ['credit_card', 'debit_card', 'ticket'] },
+    boleto: { not_allowed_types: ['credit_card', 'debit_card', 'bank_transfer'] },
+    card: { not_allowed_types: ['ticket', 'bank_transfer'] }
   };
   const selectedPaymentRule = paymentRules[method];
   if (!selectedPaymentRule) {
