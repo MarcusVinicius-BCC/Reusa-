@@ -186,7 +186,8 @@ async function createOrder({ paymentId, postId, title, amountCents, payerEmail, 
 
 function pixEnabled() {
   // Explicit opt-in, because test Pix orders cannot emulate a real transfer.
-  return process.env.MERCADOPAGO_PIX_ENABLED === 'true';
+  // Pilot safety guard: do not allow direct Pix charges using production credentials.
+  return testMode() && process.env.MERCADOPAGO_PIX_ENABLED === 'true';
 }
 
 function pixDetails(providerOrder) {
