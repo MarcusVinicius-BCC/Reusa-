@@ -2340,8 +2340,8 @@ async function start() {
         updatedAt: existing.updated_at, paidAt: existing.paid_at
       }, idempotentReplay: true });
     }
-    if (negotiation.proposal_status === 'accepted' &&
-        (negotiation.proposal_amount_cents !== amountCents || negotiation.proposal_method !== method)) {
+    if (negotiation.proposal_status !== 'accepted' ||
+        negotiation.proposal_amount_cents !== amountCents || negotiation.proposal_method !== method) {
       return res.status(400).json({ error: 'Payment must use the accepted proposal amount and method' });
     }
     if (get("SELECT id FROM payments WHERE negotiation_id = ? AND status = 'succeeded'", [negotiation.id])) return res.status(409).json({ error: 'This negotiation already has a successful payment' });
@@ -2354,7 +2354,7 @@ async function start() {
         const post = get('SELECT title FROM posts WHERE id = ?', [negotiation.post_id]);
         const payer = get('SELECT email FROM users WHERE id = ?', [negotiation.interested_id]);
         const seller = get('SELECT mercado_pago_access_token FROM users WHERE id = ?', [negotiation.owner_id]);
-        provider = await mercadoPago.createPreference({
+        provider = await mercadoPago.createOrder({
           paymentId,
           postId: negotiation.post_id,
           title: post?.title,
@@ -2364,7 +2364,7 @@ async function start() {
           sellerAccessToken: mercadoPago.revealToken(seller?.mercado_pago_access_token)
         });
       } catch (error) {
-        console.error('Mercado Pago preference failed', error);
+        console.error('Mercado Pago order creation failed', error);
         return res.status(error.status && error.status >= 400 && error.status < 500 ? error.status : 502).json({ error: 'Mercado Pago could not create the checkout' });
       }
     } else if (process.env.NODE_ENV === 'test') {
@@ -2413,35 +2413,32 @@ async function start() {
   });
 
   app.post('/api/payments/mercadopago/webhook', async (req, res) => {
-    const externalId = req.body?.data?.id || req.body?.id;
-    if (String(req.body?.type || req.body?.topic || '').toLowerCase() !== 'payment' || !externalId) {
-      return res.sendStatus(200);
-    }
-    if (!mercadoPago.webhookIsValid({ dataId: externalId, requestId: req.get('x-request-id'), signature: req.get('x-signature') })) {
-      return res.sendStatus(401);
-    }
+    const orderId = String(req.query?.['data.id'] || req.body?.data?.id || '').trim();
+    const topic = String(req.query?.type || req.body?.type || '').toLowerCase();
+    if (topic !== 'order' || !orderId) return res.sendStatus(200);
+    if (!mercadoPago.webhookIsValid({ dataId: orderId, requestId: req.get('x-request-id'), signature: req.get('x-signature') })) return res.sendStatus(401);
     try {
-      const currentPayment = get('SELECT * FROM payments WHERE provider_reference = ?', [String(externalId)]);
-      const seller = currentPayment && get('SELECT mercado_pago_access_token FROM users WHERE id = ?', [currentPayment.payee_id]);
-      const providerPayment = await mercadoPago.payment(externalId, mercadoPago.revealToken(seller?.mercado_pago_access_token));
-      const paymentId = String(providerPayment.external_reference || '');
-      const current = get('SELECT * FROM payments WHERE id = ?', [paymentId]);
+      const current = get('SELECT * FROM payments WHERE provider_reference = ?', [orderId]);
       if (!current) return res.sendStatus(200);
-      const statusMap = { approved: 'succeeded', pending: 'processing', in_process: 'processing', rejected: 'failed', cancelled: 'failed', refunded: 'refunded' };
-      const status = statusMap[providerPayment.status];
+      const seller = get('SELECT mercado_pago_access_token FROM users WHERE id = ?', [current.payee_id]);
+      const sellerToken = mercadoPago.revealToken(seller?.mercado_pago_access_token);
+      if (!sellerToken) return res.sendStatus(503);
+      const providerOrder = await mercadoPago.order(orderId, sellerToken);
+      const status = mercadoPago.verifiedOrderStatus(providerOrder, current);
       if (!status || current.status === status) return res.sendStatus(200);
+      if (['succeeded', 'refunded'].includes(current.status) && status !== 'refunded') return res.sendStatus(200);
       const now = new Date().toISOString();
-      const failureCode = status === 'failed' ? String(providerPayment.status_detail || providerPayment.status) : null;
-      run('UPDATE payments SET status = ?, failure_code = ?, updated_at = ?, paid_at = ? WHERE id = ?', [status, failureCode, now, status === 'succeeded' ? now : current.paid_at, paymentId]);
-      run('INSERT INTO payment_audit_events (id, payment_id, from_status, to_status, reason, correlation_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', [uid('payment-audit'), paymentId, current.status, status, `mercado_pago_${providerPayment.status}`, uid('webhook'), now]);
+      const failureCode = status === 'failed' ? String(providerOrder.status_detail || providerOrder.status) : null;
+      run('UPDATE payments SET status = ?, failure_code = ?, updated_at = ?, paid_at = ?, refunded_at = ? WHERE id = ?', [status, failureCode, now, status === 'succeeded' ? now : current.paid_at, status === 'refunded' ? now : current.refunded_at, current.id]);
+      run('INSERT INTO payment_audit_events (id, payment_id, from_status, to_status, reason, correlation_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', [uid('payment-audit'), current.id, current.status, status, `mercado_pago_order_${providerOrder.status}`, uid('webhook'), now]);
       if (status === 'succeeded' && !eventPublisher.enabled()) {
         notification(current.payee_id, 'payment', 'Pagamento recebido', `Um pagamento de R$ ${(current.amount_cents / 100).toFixed(2).replace('.', ',')} foi confirmado.`, `/anuncios/${current.negotiation_id}`);
       }
       persistDb();
       return res.sendStatus(200);
     } catch (error) {
-      console.error('Mercado Pago webhook failed', error);
-      return res.sendStatus(500);
+      console.error('Mercado Pago order webhook failed', error);
+      return res.sendStatus(error.status === 409 ? 200 : 500);
     }
   });
 
