@@ -238,17 +238,22 @@ async function order(orderId, sellerAccessToken) {
 
 // No payment is accepted based solely on webhook payloads or browser redirects.
 function verifiedOrderStatus(providerOrder, storedPayment) {
+  const pixPayment = providerOrder?.transactions?.payments?.[0];
+  const isPix = storedPayment?.method === 'pix' && pixPayment?.payment_method?.id === 'pix';
+  const correctCurrency = String(providerOrder?.currency) === String(storedPayment?.currency) ||
+    (isPix && storedPayment?.currency === 'BRL' && providerOrder?.country_code === 'BRA');
   if (!providerOrder || !storedPayment ||
       String(providerOrder.id) !== String(storedPayment.provider_reference) ||
       String(providerOrder.external_reference) !== String(storedPayment.id) ||
-      String(providerOrder.currency) !== String(storedPayment.currency) ||
+      !correctCurrency ||
       toCents(providerOrder.total_amount) !== Number(storedPayment.amount_cents)) {
     throw Object.assign(new Error('Mercado Pago order does not match the recorded payment'), { status: 409 });
   }
   const status = String(providerOrder.status || '').toLowerCase();
   const detail = String(providerOrder.status_detail || '');
   if (status === 'processed' && detail === 'accredited') {
-    if (toCents(providerOrder.total_paid_amount) !== Number(storedPayment.amount_cents)) {
+    const paidAmount = providerOrder.total_paid_amount ?? (isPix && pixPayment.status === 'processed' && pixPayment.status_detail === 'accredited' ? pixPayment.amount : undefined);
+    if (toCents(paidAmount) !== Number(storedPayment.amount_cents)) {
       throw Object.assign(new Error('Mercado Pago reported a different paid amount'), { status: 409 });
     }
     return 'succeeded';
