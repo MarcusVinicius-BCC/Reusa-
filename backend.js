@@ -2211,12 +2211,40 @@ async function start() {
     if (negotiation.proposal_status !== 'pending') return res.status(400).json({ error: 'There is no pending proposal to decide' });
     if (!['accepted', 'rejected'].includes(decision)) return res.status(400).json({ error: 'Decision must be accepted or rejected' });
     const now = new Date().toISOString();
-    run('UPDATE negotiations SET proposal_status = ?, updated_at = ? WHERE id = ?', [decision, now, negotiation.id]);
-    if (decision === 'rejected' && !eventPublisher.enabled()) notification(negotiation.interested_id, 'negotiation', 'Proposta recusada', 'O vendedor recusou sua proposta.', `/anuncios/${negotiation.post_id}`);
+    if (decision === 'accepted') {
+      const post = get('SELECT * FROM posts WHERE id = ?', [negotiation.post_id]);
+      if (!post || post.goal !== SALE_GOAL) return res.status(400).json({ error: 'Only sale offers can be accepted here' });
+      if (!['Disponível', 'Reservado'].includes(post.status || 'Disponível') ||
+          (post.status === 'Reservado' && post.reserved_by !== negotiation.interested_id) ||
+          !['interested', 'reserved'].includes(negotiation.status)) {
+        return res.status(409).json({ error: 'Este anúncio já está reservado para outra pessoa ou não está disponível.' });
+      }
+      if (mercadoPago.isConfigured()) {
+        const seller = get('SELECT mercado_pago_access_token FROM users WHERE id = ?', [req.user.id]);
+        if (!mercadoPago.checkoutSellerToken(seller?.mercado_pago_access_token)) {
+          return res.status(409).json({ error: 'Conecte sua conta Mercado Pago para receber pagamentos.' });
+        }
+      }
+      try {
+        db.exec('BEGIN TRANSACTION');
+        run("UPDATE negotiations SET status='interested',proposal_status=CASE WHEN proposal_status='pending' THEN 'rejected' ELSE proposal_status END,updated_at=? WHERE post_id=? AND id<>? AND status='reserved'", [now, post.id, negotiation.id]);
+        run("UPDATE negotiations SET proposal_status='rejected',updated_at=? WHERE post_id=? AND id<>? AND proposal_status='pending'", [now, post.id, negotiation.id]);
+        run("UPDATE negotiations SET proposal_status='accepted',status='reserved',updated_at=? WHERE id=?", [now, negotiation.id]);
+        run("UPDATE posts SET status='Reservado',reserved_by=?,updated_at=? WHERE id=?", [negotiation.interested_id, now, post.id]);
+        emitDomainEvent('negotiation.reserved', { negotiationId: negotiation.id, postId: post.id, postTitle: post.title, ownerId: post.author_id, interestedId: negotiation.interested_id, status: 'reserved' }, req.correlationId);
+        db.exec('COMMIT');
+      } catch (error) {
+        try { db.exec('ROLLBACK'); } catch {}
+        return res.status(500).json({ error: 'Não foi possível reservar o anúncio.' });
+      }
+      if (!eventPublisher.enabled()) notification(negotiation.interested_id, 'negotiation', 'Oferta aceita e item reservado', `Você já pode pagar pelo anúncio ${post.title}.`, `/anuncios/${post.id}`);
+    } else {
+      run('UPDATE negotiations SET proposal_status = ?, updated_at = ? WHERE id = ?', [decision, now, negotiation.id]);
+      if (!eventPublisher.enabled()) notification(negotiation.interested_id, 'negotiation', 'Proposta recusada', 'O vendedor recusou sua proposta.', `/anuncios/${negotiation.post_id}`);
+    }
     persistDb();
-    return res.json({ proposal: { negotiationId: negotiation.id, status: decision, amountCents: negotiation.proposal_amount_cents, method: negotiation.proposal_method, createdAt: negotiation.proposal_created_at } });
+    return res.json({ proposal: { negotiationId: negotiation.id, status: decision, amountCents: negotiation.proposal_amount_cents, method: negotiation.proposal_method, createdAt: negotiation.proposal_created_at }, reserved: decision === 'accepted' });
   });
-
   app.get('/api/negotiations/:id/payment', authMiddleware, (req, res) => {
     const negotiation = get('SELECT * FROM negotiations WHERE id = ?', [req.params.id]);
     if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
