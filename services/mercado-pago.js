@@ -148,7 +148,6 @@ async function createOrder({ paymentId, postId, title, amountCents, payerEmail, 
     // Avoid aggressive exclusions until the provider confirms the available
     // payment methods for this seller and environment.
     pix: { not_allowed_types: ['credit_card', 'debit_card', 'ticket'] },
-    boleto: { not_allowed_types: ['credit_card', 'debit_card', 'bank_transfer'] },
     card: { not_allowed_types: ['ticket', 'bank_transfer'] }
   };
   const selectedPaymentRule = paymentRules[method];
