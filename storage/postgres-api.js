@@ -419,7 +419,17 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
       if (![negotiation.owner_id, negotiation.interested_id].includes(req.user.id)) return res.status(403).json({ error: 'Payment access denied' });
       const payment = await db.one('SELECT * FROM payments WHERE negotiation_id=$1 ORDER BY created_at DESC LIMIT 1', [negotiation.id]);
-      return res.json({ payment: payment ? paymentView(payment) : null });
+      let pix = null;
+      if (payment && payment.method === 'pix' && payment.status === 'processing' && payment.payer_id === req.user.id && !payment.checkout_url && mercadoPago.pixEnabled()) {
+        try {
+          const seller = await db.one('SELECT mercado_pago_access_token FROM users WHERE id=$1', [payment.payee_id]);
+          const token = mercadoPago.checkoutSellerToken(seller?.mercado_pago_access_token);
+          if (token) pix = mercadoPago.pixDetails(await mercadoPago.order(payment.provider_reference, token));
+        } catch (error) {
+          console.warn('[mercadopago-pix] Pix instructions temporarily unavailable', { status: error.status || 502 });
+        }
+      }
+      return res.json({ payment: payment ? { ...paymentView(payment), ...(pix ? { pix } : {}) } : null });
     } catch (error) { return next(error); }
   });
   const collectionView = async (row, includeQr = true) => {
@@ -532,7 +542,7 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       if (mercadoPago.isConfigured()) {
         const payer = await db.one('SELECT email FROM users WHERE id=$1', [negotiation.interested_id]);
         const seller = await db.one('SELECT mercado_pago_access_token FROM users WHERE id=$1', [negotiation.owner_id]);
-        provider = await mercadoPago.createOrder({ paymentId, postId: negotiation.post_id, title: post.title, amountCents, payerEmail: payer?.email, method, sellerAccessToken: mercadoPago.checkoutSellerToken(seller?.mercado_pago_access_token) });
+        provider = await (method === 'pix' && mercadoPago.pixEnabled() ? mercadoPago.createPixOrder : mercadoPago.createOrder)({ paymentId, postId: negotiation.post_id, title: post.title, amountCents, payerEmail: payer?.email, method, sellerAccessToken: mercadoPago.checkoutSellerToken(seller?.mercado_pago_access_token) });
       } else if (process.env.NODE_ENV === 'test') {
         provider = { id: `test_${crypto.randomUUID()}`, checkoutUrl: null };
       } else {
@@ -560,7 +570,7 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
         await client.query('INSERT INTO payment_audit_events (id,payment_id,from_status,to_status,reason,correlation_id,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)', [id('payment-audit'), payment.id, null, payment.status, mercadoPago.isConfigured() ? 'mercado_pago_checkout_created' : 'test_payment_approved', req.correlationId, now]);
         return { payment, idempotentReplay: false };
       });
-      return res.status(result.idempotentReplay ? 200 : 201).json({ payment: paymentView(result.payment), idempotentReplay: result.idempotentReplay });
+      return res.status(result.idempotentReplay ? 200 : 201).json({ payment: { ...paymentView(result.payment), ...(result.idempotentReplay ? {} : provider.pix ? { pix: provider.pix } : {}) }, idempotentReplay: result.idempotentReplay });
     } catch (error) { return next(error); }
   });
   app.post('/api/payments/mercadopago/webhook', async (req, res) => {
