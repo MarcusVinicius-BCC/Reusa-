@@ -2347,7 +2347,7 @@ async function start() {
     if (get("SELECT id FROM payments WHERE negotiation_id = ? AND status = 'succeeded'", [negotiation.id])) return res.status(409).json({ error: 'This negotiation already has a successful payment' });
 
     const now = new Date().toISOString();
-    const paymentId = uid('payment');
+    const paymentId = 'payment-' + crypto.createHash('sha256').update(`${negotiation.id}:${idempotencyKey}`).digest('hex').slice(0, 40);
     let provider;
     if (mercadoPago.isConfigured()) {
       try {
