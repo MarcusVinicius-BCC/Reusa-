@@ -163,7 +163,13 @@ async function createOrder({ paymentId, postId, title, amountCents, payerEmail, 
       total_amount: amount,
       external_reference: paymentId,
       description: String(title || 'Compra ReUsa+').slice(0, 256),
-      payer: { email: payerEmail },
+      // Isolate the buyer identity in the Checkout Pro test sandbox.
+      // Some real Mercado Pago accounts trigger a real/test-party conflict
+      // even when their email is passed to an ORDTST checkout.
+      // Keep real buyer email unchanged in production and for Pix orders.
+      payer: { email: testMode() && method === 'card'
+        ? `reusa-teste-${crypto.createHash('sha256').update(paymentId).digest('hex').slice(0, 12)}@example.com`
+        : payerEmail },
       items: [{ title: String(title || 'Compra ReUsa+').slice(0, 256), unit_price: amount, quantity: 1 }],
       config: {
         online: {
