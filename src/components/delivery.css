@@ -21,3 +21,13 @@
 .delivery-current-status{background:#f0f5f2;color:#3b5a49}.delivery-current-status.is-processing{border-color:#efd9a4;background:#fff5de;color:#795208}.delivery-current-status.is-succeeded,.delivery-current-status.is-completed{background:#def4e7;color:#08603b}.delivery-current-status.is-failed{background:#fde6e4;color:#94362e}
 .delivery-chat-button{background:#fff;color:var(--on-primary-container);cursor:pointer}.delivery-chat-button:hover{background:var(--secondary-container)}.delivery-footer details{max-width:none}
 @media(max-width:600px){.delivery-proposal .delivery-field>span{min-height:0}.delivery-status-row{grid-template-columns:62px minmax(0,1fr) minmax(0,1fr);gap:7px}.delivery-status-row button,.delivery-current-status{padding:9px 7px;font-size:11px}.delivery-overview>div:last-child{grid-column:auto}}
+
+/* The connecting line fills as the negotiation advances through its steps. */
+.delivery-steps{position:relative;isolation:isolate;--step-gap:10px;gap:var(--step-gap)}
+.delivery-steps::before,.delivery-steps::after{content:'';position:absolute;z-index:0;top:29.5px;left:13.5px;width:calc(75% + var(--step-gap)*.75);height:4px;border-radius:999px;pointer-events:none}
+.delivery-steps::before{background:#dce9e1}
+.delivery-steps::after{background:linear-gradient(90deg,var(--primary),#32c983);transform:scaleX(var(--delivery-progress,0));transform-origin:left center;transition:transform .45s ease}
+.delivery-steps li{position:relative;z-index:1}
+.delivery-steps li>span{position:relative;box-shadow:0 0 0 4px var(--app-card,#fff);transition:background .3s ease,color .3s ease}
+@media(max-width:600px){.delivery-steps{--step-gap:7px}}
+@media(prefers-reduced-motion:reduce){.delivery-steps::after,.delivery-steps li>span{transition:none}}

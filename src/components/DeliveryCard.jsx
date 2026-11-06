@@ -43,7 +43,7 @@ export default function DeliveryCard({ negotiation, collection, onChange, onRece
       <div><span>Valor combinado</span><strong>{new Intl.NumberFormat('pt-BR', { style:'currency', currency:'BRL' }).format(Number(payment?.amountCents || negotiation.proposalAmountCents || 0)/100)}</strong></div>
       <div><span>Forma de pagamento</span><strong>{{card:'Cartão',pix:'Pix'}[payment?.method || negotiation.proposalMethod] || 'A combinar'}</strong></div>
     </div>}
-    <ol className="delivery-steps">{['Local e horário','Aceite do acordo',isSale ? 'Pagamento' : 'Entrega do item','Recebimento'].map((label,index) => <li key={label} className={index <= step ? 'is-current' : ''} aria-current={index === step ? 'step' : undefined}><span>{index+1}</span>{label}</li>)}</ol>
+    <ol className="delivery-steps" aria-label="Etapas da entrega" style={{ '--delivery-progress': step / 3 }}>{['Local e horário','Aceite do acordo',isSale ? 'Pagamento' : 'Entrega do item','Recebimento'].map((label,index) => <li key={label} className={index <= step ? 'is-current' : ''} aria-current={index === step ? 'step' : undefined}><span>{index+1}</span>{label}</li>)}</ol>
     {error && <p className="delivery-error" role="alert">{error}</p>}
     {message && <p className="delivery-feedback" role="status">{message}</p>}
     {payment?.status === 'succeeded' && !collection?.acceptedBy && <p className="delivery-help">Seu pagamento já consta como aprovado. Combine e aceite a entrega para regularizar o recebimento; você não precisa pagar novamente.</p>}
