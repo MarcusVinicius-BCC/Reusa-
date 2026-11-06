@@ -139,7 +139,7 @@ e o estado global é mantido em [`src/state/store.js`](src/state/store.js).
 | --- | --- |
 | Interface | React 18, JSX, React Router, Zustand, Vite |
 | Mapas | Leaflet, React Leaflet, OpenStreetMap |
-| Backend | Node.js 20+, Express |
+| Backend | Node.js 22 LTS, Express |
 | Autenticação | JWT, `scrypt`, OAuth 2.0 do Google (opcional) |
 | Uploads | Multer, armazenamento local ou compatível com S3 |
 | Banco local | SQLite via SQL.js |
@@ -190,7 +190,7 @@ e o estado global é mantido em [`src/state/store.js`](src/state/store.js).
 
 Para a execução básica:
 
-- [Node.js](https://nodejs.org/) 20, 22 ou 24;
+- [Node.js](https://nodejs.org/) 22 LTS;
 - npm, incluído no Node.js;
 - Git.
 
@@ -786,3 +786,31 @@ PATCH    /api/collection-deliveries/:id/status
 Propostas, aceite e recebimento geram registros na outbox e notificações. A antiga
 conclusão unilateral por `POST /api/posts/:id/complete` é bloqueada; o recebimento
 confirmado pelo destinatário é a fonte da conclusão.
+
+
+## Versão do Node e armazenamento Cloudflare R2
+
+O projeto usa Node.js **22 LTS**, indicado em `package.json`, `.nvmrc` e
+`Dockerfile`. No Railway/Railpack, `engines.node` seleciona a versão. Se o serviço
+já tiver `RAILPACK_NODE_VERSION` definido como 20, ajuste para `22` nas variáveis
+do Railway: uma configuração explícita do ambiente prevalece sobre o repositório.
+Não use `NODE_NO_WARNINGS` para esconder avisos de compatibilidade.
+
+O Cloudflare R2 não suporta a operação S3 `PutBucketPolicy`. O sistema identifica
+endpoints `*.r2.cloudflarestorage.com`, usa região `auto` por padrão e verifica o
+bucket sem tentar aplicar essa política. A mensagem de acesso verificado é
+informativa; falhas reais de credenciais, permissões ou upload continuam sendo
+erros. Outros provedores compatíveis com políticas S3 mantêm esse comportamento.
+
+Para imagens no R2, configure nas variáveis do serviço:
+
+- `S3_ENDPOINT`: endpoint S3 da conta R2.
+- `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`: bucket e credenciais.
+- `S3_PUBLIC_BASE_URL`: domínio público do bucket, como `https://pub-xxxx.r2.dev`
+  ou domínio personalizado. Não use o endpoint autenticado de `S3_ENDPOINT`.
+- `S3_REGION`: opcional; no R2, o padrão é `auto`.
+
+O acesso público precisa estar habilitado na Cloudflare. O app não torna um
+bucket R2 público automaticamente. Valide um upload e abra a imagem em uma
+janela sem autenticação depois do deploy. Os testes locais verificam o SDK e um
+servidor S3 de teste; não validam as permissões do bucket real sem acesso a ele.
