@@ -694,3 +694,33 @@ Este projeto está identificado no `package.json` como privado e foi organizado
 para uso acadêmico e de demonstração. Antes de uma operação comercial, revise
 licenciamento, privacidade, retenção de dados, e-mails, armazenamento de
 imagens e pagamentos reais.
+
+## Campanhas da comunidade
+
+No início do feed, usuários autenticados podem criar pedidos de materiais com
+beneficiário, objetivo, meta em unidades, cidade, prazo e instruções de entrega.
+Cada campanha solicita um tipo de material; para materiais diferentes, crie
+campanhas separadas. Visitantes podem consultar as campanhas.
+
+Outros usuários oferecem uma quantidade e uma mensagem privada de entrega.
+O organizador consulta as contribuições, responde em particular para combinar
+local e horário e confirma o recebimento. Somente itens efetivamente recebidos
+entram na meta; ofertas pendentes são exibidas separadamente. O doador ou
+organizador pode cancelar uma oferta pendente. Contribuições finalizadas não
+podem ser alteradas, e repetir uma confirmação não soma a quantidade novamente.
+
+O organizador pode encerrar a campanha e ainda confirmar entregas combinadas.
+Prazo vencido, encerramento ou meta atingida impedem novas ofertas. O filtro
+permite consultar campanhas encerradas e metas atingidas; a busca do feed também
+pesquisa título, material, beneficiário e cidade. Não há selo de verificação de
+instituições nem integração de contribuições com anúncios nesta versão.
+
+As tabelas `campaigns` e `campaign_contributions` são criadas automaticamente
+no SQLite e pela migração `012_community_campaigns.sql` no PostgreSQL. Alterações
+e eventos `campaign.*` são gravados na mesma transação da outbox. As notificações
+de oferta, resposta e recebimento são locais e não dependem de RabbitMQ.
+As mensagens de entrega e respostas não aparecem na listagem pública.
+
+Validação: `npm run build` e `npm test`. O teste de integração PostgreSQL também
+exercita campanhas quando `DATABASE_PROVIDER=postgres` e a conexão estão
+configurados; esse teste precisa de um banco de testes isolado.

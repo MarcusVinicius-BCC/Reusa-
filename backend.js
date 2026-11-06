@@ -1,3 +1,4 @@
+const { registerCampaignRoutes, campaignSchema } = require('./storage/campaign-api');
 
 const express = require('express');
 const fs = require('fs');
@@ -1527,6 +1528,8 @@ async function start() {
     const bytes = loadDbBytes();
     db = bytes ? new SQL.Database(bytes) : new SQL.Database();
     seedDatabase();
+    for (const statement of campaignSchema.split(';').filter(part => part.trim())) run(statement);
+    persistDb();
     console.log('[database] SQLite fallback enabled explicitly');
   }
   eventPublisher = new EventPublisher({ url: process.env.AMQP_URL, exchange: process.env.EVENT_EXCHANGE || 'reusa.events' });
@@ -1616,6 +1619,7 @@ async function start() {
       isConfiguredAdminEmail
     });
   }
+  registerCampaignRoutes(app, { postgres: postgresEnabled() ? postgres : null, sqlite: { all, run, persist: persistDb }, authenticate: authMiddleware, flush: flushPendingEvents });
   app.use('/uploads', express.static(UPLOAD_DIR));
 
   app.get('/api/health/live', (_req, res) => res.json({ ok: true, status: 'live' }));

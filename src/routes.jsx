@@ -1,3 +1,4 @@
+import CampaignFeed from './components/CampaignFeed';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
@@ -646,6 +647,7 @@ function FeedScreen({ onNavigate }) {
       </header>
       <div className="feed-category-popover">{categoriesOpen ? <CategoryBar selected={category} onChange={(value) => { setCategory(value); setCategoriesOpen(false); }} showSaved={Boolean(session)} savedCount={favorites.length} /> : null}</div>
       <main className="feed-page">
+        <CampaignFeed session={session} search={search} />
         <section className="feed-available-heading" aria-labelledby="feed-available-title">
           <span className="material-symbols-outlined" aria-hidden="true">inventory_2</span>
           <h1 id="feed-available-title">Itens disponíveis</h1>

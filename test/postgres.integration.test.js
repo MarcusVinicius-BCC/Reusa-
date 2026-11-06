@@ -100,6 +100,18 @@ test('PostgreSQL provider persists a post, thread, reservation and outbox event'
     const completed = await request(baseUrl, `/api/posts/${postId}/complete`, { method: 'POST', headers: auth(owner.payload.token), body: JSON.stringify({ outcome: 'Vendido' }) });
     assert.equal(completed.response.status, 200);
     assert.equal(completed.payload.post.status, 'Vendido');
+    const campaign = await request(baseUrl, '/api/campaigns', { method: 'POST', headers: auth(owner.payload.token), body: JSON.stringify({ title: 'Cadeiras para escola', description: 'Uma sala de reforço precisa de cadeiras em boas condições.', beneficiary: 'Escola comunitária', material: 'Cadeiras', target: 2, city: 'Santarém, PA', logistics: 'Retirada na região central mediante agendamento.', deadline: '2099-12-31' }) });
+    assert.equal(campaign.response.status, 201);
+    const campaignUrl = `/api/campaigns/${campaign.payload.id}`;
+    const offer = await request(baseUrl, `${campaignUrl}/contributions`, { method: 'POST', headers: auth(interested.payload.token), body: JSON.stringify({ quantity: 2, note: 'Retirada pode ser combinada na sexta-feira.' }) });
+    assert.equal(offer.response.status, 201);
+    const confirm = () => request(baseUrl, `${campaignUrl}/contributions/${offer.payload.id}`, { method: 'PATCH', headers: auth(owner.payload.token), body: JSON.stringify({ status: 'received' }) });
+    assert.equal((await confirm()).response.status, 200);
+    assert.equal((await confirm()).response.status, 200);
+    const campaigns = await request(baseUrl, '/api/campaigns');
+    const saved = campaigns.payload.campaigns.find(item => item.id === campaign.payload.id);
+    assert.equal(saved.received, 2);
+    assert.equal(saved.accepting, false);
     const outbox = await request(baseUrl, '/api/distributed/status');
     assert.equal(outbox.response.status, 200);
     assert.ok(outbox.payload.pendingEvents >= 2);

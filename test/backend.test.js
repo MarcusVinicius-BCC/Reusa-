@@ -493,3 +493,74 @@ test('public listing location rejects exact residential addresses', async () => 
   assert.equal(rejected.response.status, 400);
   assert.match(rejected.payload.error, /exact address/i);
 });
+
+test('community campaigns track only confirmed deliveries and enforce permissions', async () => {
+  const loginAs = async email => (await request('/api/auth/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ email, password: '12345678' }) })).payload.token;
+  const owner = await loginAs('mariana@reusa.com');
+  const donor = await loginAs('carlos@reusa.com');
+  const headers = token => ({ 'Content-Type': 'application/json', Authorization: `Bearer ${token}` });
+  const send = (url, token, body, method = 'POST') => request(url, { method, headers: headers(token), body: JSON.stringify(body) });
+  const body = { title: 'Cadeiras para o reforço escolar', beneficiary: 'Escola da comunidade', description: 'Precisamos de cadeiras em boas condições para abrir uma sala de reforço.', material: 'Cadeiras', target: 4, city: 'Santarém, PA', logistics: 'Podemos retirar na região central, mediante agendamento.', deadline: '2099-12-31' };
+  assert.equal((await request('/api/campaigns', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })).response.status, 401);
+  assert.equal((await send('/api/campaigns', owner, { ...body, target: 1.5 })).response.status, 400);
+  assert.equal((await send('/api/campaigns', owner, { ...body, deadline: '2099-02-30' })).response.status, 400);
+  assert.equal((await send('/api/campaigns', owner, { ...body, deadline: '2000-01-01' })).response.status, 400);
+  const created = await send('/api/campaigns', owner, body);
+  assert.equal(created.response.status, 201);
+  const id = created.payload.id;
+  const url = `/api/campaigns/${id}`;
+  const campaign = async () => (await request('/api/campaigns')).payload.campaigns.find(c => c.id === id);
+  assert.equal((await campaign()).remaining, 4);
+  const offer = { quantity: 2, note: 'Contato privado: combinar retirada na terça-feira.' };
+  assert.equal((await send(`${url}/contributions`, owner, offer)).response.status, 400);
+  assert.equal((await send(`${url}/contributions`, donor, { ...offer, quantity: 0 })).response.status, 400);
+  const pledged = await send(`${url}/contributions`, donor, offer);
+  assert.equal(pledged.response.status, 201);
+  assert.equal((await campaign()).received, 0);
+  assert.equal((await campaign()).pledged, 2);
+  assert.ok(!JSON.stringify((await request('/api/campaigns')).payload).includes(offer.note));
+  assert.equal((await request(`${url}/contributions`)).response.status, 401);
+  const registered = await request('/api/auth/register', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ name: 'Terceiro participante', email: 'campaign-private@example.test', password: 'senha-segura-123', city: 'Santarém, PA' }) });
+  assert.equal(registered.response.status, 201);
+  const stranger = registered.payload.token;
+  assert.equal((await request(`${url}/contributions`, { headers: headers(stranger) })).payload.contributions.length, 0);
+  const contributionUrl = `${url}/contributions/${pledged.payload.id}`;
+  const reply = 'Vamos combinar a retirada na escola na sexta-feira.';
+  assert.equal((await send(`${contributionUrl}/reply`, donor, { reply }, 'PATCH')).response.status, 403);
+  assert.equal((await send(`${contributionUrl}/reply`, owner, { reply }, 'PATCH')).response.status, 200);
+  assert.equal((await request(`${url}/contributions`, { headers: headers(donor) })).payload.contributions[0].reply, reply);
+  assert.ok(!JSON.stringify((await request('/api/campaigns')).payload).includes(reply));
+  const notices = (await request('/api/notifications', { headers: headers(owner) })).payload.notifications;
+  assert.ok(notices.some(n => n.title === 'Nova contribuição na campanha'));
+
+  assert.equal((await send(contributionUrl, donor, { status: 'received' }, 'PATCH')).response.status, 403);
+  assert.equal((await send(contributionUrl, stranger, { status: 'cancelled' }, 'PATCH')).response.status, 403);
+  const confirmations = await Promise.all([send(contributionUrl, owner, { status: 'received' }, 'PATCH'), send(contributionUrl, owner, { status: 'received' }, 'PATCH')]);
+  assert.deepEqual(confirmations.map(r => r.response.status), [200, 200]);
+  assert.equal((await campaign()).received, 2);
+  assert.equal((await campaign()).remaining, 2);
+  assert.equal((await send(contributionUrl, donor, { status: 'cancelled' }, 'PATCH')).response.status, 409);
+  const second = await send(`${url}/contributions`, donor, offer);
+  const secondUrl = `${url}/contributions/${second.payload.id}`;
+  assert.equal((await send(secondUrl, donor, { status: 'cancelled' }, 'PATCH')).response.status, 200);
+  assert.equal((await campaign()).pledged, 0);
+  assert.equal((await send(secondUrl, owner, { status: 'received' }, 'PATCH')).response.status, 409);
+  const last = await send(`${url}/contributions`, donor, offer);
+  assert.equal((await send(`${url}/contributions/${last.payload.id}`, owner, { status: 'received' }, 'PATCH')).response.status, 200);
+  assert.equal((await campaign()).received, 4);
+  assert.equal((await campaign()).accepting, false);
+  assert.equal((await send(`${url}/contributions`, donor, offer)).response.status, 409);
+  assert.equal((await send(`${url}/close`, donor, {}, 'PATCH')).response.status, 403);
+  assert.equal((await send(`${url}/close`, owner, {}, 'PATCH')).response.status, 200);
+  assert.equal((await campaign()).status, 'closed');
+  const SQL = await require('sql.js')();
+  const persisted = new SQL.Database(fs.readFileSync(path.join(dataDir, 'reusa.sqlite')));
+  try {
+    assert.equal(persisted.exec('SELECT status FROM campaigns WHERE id = ?', [id])[0].values[0][0], 'closed');
+    const events = persisted.exec('SELECT type FROM event_outbox WHERE payload_json LIKE ?', [`%${pledged.payload.id}%`])[0].values.flat();
+    assert.equal(events.filter(type => type === 'campaign.contribution_received').length, 1);
+    assert.ok(events.includes('campaign.contribution_pledged'));
+  } finally { persisted.close(); }
+
+  assert.equal((await send('/api/campaigns/missing/contributions', donor, offer)).response.status, 404);
+});
