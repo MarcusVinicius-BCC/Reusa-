@@ -1747,9 +1747,6 @@ function ProfileScreen({ onGoToFeed, onSettings, onOpenPost, onAdmin }) {
     <Shell nav={navRoutes} active="/perfil">
       <UnifiedTopbar />
       <main className="page profile-page">
-        <a className="negotiations-shortcut" href="/alertas">Meus alertas de itens <span aria-hidden="true">→</span></a>
-        <a className="negotiations-shortcut" href="/pedidos">Pedidos da comunidade <span aria-hidden="true">→</span></a>
-        <a className="negotiations-shortcut" href="/negociacoes">Minhas negociações <span aria-hidden="true">→</span></a>
         <section className="profile-hero">
           <button className="avatar-wrap avatar-upload-button" type="button" onClick={() => avatarInput.current?.click()} aria-label="Alterar foto de perfil" title="Alterar foto de perfil" disabled={avatarBusy}>{user.avatar ? <img src={user.avatar} alt={user.name} /> : <span className="avatar-placeholder material-symbols-outlined" aria-label={`Perfil de ${user.name}`}>person</span>}<span className="avatar-upload-icon material-symbols-outlined">{avatarBusy ? 'progress_activity' : 'photo_camera'}</span><span className="verified material-symbols-outlined">verified</span></button>
           <input ref={avatarInput} className="visually-hidden" type="file" accept="image/jpeg,image/png,image/gif,image/webp,image/avif" onChange={changeAvatar} />
@@ -1775,9 +1772,16 @@ function ProfileScreen({ onGoToFeed, onSettings, onOpenPost, onAdmin }) {
         {achievements.length ? <section className="badge-row">{achievements.map((achievement, index) => <Badge key={achievement} tone={['mint', 'coral', 'stone'][index % 3]} icon="workspace_premium" label={achievement} />)}</section> : null}
         <section className="profile-toolbar">
           <h2 id="profile-listing-title">{listingTab === 'mine' ? 'Meus anúncios' : 'Itens salvos'}</h2>
-          <div role="tablist" aria-label="Anúncios do perfil">
-            <button id="profile-mine-tab" className={`profile-icon-action ${listingTab === 'mine' ? 'active' : ''}`} onClick={() => setListingTab('mine')} role="tab" aria-selected={listingTab === 'mine'} aria-controls="profile-listing-panel" aria-label="Meus anúncios" title="Meus anúncios"><span className="material-symbols-outlined">grid_view</span></button>
-            <button id="profile-saved-tab" className={`profile-icon-action ${listingTab === 'saved' ? 'active' : ''}`} onClick={() => setListingTab('saved')} role="tab" aria-selected={listingTab === 'saved'} aria-controls="profile-listing-panel" aria-label="Itens salvos" title="Itens salvos"><span className="material-symbols-outlined">bookmark</span></button>
+          <div className="profile-listing-actions">
+            <div className="profile-listing-tabs" role="tablist" aria-label="Anúncios do perfil">
+              <button id="profile-mine-tab" className={`profile-icon-action ${listingTab === 'mine' ? 'active' : ''}`} onClick={() => setListingTab('mine')} role="tab" aria-selected={listingTab === 'mine'} aria-controls="profile-listing-panel" aria-label="Meus anúncios" title="Meus anúncios"><span className="material-symbols-outlined">grid_view</span></button>
+              <button id="profile-saved-tab" className={`profile-icon-action ${listingTab === 'saved' ? 'active' : ''}`} onClick={() => setListingTab('saved')} role="tab" aria-selected={listingTab === 'saved'} aria-controls="profile-listing-panel" aria-label="Itens salvos" title="Itens salvos"><span className="material-symbols-outlined">bookmark</span></button>
+            </div>
+            <nav className="profile-listing-shortcuts" aria-label="Atalhos do perfil">
+              <a className="profile-icon-action" href="/alertas" aria-label="Meus alertas de itens" title="Meus alertas de itens"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4m-2-19v1"/></svg></a>
+              <a className="profile-icon-action" href="/pedidos" aria-label="Pedidos da comunidade" title="Pedidos da comunidade"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 5h16v15H4zM8 3v4m8-4v4M8 11h8m-8 4h5"/></svg></a>
+              <a className="profile-icon-action" href="/negociacoes" aria-label="Minhas negociações" title="Minhas negociações"><svg width="21" height="21" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 7h16m-4-4 4 4-4 4M20 17H4m4-4-4 4 4 4"/></svg></a>
+            </nav>
           </div>
         </section>
         <section className="profile-grid" id="profile-listing-panel" role="tabpanel" aria-labelledby={listingTab === 'mine' ? 'profile-mine-tab' : 'profile-saved-tab'} aria-live="polite">
