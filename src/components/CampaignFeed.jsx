@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { api } from '../services/api';
 import './campaigns.css';
 
@@ -73,9 +73,15 @@ function CampaignCard({ campaign: c, session, refresh }) {
   </article>;
 }
 
-export default function CampaignFeed({ session, search = '' }) {
+export default function CampaignFeed({ session, search = '', creating = false, onCloseCreate }) {
   const [campaigns, setCampaigns] = useState([]);
-  const [creating, setCreating] = useState(false);
+  const createForm = useRef(null);
+  useEffect(() => {
+    if (creating && session) {
+      createForm.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      createForm.current?.querySelector('input')?.focus({ preventScroll: true });
+    }
+  }, [creating, session?.id]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
@@ -89,7 +95,7 @@ export default function CampaignFeed({ session, search = '' }) {
   async function create(event) {
     event.preventDefault(); setBusy(true); setError('');
     const data = Object.fromEntries(new FormData(event.currentTarget));
-    try { await api.createCampaign({ ...data, target: Number(data.target) }); await refresh(); setCreating(false); }
+    try { await api.createCampaign({ ...data, target: Number(data.target) }); await refresh(); onCloseCreate(); }
     catch (e) { setError(e.message); }
     finally { setBusy(false); }
   }
@@ -97,19 +103,32 @@ export default function CampaignFeed({ session, search = '' }) {
   const visible = campaigns.filter(c => (showAll || c.accepting || c.owner_id === session?.id) && (!query || [c.title,c.description,c.city,c.material,c.beneficiary].some(v => v.toLocaleLowerCase('pt-BR').includes(query))));
   return <section className="campaign-feed" aria-labelledby="campaign-heading">
     <div className="campaign-heading"><div><span className="campaign-tag">Ajude uma necessidade real</span><h2 id="campaign-heading">Campanhas da comunidade</h2><p>Conecte materiais disponíveis a quem precisa deles.</p></div>
-      {session && <button type="button" className="primary-btn" onClick={() => setCreating(v => !v)} aria-expanded={creating}>{creating ? 'Fechar formulário' : 'Criar campanha'}</button>}
     </div>
     {error && <p role="alert" className="campaign-error">{error} <button type="button" onClick={async () => { try { await refresh(); setError(''); } catch (e) { setError(e.message); } }}>Tentar novamente</button></p>}
-    {creating && session && <form className="campaign-form campaign-create" onSubmit={create}>
-      <h3>Qual necessidade você quer atender?</h3>
-      <label>Título<input name="title" required minLength="5" maxLength="100" placeholder="20 cadeiras para a sala de reforço" /></label>
-      <label>Instituição, projeto ou pessoa beneficiada<input name="beneficiary" required minLength="3" maxLength="120" placeholder="Escola ou projeto comunitário" /></label>
-      <label>Objetivo e condições dos materiais<textarea name="description" required minLength="20" maxLength="2000" placeholder="Conte como os materiais serão utilizados e quais condições são necessárias." /></label>
-      <div className="campaign-form-row"><label>Material solicitado<input name="material" required minLength="2" maxLength="80" placeholder="Cadeiras em bom estado" /></label><label>Meta em unidades<input name="target" type="number" min="1" max="100000" step="1" required /></label></div>
-      <div className="campaign-form-row"><label>Cidade / UF<input name="city" required minLength="3" maxLength="100" defaultValue={session.city || ''} placeholder="Santarém, PA" /></label><label>Receber ofertas até<input name="deadline" type="date" min={new Date().toISOString().slice(0,10)} required /></label></div>
-      <label>Como será a entrega ou retirada?<textarea name="logistics" required minLength="10" maxLength="500" placeholder="Informe a região e se o projeto pode retirar. Combine endereços pessoais em particular." /></label>
-      <p className="campaign-meta">Publique somente pedidos que você está autorizado a organizar. A meta contará apenas contribuições cujo recebimento você confirmar.</p>
-      <button className="primary-btn" disabled={busy}>{busy ? 'Publicando…' : 'Publicar campanha'}</button>
+    {creating && session && <form ref={createForm} id="campaign-create-form" className="campaign-form campaign-create" onSubmit={create} aria-labelledby="campaign-create-title" aria-busy={busy}>
+      <div className="campaign-create-header">
+        <div className="campaign-create-intro"><span className="edit-section-icon campaign-form-icon" aria-hidden="true"><svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="m12 19-7.5-7.3a4.5 4.5 0 0 1 6.4-6.4L12 6.5l1.1-1.2a4.5 4.5 0 0 1 6.4 6.4Z"/><path d="M12 9v5m-2.5-2.5h5"/></svg></span><div><span className="eyebrow">Juntos, fazemos a diferença</span><h3 id="campaign-create-title">Uma nova campanha</h3><p>Transforme uma necessidade em uma ação da comunidade.</p></div></div>
+        <button type="button" className="edit-close-btn" aria-label="Fechar formulário de campanha" disabled={busy} onClick={onCloseCreate}><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><path d="m6 6 12 12M6 18 18 6" /></svg></button>
+      </div>
+      <fieldset className="campaign-create-section" disabled={busy}>
+        <legend><span className="campaign-step">01</span> Conte a sua causa</legend>
+        <p className="campaign-section-description">Quem será beneficiado e o que vocês querem realizar?</p>
+        <label>Título<input name="title" required minLength="5" maxLength="100" placeholder="Ex.: Cadeiras para a sala de reforço" /></label>
+        <label>Instituição, projeto ou pessoa beneficiada<input name="beneficiary" required minLength="3" maxLength="120" placeholder="Nome da escola, projeto ou pessoa" /></label>
+        <label>Objetivo e condições dos materiais<textarea name="description" required minLength="20" maxLength="2000" placeholder="Conte como os materiais vão ajudar e em quais condições precisam estar." /></label>
+      </fieldset>
+      <fieldset className="campaign-create-section" disabled={busy}>
+        <legend><span className="campaign-step">02</span> Defina a meta</legend>
+        <p className="campaign-section-description">Cada campanha reúne um tipo de material, contado em unidades.</p>
+        <div className="campaign-form-row"><label>Material solicitado<input name="material" required minLength="2" maxLength="80" placeholder="Ex.: Cadeiras em bom estado" /></label><label>Meta em unidades<input name="target" type="number" min="1" max="100000" step="1" required placeholder="Ex.: 20" /></label></div>
+      </fieldset>
+      <fieldset className="campaign-create-section" disabled={busy}>
+        <legend><span className="campaign-step">03</span> Combine os próximos passos</legend>
+        <p className="campaign-section-description">Ajude quem quer contribuir a se organizar para a entrega.</p>
+        <div className="campaign-form-row"><label>Cidade / UF<input name="city" required minLength="3" maxLength="100" defaultValue={session.city || ''} placeholder="Santarém, PA" /></label><label>Receber ofertas até<input name="deadline" type="date" min={new Date().toISOString().slice(0,10)} required /></label></div>
+        <label>Como será a entrega ou retirada?<textarea name="logistics" required minLength="10" maxLength="500" placeholder="Informe a região e se vocês podem retirar os materiais. Combine endereços pessoais em particular." /></label>
+      </fieldset>
+      <div className="campaign-create-footer"><p><svg className="campaign-hint-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6Z"/><path d="m8 12 3 3 5-6"/></svg>A meta avança a cada recebimento confirmado por você.</p><div><button type="button" className="secondary-btn" disabled={busy} onClick={onCloseCreate}>Cancelar</button><button className="primary-btn" disabled={busy}>{busy ? 'Publicando…' : 'Publicar campanha'}<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 12h16m-6-6 6 6-6 6"/></svg></button></div></div>
     </form>}
     <label className="campaign-filter"><input type="checkbox" checked={showAll} onChange={e => setShowAll(e.target.checked)} /> Incluir campanhas encerradas e metas atingidas</label>
     {loading ? <p role="status">Carregando campanhas…</p> : !visible.length ? <p className="campaign-empty">{query ? 'Nenhuma campanha corresponde à busca.' : 'Nenhuma campanha aberta por enquanto. Organize um pedido de materiais para sua comunidade.'}</p> : <div className="campaign-grid">{visible.map(c => <CampaignCard key={c.id} campaign={c} session={session} refresh={refresh} />)}</div>}

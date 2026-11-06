@@ -590,6 +590,7 @@ function FeedScreen({ onNavigate }) {
   const loadNotifications = useAppStore((state) => state.loadNotifications);
   const session = useAppStore((state) => state.session);
   const [category, setCategory] = useState('Todos');
+  const [creatingCampaign, setCreatingCampaign] = useState(false);
   const [categoriesOpen, setCategoriesOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
   const [headerHidden, setHeaderHidden] = useState(false);
@@ -643,11 +644,16 @@ function FeedScreen({ onNavigate }) {
       <header className={headerHidden ? 'topbar feed-topbar feed-topbar-hidden' : 'topbar feed-topbar'}>
         <a className="brand unified-brand" href="/feed" aria-label="ReUsa+, início"><img className="feed-logo" src={feedLogo} alt="ReUsa+" /></a>
         {searchOpen ? <label className="searchbar feed-search-expanded"><span className="material-symbols-outlined">search</span><input value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') setSearchOpen(false); }} placeholder="Buscar anúncios" autoFocus /><button type="button" className={categoriesOpen ? 'category-trigger category-trigger-active' : 'category-trigger'} onClick={toggleCategories} aria-expanded={categoriesOpen} aria-label="Escolher categoria"><span className="material-symbols-outlined">category</span></button><button type="button" className="feed-search-close" onClick={() => setSearchOpen(false)} aria-label="Fechar busca"><span className="material-symbols-outlined">close</span></button></label> : <div className="feed-search-tools"><button type="button" className="icon-btn feed-search-trigger" onClick={() => setSearchOpen(true)} aria-label="Abrir busca"><span className="material-symbols-outlined">search</span></button><button type="button" className={categoriesOpen ? 'category-trigger category-trigger-active' : 'category-trigger'} onClick={toggleCategories} aria-expanded={categoriesOpen} aria-label="Escolher categoria"><span className="material-symbols-outlined">category</span></button></div>}
-        <div className="topbar-actions"><HeaderProfileButton /></div>
+        <div className="topbar-actions">
+          {session && <button id="create-campaign-trigger" type="button" className="campaign-header-trigger" aria-label="Criar campanha" title="Criar campanha" aria-expanded={creatingCampaign} aria-controls="campaign-create-form" onClick={() => { setHeaderHidden(false); setCreatingCampaign(true); }}>
+            <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"/><path d="M12 9v6m-3-3h6"/></svg>
+          </button>}
+          <HeaderProfileButton />
+        </div>
       </header>
       <div className="feed-category-popover">{categoriesOpen ? <CategoryBar selected={category} onChange={(value) => { setCategory(value); setCategoriesOpen(false); }} showSaved={Boolean(session)} savedCount={favorites.length} /> : null}</div>
       <main className="feed-page">
-        <CampaignFeed session={session} search={search} />
+        <CampaignFeed session={session} search={search} creating={creatingCampaign} onCloseCreate={() => { setCreatingCampaign(false); setHeaderHidden(false); document.getElementById('create-campaign-trigger')?.focus({ preventScroll: true }); }} />
         <section className="feed-available-heading" aria-labelledby="feed-available-title">
           <span className="material-symbols-outlined" aria-hidden="true">inventory_2</span>
           <h1 id="feed-available-title">Itens disponíveis</h1>
@@ -1778,6 +1784,7 @@ function MapScreen({ onSuggest }) {
   const [selectedPoint, setSelectedPoint] = useState(null);
   const [userLocation, setUserLocation] = useState(null);
   const [category, setCategory] = useState('Todos');
+  const [creatingCampaign, setCreatingCampaign] = useState(false);
   const [search, setSearch] = useState('');
   const [mapCenter, setMapCenter] = useState([-2.4431, -54.7083]);
   const [routeOrigin, setRouteOrigin] = useState([-2.4431, -54.7083]);
