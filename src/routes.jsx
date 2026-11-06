@@ -1,3 +1,4 @@
+import DeliveryCard from './components/DeliveryCard';
 import CampaignCreateForm from './components/CampaignCreateForm';
 import CampaignFeed from './components/CampaignFeed';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -916,7 +917,7 @@ function FeedCard({ post, onNavigate, onOpenChat, onOpenPayment }) {
         </div>
       </div>
       {commentsOpen ? <section className="comments-panel"><div className="comments-list">{comments.length ? comments.map((comment) => <div className="comment" key={comment.id}>{comment.avatar ? <img src={comment.avatar} alt="" /> : <span className="avatar-placeholder material-symbols-outlined" aria-hidden="true">person</span>}<div><strong>{comment.name}</strong><p>{comment.text}</p></div></div>) : commentCount === 0 ? <p className="comments-empty">Ainda não há comentários. Seja o primeiro.</p> : null}</div><form className="comment-form" onSubmit={addComment}><input value={commentText} maxLength="500" onChange={(event) => setCommentText(event.target.value)} placeholder="Escreva um comentário..." /><button className="send-btn" disabled={commentBusy} aria-label="Publicar comentário"><span className="material-symbols-outlined">send</span></button></form></section> : null}
-      {interestOptionsOpen ? <ModalPortal><div className="interest-modal-backdrop" role="presentation" onClick={() => setInterestOptionsOpen(false)}><section className="interest-modal" role="dialog" aria-modal="true" aria-labelledby={`interest-title-${post.id}`} onClick={(event) => event.stopPropagation()}><button type="button" className="interest-modal-close" onClick={() => setInterestOptionsOpen(false)} aria-label="Fechar opções"><span className="material-symbols-outlined">close</span></button><div className="interest-modal-heading"><span className="interest-modal-badge"><span className="material-symbols-outlined">handshake</span></span><span className="eyebrow">Tenho interesse</span></div><h2 id={`interest-title-${post.id}`}>Como você quer continuar?</h2><p>Escolha uma forma de iniciar sua negociação com o anunciante.</p><div className="interest-modal-actions"><button type="button" className="interest-choice interest-choice-message" onClick={() => { setInterestOptionsOpen(false); onOpenChat(); }}><span className="interest-choice-icon"><span className="material-symbols-outlined">chat_bubble</span></span><span className="interest-choice-copy"><strong>Conversar por mensagem</strong><small>Combine os detalhes pelo chat</small></span><span className="material-symbols-outlined interest-choice-arrow">arrow_forward</span></button><button type="button" className="interest-choice interest-choice-payment" onClick={openProposal}><span className="interest-choice-icon"><span className="material-symbols-outlined">payments</span></span><span className="interest-choice-copy"><strong>Fazer oferta em dinheiro</strong><small>Pagamento via Mercado Pago após a reserva</small></span><span className="material-symbols-outlined interest-choice-arrow">arrow_forward</span></button></div><small className="interest-modal-note"><span className="material-symbols-outlined">info</span>O pagamento só será liberado depois que o vendedor reservar o item para você.</small></section></div></ModalPortal> : null}
+      {interestOptionsOpen ? <ModalPortal><div className="interest-modal-backdrop" role="presentation" onClick={() => setInterestOptionsOpen(false)}><section className="interest-modal" role="dialog" aria-modal="true" aria-labelledby={`interest-title-${post.id}`} onClick={(event) => event.stopPropagation()}><button type="button" className="interest-modal-close" onClick={() => setInterestOptionsOpen(false)} aria-label="Fechar opções"><span className="material-symbols-outlined">close</span></button><div className="interest-modal-heading"><span className="interest-modal-badge"><span className="material-symbols-outlined">handshake</span></span><span className="eyebrow">Tenho interesse</span></div><h2 id={`interest-title-${post.id}`}>Como você quer continuar?</h2><p>Escolha uma forma de iniciar sua negociação com o anunciante.</p><div className="interest-modal-actions"><button type="button" className="interest-choice interest-choice-message" onClick={() => { setInterestOptionsOpen(false); onOpenChat(); }}><span className="interest-choice-icon"><span className="material-symbols-outlined">chat_bubble</span></span><span className="interest-choice-copy"><strong>Conversar por mensagem</strong><small>Combine os detalhes pelo chat</small></span><span className="material-symbols-outlined interest-choice-arrow">arrow_forward</span></button><button type="button" className="interest-choice interest-choice-payment" onClick={openProposal}><span className="interest-choice-icon"><span className="material-symbols-outlined">payments</span></span><span className="interest-choice-copy"><strong>Fazer oferta em dinheiro</strong><small>Pagamento após reserva e acordo de entrega</small></span><span className="material-symbols-outlined interest-choice-arrow">arrow_forward</span></button></div><small className="interest-modal-note"><span className="material-symbols-outlined">info</span>O pagamento só será liberado após a reserva e o aceite do local e horário de entrega pelas duas pessoas.</small></section></div></ModalPortal> : null}
       {proposalOpen ? <ModalPortal><div className="interest-modal-backdrop" role="presentation" onClick={() => setProposalOpen(false)}><section className="interest-modal proposal-modal" role="dialog" aria-modal="true" aria-labelledby={`proposal-title-${post.id}`} onClick={(event) => event.stopPropagation()}><button type="button" className="interest-modal-close" onClick={() => setProposalOpen(false)} aria-label="Fechar proposta"><span className="material-symbols-outlined">close</span></button><div className="interest-modal-heading"><span className="interest-modal-badge proposal-modal-badge"><span className="material-symbols-outlined">payments</span></span><span className="eyebrow">Oferta de pagamento</span></div>{proposalSent ? <><h2 id={`proposal-title-${post.id}`}>Proposta enviada!</h2><p>Sua oferta foi enviada e aguarda a resposta do vendedor.</p><div className="proposal-success"><span className="material-symbols-outlined">schedule</span><strong>Você poderá pagar depois que o vendedor aceitar e reservar o anúncio.</strong></div><button type="button" className="primary-btn proposal-close-action" onClick={() => setProposalOpen(false)}>Voltar ao feed</button></> : <><h2 id={`proposal-title-${post.id}`}>Envie sua proposta</h2><p>Informe o valor e a forma de pagamento para o vendedor analisar.</p>{proposalNegotiation ? <form className="proposal-modal-form" onSubmit={submitProposal}><label>Valor da oferta (R$)<input inputMode="decimal" value={proposalForm.amount} onChange={(event) => setProposalForm((current) => ({ ...current, amount: formatMoneyInput(event.target.value) }))} placeholder="10,00" required /></label><label>Forma de pagamento<select value={proposalForm.method} onChange={(event) => setProposalForm((current) => ({ ...current, method: event.target.value }))}><option value="pix">PIX</option><option value="card">Cartão</option></select></label><button className="primary-btn" disabled={proposalBusy}>{proposalBusy ? 'Enviando...' : 'Enviar proposta'}<span className="material-symbols-outlined">send</span></button></form> : <div className="proposal-loading"><span className="material-symbols-outlined">progress_activity</span>Preparando sua proposta...</div>}</>}</section></div></ModalPortal> : null}
     </article>
   );
@@ -1198,21 +1199,21 @@ function CreatePostScreen({ onBack, onSuccess }) {
   );
 }
 
-function PostStatusControls({ post, isSale, statusUpdating, statusMessage, onChange, onComplete }) {
+function PostStatusControls({ post, deliveryLocked, statusUpdating, statusMessage, onChange }) {
   const isAvailable = post.status === 'Disponível';
   const isClosed = post.status === 'Encerrado';
   const isUpdating = Boolean(statusUpdating);
 
   return <div className="status-controls" aria-label="Status do anúncio">
-    <button type="button" className={isAvailable ? 'status-control status-control-available is-active' : 'status-control status-control-available'} onClick={() => onChange('Disponível')} disabled={isUpdating || isAvailable} aria-pressed={isAvailable} aria-busy={statusUpdating === 'Disponível'}>
+    <button type="button" className={isAvailable ? 'status-control status-control-available is-active' : 'status-control status-control-available'} onClick={() => onChange('Disponível')} disabled={isUpdating || isAvailable || deliveryLocked} aria-pressed={isAvailable} aria-busy={statusUpdating === 'Disponível'}>
       <span className="material-symbols-outlined">{statusUpdating === 'Disponível' ? 'progress_activity' : 'check_circle'}</span>
       {statusUpdating === 'Disponível' ? 'Reabrindo...' : isAvailable ? 'Disponível' : isClosed ? 'Reabrir' : 'Disponível'}
     </button>
-    <button type="button" className={isClosed ? 'status-control status-control-closed is-active' : 'status-control status-control-closed'} onClick={() => onChange('Encerrado')} disabled={isUpdating || isClosed} aria-pressed={isClosed} aria-busy={statusUpdating === 'Encerrado'}>
+    <button type="button" className={isClosed ? 'status-control status-control-closed is-active' : 'status-control status-control-closed'} onClick={() => onChange('Encerrado')} disabled={isUpdating || isClosed || deliveryLocked} aria-pressed={isClosed} aria-busy={statusUpdating === 'Encerrado'}>
       <span className="material-symbols-outlined">{statusUpdating === 'Encerrado' ? 'progress_activity' : 'cancel'}</span>
       {statusUpdating === 'Encerrado' ? 'Encerrando...' : isClosed ? 'Encerrado' : 'Encerrar'}
     </button>
-    {post.status === 'Reservado' ? isSale ? <button type="button" onClick={() => onComplete('Vendido')}>Marcar vendido</button> : <><button type="button" onClick={() => onComplete('Doado')}>Marcar doado</button><button type="button" onClick={() => onComplete('Trocado')}>Marcar trocado</button></> : null}
+    {post.status === 'Reservado' ? <p className="status-feedback">A conclusão acontece quando o destinatário confirma o recebimento em Coleta e entrega.</p> : null}
     {statusMessage ? <p className="status-feedback" role="status" aria-live="polite"><span className="material-symbols-outlined">check_circle</span>{statusMessage}</p> : null}
   </div>;
 }
@@ -1230,10 +1231,6 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
   const [paymentForm, setPaymentForm] = useState({ amount: '', method: 'pix' });
   const [paymentBusy, setPaymentBusy] = useState(false);
   const [collection, setCollection] = useState(null);
-  const [collectionPoints, setCollectionPoints] = useState([]);
-  const [collectionForm, setCollectionForm] = useState({ mode: 'pickup', scheduledFor: '', address: '', collectionPointId: '' });
-  const [collectionBusy, setCollectionBusy] = useState(false);
-  const [collectionToken, setCollectionToken] = useState('');
   const [proposalForm, setProposalForm] = useState({ amount: '', method: 'pix' });
   const [proposalBusy, setProposalBusy] = useState(false);
   const [editing, setEditing] = useState(false);
@@ -1250,6 +1247,17 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
   const [busy, setBusy] = useState(false);
   const [statusUpdating, setStatusUpdating] = useState('');
   const [statusMessage, setStatusMessage] = useState('');
+
+  useEffect(() => {
+    if (!negotiation?.id) return;
+    let active = true;
+    const sync = () => Promise.all([api.collection(negotiation.id), api.payment(negotiation.id), api.negotiation(postId), api.post(postId)]).then(([deliveryResult, paymentResult, negotiationResult, postResult]) => {
+      if (active) { setCollection(deliveryResult.collection); setPayment(paymentResult.payment); setNegotiation(negotiationResult.negotiation); setPost(postResult.post); }
+    }).catch(() => {});
+    const timer = window.setInterval(sync, 8000);
+    window.addEventListener('focus', sync);
+    return () => { active = false; window.clearInterval(timer); window.removeEventListener('focus', sync); };
+  }, [negotiation?.id]);
 
   const ownPost = post?.authorId === session?.id;
   const isSale = post?.goal === 'Venda';
@@ -1285,11 +1293,6 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
   }, [postId, session?.id]);
 
   useEffect(() => {
-    if (collectionForm.mode !== 'dropoff' || collectionPoints.length) return;
-    api.collectionPoints().then((result) => setCollectionPoints(result.points || [])).catch(() => {});
-  }, [collectionForm.mode, collectionPoints.length]);
-
-  useEffect(() => {
     const previews = editImages.map((image) => image.file ? URL.createObjectURL(image.file) : image.url);
     setEditImagePreviews(previews);
     return () => previews.forEach((preview, index) => {
@@ -1323,6 +1326,14 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
   async function refreshPost() {
     const result = await api.post(postId);
     setPost(result.post);
+    if (session) {
+      const current = (await api.negotiation(postId)).negotiation;
+      setNegotiation(current);
+      if (current) {
+        const [paymentResult, deliveryResult] = await Promise.all([api.payment(current.id), api.collection(current.id)]);
+        setPayment(paymentResult.payment); setCollection(deliveryResult.collection);
+      } else { setPayment(null); setCollection(null); }
+    }
   }
 
   async function startConversation() {
@@ -1336,6 +1347,7 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
   async function submitPayment(event) {
     event.preventDefault();
     if (!isSale || !negotiation || paymentBusy) return;
+    if (!collection?.paymentReady) return alert('Combine e aceite local e horário da entrega antes de pagar.');
     // The accepted proposal is authoritative: buyers cannot change its amount or method at checkout.
     const amountCents = Number(negotiation.proposalAmountCents);
     const method = negotiation.proposalMethod;
@@ -1349,7 +1361,7 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
         amountCents,
         currency: 'BRL',
         method,
-        idempotencyKey: `web-${session.id}-${negotiation.id}-${Date.now()}`
+        idempotencyKey: collection.paymentAttemptKey || `web-${session.id}-${negotiation.id}-${Date.now()}`
       });
       setPayment(result.payment);
       if (result.payment.checkoutUrl) {
@@ -1360,42 +1372,11 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
         alert(result.payment.status === 'succeeded' ? 'Pagamento confirmado.' : 'Pagamento aguardando confirmação.');
       }
     } catch (error) {
+      try { setCollection((await api.collection(negotiation.id)).collection); } catch {}
       alert(error.message);
     } finally {
       setPaymentBusy(false);
     }
-  }
-
-  async function scheduleCollection(event) {
-    event.preventDefault();
-    if (!negotiation || collectionBusy) return;
-    setCollectionBusy(true);
-    try {
-      const result = await api.scheduleCollection(negotiation.id, collectionForm);
-      setCollection(result.collection);
-      alert('Coleta agendada. Apresente o QR Code no momento da entrega.');
-    } catch (error) {
-      alert(error.message);
-    } finally {
-      setCollectionBusy(false);
-    }
-  }
-
-  async function confirmCollection() {
-    if (!collection || !collectionToken.trim()) return;
-    try {
-      const result = await api.confirmCollection(collection.id, collectionToken.trim());
-      setCollection(result.collection);
-      setCollectionToken('');
-    } catch (error) { alert(error.message); }
-  }
-
-  async function changeCollectionStatus(status) {
-    if (!collection) return;
-    try {
-      const result = await api.updateCollectionStatus(collection.id, status);
-      setCollection(result.collection);
-    } catch (error) { alert(error.message); }
   }
 
   async function submitProposal(event) {
@@ -1484,11 +1465,6 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
     } finally {
       setStatusUpdating('');
     }
-  }
-
-  async function complete(outcome) {
-    if (!window.confirm(`Confirmar que o item foi ${outcome.toLowerCase()}?`)) return;
-    try { await useAppStore.getState().completePost(post.id, outcome); await refreshPost(); alert('Negociação concluída. As avaliações foram liberadas.'); } catch (error) { alert(error.message); }
   }
 
   async function saveEdit(event) {
@@ -1593,7 +1569,7 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
             </footer>
           </form>
         ) : null}
-        <PostStatusControls post={post} isSale={isSale} statusUpdating={statusUpdating} statusMessage={statusMessage} onChange={updateStatus} onComplete={complete} />
+        <PostStatusControls post={post} deliveryLocked={Boolean((collection && collection.status !== 'cancelled') || ['processing','succeeded'].includes(payment?.status))} statusUpdating={statusUpdating} statusMessage={statusMessage} onChange={updateStatus} />
         {interested.length ? <div className="interested-list">{interested.map((item) => <article key={item.id}>{item.user?.avatar ? <img className="interested-avatar" src={item.user.avatar} alt={`Foto de ${item.user.name || 'usuário'}`} /> : <span className="avatar-placeholder material-symbols-outlined">person</span>}<div><strong>{item.user?.name || 'Usuário'}</strong><small>{item.user?.city} · {negotiationStatusLabel(item.status)}</small>{item.proposalStatus !== 'none' ? <small>Proposta: {Number.isFinite(Number(item.proposalAmountCents)) && Number(item.proposalAmountCents) > 0 ? `R$ ${(Number(item.proposalAmountCents) / 100).toFixed(2).replace('.', ',')}` : 'Valor indisponível'} · {proposalStatusLabel(item.proposalStatus)}</small> : null}</div>{isSale ? (
             item.proposalStatus === 'pending' ? <>
               <button className="secondary-btn" onClick={() => api.decideProposal(item.id, 'rejected').then(loadInterested).catch((error) => alert(error.message))}>Recusar oferta</button>
@@ -1608,26 +1584,10 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
           )}</article>)}</div> : null}
       </section>
     ) : null}
-    {negotiation?.status === 'reserved' ? <section className="review-form-card collection-card">
-      <span className="eyebrow">Logística segura</span><h2><span className="material-symbols-outlined">local_shipping</span> Coleta e entrega</h2>
-      {collection ? <div className="collection-tracking">
-        <div className="collection-status-line"><strong>{({ scheduled: 'Agendada', confirmed: 'Confirmada', in_transit: 'Em transporte', completed: 'Concluída', cancelled: 'Cancelada' }[collection.status] || collection.status)}</strong><small>{formatBrazilDate(collection.scheduledFor)} às {formatBrazilTime(collection.scheduledFor)}</small></div>
-        <p>{collection.mode === 'pickup' ? `Retirada: ${collection.address}` : `Ponto: ${collection.collectionPoint?.name || 'ponto de coleta'}`}</p>
-        {collection.qrCodeDataUrl ? <img className="collection-qr" src={collection.qrCodeDataUrl} alt="QR Code para confirmar a coleta" /> : null}
-        {['scheduled', 'confirmed'].includes(collection.status) ? <div className="collection-confirm-form"><input value={collectionToken} onChange={(event) => setCollectionToken(event.target.value)} placeholder="Token lido do QR Code" aria-label="Token do QR Code" /><button type="button" className="secondary-btn" onClick={confirmCollection}>Confirmar QR Code</button></div> : null}
-        {collection.status === 'confirmed' ? <button type="button" className="primary-btn" onClick={() => changeCollectionStatus('in_transit')}>Iniciar transporte</button> : null}
-        {collection.status === 'in_transit' ? <button type="button" className="primary-btn" onClick={() => changeCollectionStatus('completed')}>Confirmar entrega concluída</button> : null}
-      </div> : <form className="collection-form" onSubmit={scheduleCollection}>
-        <p>Agende a retirada na residência ou escolha um ponto parceiro.</p>
-        <label>Modalidade<select value={collectionForm.mode} onChange={(event) => setCollectionForm((current) => ({ ...current, mode: event.target.value }))}><option value="pickup">Retirada combinada</option><option value="dropoff">Entrega em ponto de coleta</option></select></label>
-        <label>Data e horário<input type="datetime-local" required value={collectionForm.scheduledFor} onChange={(event) => setCollectionForm((current) => ({ ...current, scheduledFor: event.target.value }))} /></label>
-        {collectionForm.mode === 'pickup' ? <label>Endereço para retirada<input required maxLength={240} value={collectionForm.address} onChange={(event) => setCollectionForm((current) => ({ ...current, address: event.target.value }))} placeholder="Rua, número, bairro e cidade" /></label> : <label>Ponto parceiro<select required value={collectionForm.collectionPointId} onChange={(event) => setCollectionForm((current) => ({ ...current, collectionPointId: event.target.value }))}><option value="">Selecione um ponto</option>{collectionPoints.map((point) => <option key={point.id} value={point.id}>{point.name} · {point.location}</option>)}</select></label>}
-        <button className="primary-btn" disabled={collectionBusy}>{collectionBusy ? 'Agendando...' : 'Agendar coleta'}</button>
-      </form>}
-    </section> : null}
+    {negotiation && ['reserved','completed'].includes(negotiation.status) ? <DeliveryCard negotiation={negotiation} collection={collection} onChange={setCollection} isSale={isSale} payment={payment} onReceived={refreshPost} onChat={() => onNavigate(`/mensagens/ana?thread=${negotiation.threadId || negotiation.thread_id}`)} /> : null}
     {!ownPost && isSale && negotiation?.status === 'interested' && negotiation.proposalStatus === 'none' ? <section className="review-form-card proposal-card"><span className="eyebrow">Oferta com pagamento</span><h2>Envie sua proposta</h2><p>Informe o valor e a forma de pagamento. O vendedor receberá sua proposta para análise.</p><form onSubmit={submitProposal}><label>Valor da oferta (R$)<input inputMode="decimal" value={proposalForm.amount} onChange={(event) => setProposalForm((current) => ({ ...current, amount: formatMoneyInput(event.target.value) }))} placeholder="10,00" required /></label>    <label>Forma de pagamento<select value={proposalForm.method} onChange={(event) => setProposalForm((current) => ({ ...current, method: event.target.value }))}><option value="pix">PIX</option><option value="card">Cartão</option></select></label><button className="primary-btn" disabled={proposalBusy}>{proposalBusy ? 'Enviando...' : 'Enviar proposta'}<span className="material-symbols-outlined">send</span></button></form></section> : null}
-    {!ownPost && isSale && negotiation?.status === 'interested' && negotiation.proposalStatus === 'pending' ? <section className="payment-waiting-card"><div className="payment-waiting-icon"><span className="material-symbols-outlined">hourglass_top</span></div><div><span className="eyebrow">Proposta enviada</span><h2>Aguardando resposta do vendedor</h2><p>Sua oferta de R$ {((negotiation.proposalAmountCents || 0) / 100).toFixed(2).replace('.', ',')} foi enviada. O pagamento ficará disponível depois que o vendedor aceitar e reservar o item.</p></div><button className="secondary-btn" onClick={startConversation}><span className="material-symbols-outlined">chat_bubble</span>Conversar com o anunciante</button></section> : null}
-    {!ownPost && isSale && negotiation?.status === 'reserved' && negotiation?.proposalStatus === 'accepted' && !payment ? <section className="review-form-card proposal-card"><span className="eyebrow">Pagamento liberado</span><h2>Finalize seu pagamento</h2><p>O vendedor aceitou a proposta. O pagamento seguirá o valor e o método já combinados.</p>{paymentDemoMode ? <p role="status"><strong>Demonstração:</strong> o pagamento é de teste e não transfere dinheiro ao vendedor. Para cartão, use somente dados de teste do Mercado Pago; não pague o QR Pix com um banco real.</p> : null}<form onSubmit={submitPayment}><label>Valor aceito (R$)<input readOnly value={(Number(negotiation.proposalAmountCents || 0) / 100).toFixed(2).replace('.', ',')} /></label><label>Forma de pagamento aceita<input readOnly value={({ pix: 'PIX', card: 'Cartão' })[negotiation.proposalMethod] || 'Não informada'} /></label><button className="primary-btn" disabled={paymentBusy}>{paymentBusy ? 'Abrindo checkout...' : 'Continuar para pagamento'}<span className="material-symbols-outlined">payments</span></button></form></section> : null}
+    {!ownPost && isSale && negotiation?.status === 'interested' && negotiation.proposalStatus === 'pending' ? <section className="payment-waiting-card"><div className="payment-waiting-icon"><span className="material-symbols-outlined">hourglass_top</span></div><div><span className="eyebrow">Proposta enviada</span><h2>Aguardando resposta do vendedor</h2><p>Sua oferta de R$ {((negotiation.proposalAmountCents || 0) / 100).toFixed(2).replace('.', ',')} foi enviada. O pagamento ficará disponível após o vendedor aceitar a oferta e as duas pessoas combinarem e aceitarem a entrega.</p></div><button className="secondary-btn" onClick={startConversation}><span className="material-symbols-outlined">chat_bubble</span>Conversar com o anunciante</button></section> : null}
+    {!ownPost && isSale && negotiation?.status === 'reserved' && negotiation?.proposalStatus === 'accepted' && (!payment || payment.status === 'failed') ? <section className="review-form-card proposal-card"><span className="eyebrow">{collection?.paymentReady ? 'Entrega combinada' : 'Combine a entrega primeiro'}</span><h2>{collection?.paymentReady ? 'Finalize seu pagamento' : 'Pagamento ainda bloqueado'}</h2><p>{collection?.paymentReady ? 'Local e horário foram aceitos pelas duas pessoas. Confira o item antes de pagar; o recebimento será confirmado separadamente.' : 'O aceite da oferta reserva o item. Para pagar, as duas pessoas também precisam aceitar o acordo em Coleta e entrega.'}</p>{paymentDemoMode ? <p role="status"><strong>Demonstração:</strong> o pagamento é de teste e não transfere dinheiro ao vendedor. Para cartão, use somente dados de teste do Mercado Pago; não pague o QR Pix com um banco real.</p> : null}<form onSubmit={submitPayment}><label>Valor aceito (R$)<input readOnly value={(Number(negotiation.proposalAmountCents || 0) / 100).toFixed(2).replace('.', ',')} /></label><label>Forma de pagamento aceita<input readOnly value={({ pix: 'PIX', card: 'Cartão' })[negotiation.proposalMethod] || 'Não informada'} /></label><button className="primary-btn" disabled={paymentBusy || !collection?.paymentReady}>{paymentBusy ? 'Abrindo checkout...' : 'Continuar para pagamento'}<span className="material-symbols-outlined">payments</span></button></form></section> : null}
     {!ownPost && isSale && payment ? <section className={`payment-waiting-card${payment.method === 'pix' && payment.status === 'processing' ? ' payment-waiting-card--pix' : ''}`}>
       <div className="payment-waiting-icon"><span className="material-symbols-outlined">{payment.status === 'succeeded' ? 'check_circle' : payment.status === 'processing' ? 'hourglass_top' : 'error'}</span></div>
       <div className="payment-waiting-summary">
@@ -1635,8 +1595,8 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
         <h2>{payment.status === 'succeeded' ? (paymentDemoMode ? 'Pagamento de teste confirmado' : 'Pagamento confirmado') : payment.status === 'processing' ? 'Aguardando confirmação do pagamento' : 'Pagamento não aprovado'}</h2>{paymentDemoMode ? <small>Simulação: nenhum valor é transferido ao vendedor.</small> : null}
         <p>Valor: R$ {(payment.amountCents / 100).toFixed(2).replace('.', ',')} · Método: {payment.method.toUpperCase()}</p>
       </div>
-      {payment.status === 'processing' && payment.checkoutUrl ? <a className="secondary-btn" href={payment.checkoutUrl}>Abrir checkout</a> : null}
-      {payment.method === 'pix' && payment.status === 'processing' ? <div className="pix-instructions">
+      {payment.status === 'processing' && payment.checkoutUrl && collection?.paymentReady ? <a className="secondary-btn" href={payment.checkoutUrl}>Abrir checkout</a> : null}
+      {payment.method === 'pix' && payment.status === 'processing' && collection?.paymentReady ? <div className="pix-instructions">
         <div className="pix-instructions-heading">
           <span className="pix-instructions-symbol material-symbols-outlined" aria-hidden="true">qr_code_2</span>
           <div>
@@ -2294,7 +2254,7 @@ function SettingsScreen({ onBack, onLogout }) {
                   </>
                 )}
               </div>
-              <div className="payment-items-list">{paymentItems.length ? paymentItems.map((item) => <article className="payment-item" key={item.negotiationId}><span className="payment-item-icon material-symbols-outlined">shopping_bag</span><div><strong>{item.title}</strong><small>R$ {((item.amountCents || 0) / 100).toFixed(2).replace('.', ',')} · {item.method === 'pix' ? 'PIX' : item.method === 'card' ? 'Cartão' : 'Boleto'}</small><small>{item.negotiationStatus === 'reserved' ? 'Reserva confirmada: pagamento liberado' : 'Oferta enviada: aguardando resposta'}</small></div><button className="payment-item-action" onClick={() => window.location.assign(`/anuncios/${item.postId}`)}><span className="material-symbols-outlined">{item.negotiationStatus === 'reserved' ? 'payments' : 'open_in_new'}</span><span>{item.negotiationStatus === 'reserved' ? 'Pagar agora' : 'Acompanhar oferta'}</span></button></article>) : <EmptyState icon="payments" title="Nenhum pagamento pendente" text="Quando você enviar uma oferta, ela aparecerá aqui para acompanhamento." />}</div>
+              <div className="payment-items-list">{paymentItems.length ? paymentItems.map((item) => <article className="payment-item" key={item.negotiationId}><span className="payment-item-icon material-symbols-outlined">shopping_bag</span><div><strong>{item.title}</strong><small>R$ {((item.amountCents || 0) / 100).toFixed(2).replace('.', ',')} · {item.method === 'pix' ? 'PIX' : item.method === 'card' ? 'Cartão' : 'Boleto'}</small><small>{item.negotiationStatus === 'reserved' ? 'Reserva confirmada: combine a entrega antes de pagar' : 'Oferta enviada: aguardando resposta'}</small></div><button className="payment-item-action" onClick={() => window.location.assign(`/anuncios/${item.postId}`)}><span className="material-symbols-outlined">{item.negotiationStatus === 'reserved' ? 'payments' : 'open_in_new'}</span><span>{item.negotiationStatus === 'reserved' ? 'Entrega e pagamento' : 'Acompanhar oferta'}</span></button></article>) : <EmptyState icon="payments" title="Nenhum pagamento pendente" text="Quando você enviar uma oferta, ela aparecerá aqui para acompanhamento." />}</div>
             </section> : null}
           </div>
         </div>

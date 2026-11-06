@@ -322,14 +322,24 @@ test('favorites, negotiation status and reviews persist with permission checks',
   assert.equal(donationPayment.response.status, 400);
 
   const completed = await request(`/api/posts/${postId}/complete`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${ownerToken}` }, body: JSON.stringify({ outcome: 'Doado' }) });
-  assert.equal(completed.response.status, 200);
-  assert.equal(completed.payload.post.status, 'Doado');
+  assert.equal(completed.response.status, 409);
+  const deliveryHeaders = token => ({ 'Content-Type': 'application/json', Authorization: `Bearer ${token}` });
+  const proposedDelivery = await request(`/api/negotiations/${donationNegotiation.payload.negotiation.id}/collection`, { method: 'POST', headers: deliveryHeaders(ownerToken), body: JSON.stringify({ mode: 'dropoff', scheduledFor: new Date(Date.now()+86400000).toISOString(), collectionPointId: 'point-1' }) });
+  assert.equal(proposedDelivery.response.status, 201);
+  assert.equal(proposedDelivery.payload.collection.collectionPoint.id, 'point-1');
+  assert.ok(proposedDelivery.payload.collection.address.includes(proposedDelivery.payload.collection.collectionPoint.name));
+  const collectionId = proposedDelivery.payload.collection.id;
+  assert.equal((await request(`/api/collection-deliveries/${collectionId}/accept`, { method: 'POST', headers: deliveryHeaders(interestedToken) })).response.status, 200);
+  const receipt = await request(`/api/collection-deliveries/${collectionId}/confirm`, { method: 'POST', headers: deliveryHeaders(interestedToken) });
+  assert.equal(receipt.response.status, 200);
+  assert.equal(receipt.payload.collection.status, 'completed');
+  assert.equal((await request(`/api/posts/${postId}`)).payload.post.status, 'Doado');
 
   const distributed = await request('/api/distributed/status');
   assert.equal(distributed.response.status, 200);
   assert.equal(distributed.payload.delivery, 'at-least-once');
   // Sem AMQP_URL no teste, a outbox preserva o evento para entrega posterior.
-  assert.equal(distributed.payload.pendingEvents, 3);
+  assert.ok(distributed.payload.pendingEvents >= 3);
 
   const negotiation = await request(`/api/posts/${postId}/negotiation`, { headers: { Authorization: `Bearer ${interestedToken}` } });
   assert.equal(negotiation.response.status, 200);
@@ -399,6 +409,37 @@ test('sale posts allow money offers and are completed as sold', async () => {
   assert.equal(buyerNegotiation.payload.negotiation.proposalStatus, 'accepted');
   assert.equal(buyerNegotiation.payload.negotiation.status, 'reserved');
 
+  const negotiationId = negotiation.payload.negotiation.id;
+  const outsider = await request('/api/auth/login', { method:'POST', headers, body:JSON.stringify({ email:'mariana@reusa.com', password:'12345678' }) });
+  assert.equal((await request(`/api/negotiations/${negotiationId}/collection`)).response.status,401);
+  assert.equal((await request(`/api/negotiations/${negotiationId}/collection`, { headers: { Authorization:`Bearer ${outsider.payload.token}` } })).response.status,403);
+
+  const sendDelivery = (url, headers, body = {}, method = 'POST') => request(url, { method, headers, body: JSON.stringify(body) });
+  const paymentBody = { amountCents: 2500, currency: 'BRL', method: 'pix', idempotencyKey: `sale-${suffix}-payment` };
+  assert.equal((await sendDelivery(`/api/negotiations/${negotiationId}/payment`, interestedAuth, paymentBody)).response.status, 409);
+  const collectionBody = { mode: 'pickup', scheduledFor: new Date(Date.now()+86400000).toISOString(), address: 'Rua do Encontro, 100, Belém, PA' };
+  assert.equal((await sendDelivery(`/api/negotiations/${negotiationId}/collection`, ownerAuth, { ...collectionBody, scheduledFor: new Date().toISOString() })).response.status, 400);
+  assert.equal((await sendDelivery(`/api/negotiations/${negotiationId}/collection`, ownerAuth, { ...collectionBody, mode: 'dropoff', collectionPointId: 'missing' })).response.status, 400);
+  let proposed = await sendDelivery(`/api/negotiations/${negotiationId}/collection`, ownerAuth, collectionBody);
+  assert.equal(proposed.response.status, 201);
+  let collectionId = proposed.payload.collection.id;
+  assert.equal(proposed.payload.collection.qrCodeDataUrl, undefined);
+  assert.equal((await sendDelivery(`/api/collection-deliveries/${collectionId}/accept`, ownerAuth)).response.status, 409);
+  assert.equal((await sendDelivery(`/api/negotiations/${negotiationId}/payment`, interestedAuth, paymentBody)).response.status, 409);
+  assert.equal((await sendDelivery(`/api/collection-deliveries/${collectionId}/confirm`, interestedAuth)).response.status, 409);
+  assert.equal((await sendDelivery(`/api/collection-deliveries/${collectionId}/status`, interestedAuth, { status:'cancelled' }, 'PATCH')).response.status, 200);
+  proposed = await sendDelivery(`/api/negotiations/${negotiationId}/collection`, interestedAuth, collectionBody);
+  assert.equal(proposed.response.status, 201);
+  collectionId = proposed.payload.collection.id;
+  assert.equal((await sendDelivery(`/api/collection-deliveries/${collectionId}/accept`, interestedAuth)).response.status, 409);
+  const agreed = await sendDelivery(`/api/collection-deliveries/${collectionId}/accept`, ownerAuth);
+  assert.equal(agreed.response.status, 200);
+  assert.equal(agreed.payload.collection.paymentReady, true);
+  assert.equal((await sendDelivery(`/api/collection-deliveries/${collectionId}/confirm`, interestedAuth)).response.status, 409);
+  assert.equal((await sendDelivery(`/api/collection-deliveries/${collectionId}/status`, ownerAuth, { status:'in_transit' }, 'PATCH')).response.status, 409);
+  assert.equal((await sendDelivery(`/api/posts/${postId}/status`, ownerAuth, { status:'Disponível' }, 'PATCH')).response.status, 409);
+  assert.equal((await sendDelivery(`/api/negotiations/${negotiationId}/payment`, interestedAuth, { ...paymentBody, amountCents: 1000 })).response.status, 400);
+  assert.equal((await request(`/api/negotiations/${negotiationId}/collection`, { headers:interestedAuth })).payload.collection.paymentLocked,false);
   const payment = await request(`/api/negotiations/${negotiation.payload.negotiation.id}/payment`, {
     method: 'POST', headers: interestedAuth,
     body: JSON.stringify({ amountCents: 2500, currency: 'BRL', method: 'pix', idempotencyKey: `sale-${suffix}-payment` })
@@ -410,8 +451,19 @@ test('sale posts allow money offers and are completed as sold', async () => {
     method: 'POST', headers: ownerAuth,
     body: JSON.stringify({ outcome: 'Vendido' })
   });
-  assert.equal(completed.response.status, 200);
-  assert.equal(completed.payload.post.status, 'Vendido');
+  assert.equal(completed.response.status, 409);
+  assert.equal((await sendDelivery(`/api/collection-deliveries/${collectionId}/status`, ownerAuth, { status:'cancelled' }, 'PATCH')).response.status, 409);
+  assert.equal((await sendDelivery(`/api/negotiations/${negotiationId}/payment`, interestedAuth, { ...paymentBody, idempotencyKey: `duplicate-${suffix}-payment` })).response.status, 409);
+  assert.equal((await sendDelivery(`/api/negotiations/${negotiationId}/payment`, interestedAuth, paymentBody)).response.status, 200);
+  assert.equal((await sendDelivery(`/api/collection-deliveries/${collectionId}/confirm`, ownerAuth, { token:'forged' })).response.status, 409);
+  assert.equal((await sendDelivery(`/api/collection-deliveries/${collectionId}/status`, interestedAuth, { status:'in_transit' }, 'PATCH')).response.status, 409);
+  assert.equal((await sendDelivery(`/api/collection-deliveries/${collectionId}/status`, ownerAuth, { status:'in_transit' }, 'PATCH')).response.status, 200);
+  const receipt = await sendDelivery(`/api/collection-deliveries/${collectionId}/confirm`, interestedAuth);
+  assert.equal(receipt.response.status, 200);
+  assert.equal(receipt.payload.collection.status, 'completed');
+  assert.equal((await sendDelivery(`/api/collection-deliveries/${collectionId}/confirm`, interestedAuth)).response.status, 200);
+  assert.equal((await request(`/api/posts/${postId}`)).payload.post.status, 'Vendido');
+  assert.equal((await sendDelivery(`/api/posts/${postId}`, ownerAuth, {}, 'DELETE')).response.status, 409);
 });
 
 test('clearing messages hides the inbox only for that user until a new message arrives', async () => {

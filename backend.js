@@ -1,3 +1,4 @@
+const { registerDeliveryRoutes } = require('./storage/delivery-api');
 const { registerCampaignRoutes, campaignSchema } = require('./storage/campaign-api');
 
 const express = require('express');
@@ -5,7 +6,6 @@ const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
-const QRCode = require('qrcode');
 const multer = require('multer');
 const initSqlJs = require('sql.js');
 const { EventPublisher } = require('./distributed/event-publisher');
@@ -740,24 +740,6 @@ function publicPost(row, viewerId = null) {
   };
 }
 
-function collectionDeliveryView(row, { includeQr = false } = {}) {
-  const point = row.collection_point_id
-    ? get('SELECT id, name, location, latitude, longitude FROM collection_points WHERE id = ?', [row.collection_point_id])
-    : null;
-  return {
-    id: row.id,
-    negotiationId: row.negotiation_id,
-    mode: row.mode,
-    scheduledFor: row.scheduled_for,
-    address: row.address || '',
-    collectionPoint: point ? { id: point.id, name: point.name, location: point.location, latitude: point.latitude, longitude: point.longitude } : null,
-    status: row.status,
-    confirmedAt: row.confirmed_at || null,
-    createdAt: row.created_at,
-    updatedAt: row.updated_at,
-    ...(includeQr && row.qr_code_data_url ? { qrCodeDataUrl: row.qr_code_data_url } : {})
-  };
-}
 
 function threadSummary(row, currentUserId, { hideCleared = false } = {}) {
   const participants = JSON.parse(row.participants_json || '[]');
@@ -1050,6 +1032,9 @@ function seedDatabase() {
     );
   `);
   run('CREATE INDEX IF NOT EXISTS collection_deliveries_status_idx ON collection_deliveries(status, scheduled_for)');
+  for (const column of ['proposed_by', 'accepted_by', 'accepted_at', 'received_at', 'payment_attempt_key']) ensureColumn('collection_deliveries', column, 'TEXT');
+  ensureColumn('collection_deliveries', 'payment_locked', 'INTEGER NOT NULL DEFAULT 0');
+  run("UPDATE collection_deliveries SET status='cancelled' WHERE proposed_by IS NULL AND status IN ('scheduled','confirmed','in_transit')");
 
   run(`
     CREATE TABLE IF NOT EXISTS payments (
@@ -1605,6 +1590,7 @@ async function start() {
     res.setHeader('X-Correlation-Id', req.correlationId);
     next();
   });
+  registerDeliveryRoutes(app, { postgres: postgresEnabled() ? postgres : null, sqlite: { all, run, persist: persistDb }, authenticate: authMiddleware, flush: flushPendingEvents, refreshMetrics: () => { for (const user of all('SELECT id FROM users')) refreshUserMetrics(user.id); persistDb(); } });
   if (postgresEnabled()) {
     registerPostgresRoutes(app, {
       db: postgres,
@@ -2183,8 +2169,8 @@ async function start() {
   app.get('/api/posts/:id/negotiation', authMiddleware, (req, res) => {
     const post = get('SELECT id, author_id FROM posts WHERE id = ?', [req.params.id]);
     if (!post) return res.status(404).json({ error: 'Post not found' });
-    const negotiation = get('SELECT * FROM negotiations WHERE post_id = ? AND (owner_id = ? OR interested_id = ?) ORDER BY updated_at DESC LIMIT 1', [post.id, req.user.id, req.user.id]);
-    return res.json({ negotiation: negotiation ? { id: negotiation.id, status: negotiation.status, ownerId: negotiation.owner_id, interestedId: negotiation.interested_id, completedAt: negotiation.completed_at, proposalStatus: negotiation.proposal_status || 'none', proposalAmountCents: negotiation.proposal_amount_cents || null, proposalMethod: negotiation.proposal_method || null, proposalCreatedAt: negotiation.proposal_created_at || null } : null });
+    const negotiation = get("SELECT * FROM negotiations WHERE post_id = ? AND (owner_id = ? OR interested_id = ?) ORDER BY CASE WHEN status='reserved' THEN 0 WHEN status='completed' THEN 1 ELSE 2 END, updated_at DESC LIMIT 1", [post.id, req.user.id, req.user.id]);
+    return res.json({ negotiation: negotiation ? { id: negotiation.id, status: negotiation.status, threadId: negotiation.thread_id, ownerId: negotiation.owner_id, interestedId: negotiation.interested_id, completedAt: negotiation.completed_at, proposalStatus: negotiation.proposal_status || 'none', proposalAmountCents: negotiation.proposal_amount_cents || null, proposalMethod: negotiation.proposal_method || null, proposalCreatedAt: negotiation.proposal_created_at || null } : null });
   });
 
   app.post('/api/negotiations/:id/proposal', authMiddleware, (req, res) => {
@@ -2242,7 +2228,7 @@ async function start() {
         try { db.exec('ROLLBACK'); } catch {}
         return res.status(500).json({ error: 'Não foi possível reservar o anúncio.' });
       }
-      if (!eventPublisher.enabled()) notification(negotiation.interested_id, 'negotiation', 'Oferta aceita e item reservado', `Você já pode pagar pelo anúncio ${post.title}.`, `/anuncios/${post.id}`);
+      if (!eventPublisher.enabled()) notification(negotiation.interested_id, 'negotiation', 'Oferta aceita e item reservado', `Combine e aceite a entrega de ${post.title} antes de pagar.`, `/anuncios/${post.id}`);
     } else {
       run('UPDATE negotiations SET proposal_status = ?, updated_at = ? WHERE id = ?', [decision, now, negotiation.id]);
       if (!eventPublisher.enabled()) notification(negotiation.interested_id, 'negotiation', 'Proposta recusada', 'O vendedor recusou sua proposta.', `/anuncios/${negotiation.post_id}`);
@@ -2282,70 +2268,6 @@ async function start() {
       paidAt: payment.paid_at,
       ...(pix ? { pix } : {})
     } : null });
-  });
-
-  app.get('/api/negotiations/:id/collection', authMiddleware, (req, res) => {
-    const negotiation = get('SELECT * FROM negotiations WHERE id = ?', [req.params.id]);
-    if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
-    if (![negotiation.owner_id, negotiation.interested_id].includes(req.user.id)) return res.status(403).json({ error: 'Collection access denied' });
-    const delivery = get('SELECT * FROM collection_deliveries WHERE negotiation_id = ?', [negotiation.id]);
-    return res.json({ collection: delivery ? collectionDeliveryView(delivery, { includeQr: true }) : null });
-  });
-
-  app.post('/api/negotiations/:id/collection', authMiddleware, async (req, res) => {
-    const negotiation = get('SELECT * FROM negotiations WHERE id = ?', [req.params.id]);
-    if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
-    if (![negotiation.owner_id, negotiation.interested_id].includes(req.user.id)) return res.status(403).json({ error: 'Collection access denied' });
-    if (negotiation.status !== 'reserved') return res.status(400).json({ error: 'Reserve the item before scheduling collection' });
-    if (get('SELECT id FROM collection_deliveries WHERE negotiation_id = ?', [negotiation.id])) return res.status(409).json({ error: 'This collection is already scheduled' });
-
-    const mode = String(req.body?.mode || '').trim();
-    const scheduledFor = new Date(String(req.body?.scheduledFor || ''));
-    const address = String(req.body?.address || '').trim().slice(0, 240);
-    const collectionPointId = String(req.body?.collectionPointId || '').trim() || null;
-    if (!['pickup', 'dropoff'].includes(mode) || Number.isNaN(scheduledFor.getTime())) return res.status(400).json({ error: 'Choose a valid collection mode and date' });
-    if (scheduledFor.getTime() < Date.now() + 30 * 60 * 1000 || scheduledFor.getTime() > Date.now() + 90 * 24 * 60 * 60 * 1000) return res.status(400).json({ error: 'Schedule the collection between 30 minutes and 90 days from now' });
-    if (mode === 'pickup' && !address) return res.status(400).json({ error: 'Provide the pickup address' });
-    if (mode === 'dropoff' && (!collectionPointId || !get('SELECT id FROM collection_points WHERE id = ?', [collectionPointId]))) return res.status(400).json({ error: 'Choose a valid collection point' });
-
-    const now = new Date().toISOString();
-    const token = crypto.randomBytes(24).toString('base64url');
-    const deliveryId = uid('collection');
-    const qrCodeDataUrl = await QRCode.toDataURL(`reusa+://collection/${deliveryId}?token=${encodeURIComponent(token)}`, { errorCorrectionLevel: 'M', margin: 2, width: 280 });
-    const expiresAt = new Date(scheduledFor.getTime() + 24 * 60 * 60 * 1000).toISOString();
-    run(`INSERT INTO collection_deliveries
-      (id, negotiation_id, mode, scheduled_for, address, collection_point_id, status, confirmation_token_hash, confirmation_token_expires_at, qr_code_data_url, created_at, updated_at)
-      VALUES (?, ?, ?, ?, ?, ?, 'scheduled', ?, ?, ?, ?, ?)`,
-    [deliveryId, negotiation.id, mode, scheduledFor.toISOString(), address, collectionPointId, sha256(token), expiresAt, qrCodeDataUrl, now, now]);
-    notification(negotiation.owner_id === req.user.id ? negotiation.interested_id : negotiation.owner_id, 'collection', 'Coleta agendada', `A coleta foi agendada para ${scheduledFor.toLocaleString('pt-BR')}.`, `/anuncios/${negotiation.post_id}`);
-    persistDb();
-    return res.status(201).json({ collection: collectionDeliveryView(get('SELECT * FROM collection_deliveries WHERE id = ?', [deliveryId]), { includeQr: true }) });
-  });
-
-  app.post('/api/collection-deliveries/:id/confirm', authMiddleware, (req, res) => {
-    const delivery = get('SELECT d.*, n.owner_id, n.interested_id, n.post_id FROM collection_deliveries d JOIN negotiations n ON n.id = d.negotiation_id WHERE d.id = ?', [req.params.id]);
-    if (!delivery) return res.status(404).json({ error: 'Collection not found' });
-    if (![delivery.owner_id, delivery.interested_id].includes(req.user.id)) return res.status(403).json({ error: 'Collection access denied' });
-    if (!delivery.confirmation_token_expires_at || new Date(delivery.confirmation_token_expires_at).getTime() < Date.now()) return res.status(410).json({ error: 'This QR Code has expired' });
-    if (!req.body?.token || sha256(String(req.body.token)) !== delivery.confirmation_token_hash) return res.status(400).json({ error: 'Invalid QR Code' });
-    if (!['scheduled', 'confirmed'].includes(delivery.status)) return res.status(409).json({ error: 'This collection cannot be confirmed in its current status' });
-    const now = new Date().toISOString();
-    run("UPDATE collection_deliveries SET status = 'confirmed', confirmed_at = COALESCE(confirmed_at, ?), updated_at = ? WHERE id = ?", [now, now, delivery.id]);
-    persistDb();
-    return res.json({ collection: collectionDeliveryView(get('SELECT * FROM collection_deliveries WHERE id = ?', [delivery.id]), { includeQr: true }) });
-  });
-
-  app.patch('/api/collection-deliveries/:id/status', authMiddleware, (req, res) => {
-    const delivery = get('SELECT d.*, n.owner_id, n.interested_id FROM collection_deliveries d JOIN negotiations n ON n.id = d.negotiation_id WHERE d.id = ?', [req.params.id]);
-    if (!delivery) return res.status(404).json({ error: 'Collection not found' });
-    if (![delivery.owner_id, delivery.interested_id].includes(req.user.id)) return res.status(403).json({ error: 'Collection access denied' });
-    const nextStatus = String(req.body?.status || '').trim();
-    const transitions = { scheduled: ['cancelled'], confirmed: ['in_transit', 'cancelled'], in_transit: ['completed'], completed: [] };
-    if (!transitions[delivery.status]?.includes(nextStatus)) return res.status(400).json({ error: 'Invalid collection status transition' });
-    const now = new Date().toISOString();
-    run('UPDATE collection_deliveries SET status = ?, updated_at = ? WHERE id = ?', [nextStatus, now, delivery.id]);
-    persistDb();
-    return res.json({ collection: collectionDeliveryView(get('SELECT * FROM collection_deliveries WHERE id = ?', [delivery.id]), { includeQr: true }) });
   });
 
   app.get('/api/profile/payment-items', authMiddleware, (req, res) => {
@@ -2475,6 +2397,7 @@ async function start() {
       const now = new Date().toISOString();
       const failureCode = status === 'failed' ? String(providerOrder.status_detail || providerOrder.status) : null;
       run('UPDATE payments SET status = ?, failure_code = ?, updated_at = ?, paid_at = ?, refunded_at = ? WHERE id = ?', [status, failureCode, now, status === 'succeeded' ? now : current.paid_at, status === 'refunded' ? now : current.refunded_at, current.id]);
+      if (['failed', 'refunded'].includes(status)) run('UPDATE collection_deliveries SET payment_locked = 0 WHERE negotiation_id = ?', [current.negotiation_id]);
       run('INSERT INTO payment_audit_events (id, payment_id, from_status, to_status, reason, correlation_id, created_at) VALUES (?, ?, ?, ?, ?, ?, ?)', [uid('payment-audit'), current.id, current.status, status, `mercado_pago_order_${providerOrder.status}`, uid('webhook'), now]);
       if (status === 'succeeded' && !eventPublisher.enabled()) {
         notification(current.payee_id, 'payment', 'Pagamento recebido', `Um pagamento de R$ ${(current.amount_cents / 100).toFixed(2).replace('.', ',')} foi confirmado.`, `/anuncios/${current.negotiation_id}`);
@@ -2492,7 +2415,7 @@ async function start() {
     const interestedId = String(req.body?.interestedId || '');
     if (!post) return res.status(404).json({ error: 'Post not found' });
     if (post.author_id !== req.user.id) return res.status(403).json({ error: 'Only the owner can reserve this post' });
-    if (mercadoPago.isConfigured()) {
+    if (post.goal === SALE_GOAL && mercadoPago.isConfigured()) {
       const seller = get('SELECT mercado_pago_access_token FROM users WHERE id = ?', [req.user.id]);
       if (!mercadoPago.checkoutSellerToken(seller?.mercado_pago_access_token)) {
         return res.status(409).json({ error: 'Conecte sua conta Mercado Pago antes de reservar este item para receber o pagamento.' });
@@ -2516,35 +2439,6 @@ async function start() {
     }, req.correlationId);
     persistDb();
     return res.json({ post: publicPost(get('SELECT * FROM posts WHERE id = ?', [post.id]), req.user.id) });
-  });
-
-  app.post('/api/posts/:id/complete', authMiddleware, (req, res) => {
-    const post = get('SELECT * FROM posts WHERE id = ?', [req.params.id]);
-    const outcome = String(req.body?.outcome || '').trim();
-    if (!post) return res.status(404).json({ error: 'Post not found' });
-    if (post.author_id !== req.user.id) return res.status(403).json({ error: 'Only the owner can complete this post' });
-    if (!post.reserved_by || post.status !== 'Reservado') return res.status(400).json({ error: 'Reserve the item before completing the negotiation' });
-    const allowedOutcomes = post.goal === SALE_GOAL ? ['Vendido'] : ['Doado', 'Trocado'];
-    if (!allowedOutcomes.includes(outcome)) return res.status(400).json({ error: post.goal === SALE_GOAL ? 'Choose Vendido as the outcome' : 'Choose Doado or Trocado as the outcome' });
-    const negotiation = get("SELECT * FROM negotiations WHERE post_id = ? AND interested_id = ? AND status = 'reserved'", [post.id, post.reserved_by]);
-    if (!negotiation) return res.status(400).json({ error: 'Reserved negotiation not found' });
-    const now = new Date().toISOString();
-    run("UPDATE negotiations SET status = 'completed', completed_at = ?, updated_at = ? WHERE id = ?", [now, now, negotiation.id]);
-    run('UPDATE posts SET status = ?, completed_with = ?, completed_at = ?, updated_at = ? WHERE id = ?', [outcome, post.reserved_by, now, now, post.id]);
-    refreshUserMetrics(post.author_id);
-    refreshUserMetrics(post.reserved_by);
-    if (!eventPublisher.enabled()) notification(post.reserved_by, 'negotiation', 'Negociação concluída', `A negociação de ${post.title} foi concluída. Avalie a experiência.`, `/anuncios/${post.id}`);
-    emitDomainEvent('negotiation.completed', {
-      negotiationId: negotiation.id,
-      postId: post.id,
-      postTitle: post.title,
-      ownerId: post.author_id,
-      interestedId: post.reserved_by,
-      outcome,
-      completedAt: now
-    }, req.correlationId);
-    persistDb();
-    return res.json({ post: publicPost(get('SELECT * FROM posts WHERE id = ?', [post.id]), req.user.id), negotiationId: negotiation.id });
   });
 
   app.patch('/api/posts/:id/status', authMiddleware, (req, res) => {

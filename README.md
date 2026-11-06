@@ -725,3 +725,64 @@ As mensagens de entrega e respostas não aparecem na listagem pública.
 Validação: `npm run build` e `npm test`. O teste de integração PostgreSQL também
 exercita campanhas quando `DATABASE_PROVIDER=postgres` e a conexão estão
 configurados; esse teste precisa de um banco de testes isolado.
+
+## Acordo de entrega e confirmação de recebimento
+
+A reserva e a aceitação de uma oferta **não liberam mais o pagamento sozinhas**.
+O fluxo de venda é:
+
+1. O anunciante aceita a oferta e reserva o item.
+2. Uma das pessoas propõe endereço (ou ponto de encontro), data e horário.
+3. A outra pessoa aceita explicitamente os detalhes. Ninguém aceita a própria proposta.
+4. O comprador pode iniciar o pagamento pelo valor e método da oferta aceita.
+5. O anunciante pode informar saída para entrega após aprovação do pagamento.
+6. Apenas o comprador confirma que recebeu e conferiu o item. Isso conclui
+   a negociação, marca o anúncio como vendido e libera avaliações.
+
+Doações e trocas usam o mesmo acordo e confirmação pelo destinatário, sem
+pagamento. Em trocas, essa confirmação representa o aceite da troca pelo
+destinatário; o sistema não oferece transporte nem custódia dos objetos.
+
+Antes do pagamento, qualquer participante pode cancelar a proposta de entrega e
+propor outra. Um novo local ou horário exige novo aceite. Durante pagamento em
+processamento ou aprovado, ficam bloqueadas mudanças da entrega, preço, reserva,
+edição e exclusão do anúncio. Pagamentos recusados ou estornados pelo provedor
+liberam o bloqueio financeiro. O servidor também impede pagamentos duplicados
+com novas chaves enquanto já há pagamento em andamento ou aprovado.
+
+Os horários são enviados ao servidor em ISO UTC e exibidos no acompanhamento
+em horário de Brasília. O agendamento deve ficar entre 30 minutos e 90 dias no
+futuro; acordos com prazo vencido não liberam novos pagamentos. A confirmação
+de recebimento pode registrar uma entrega efetivamente feita com atraso.
+
+Um ponto de coleta é apenas um local proposto para encontro: é necessário
+confirmar previamente sua disponibilidade. Não há integração para reservar
+espaço, armazenar produtos ou contratar um entregador. O endereço é privado aos
+participantes da negociação.
+
+O QR Code antigo de coleta foi retirado: os dois participantes podiam acessá-lo,
+e sua posse não comprovava recebimento. A migração `013_delivery_agreement.sql`
+adiciona os autores/horários de proposta, aceite e recebimento e invalida agendas
+legadas sem aceite registrado; os participantes devem combinar novamente.
+Pagamentos antigos já aprovados não são cobrados outra vez: podem receber um
+acordo de entrega para regularizar o recebimento. Links de checkout já emitidos
+externamente antes dessa mudança não são revogados pela migração.
+
+**Limite financeiro:** o pagamento pelo Mercado Pago não é uma reserva de valor
+administrada pelo ReUsa+. Esta implementação não cria escrow nem reembolso
+automático por não recebimento. Não confirme recebimento sem estar com o item;
+resolva imprevistos pelo chat e, quando necessário, pelo suporte do provedor.
+O app não promete garantia de entrega física.
+
+Endpoints de logística:
+
+```text
+GET|POST /api/negotiations/:id/collection
+POST     /api/collection-deliveries/:id/accept
+POST     /api/collection-deliveries/:id/confirm
+PATCH    /api/collection-deliveries/:id/status
+```
+
+Propostas, aceite e recebimento geram registros na outbox e notificações. A antiga
+conclusão unilateral por `POST /api/posts/:id/complete` é bloqueada; o recebimento
+confirmado pelo destinatário é a fonte da conclusão.

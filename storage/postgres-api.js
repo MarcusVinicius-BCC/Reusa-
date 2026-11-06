@@ -1,7 +1,6 @@
 // 
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
-const QRCode = require('qrcode');
 const { isLikelyResidentialAddress } = require('./location-validation');
 const { buildCollectionPointAddress, geocodeCollectionPoint } = require('./collection-point-geocoding');
 const mercadoPago = require('../services/mercado-pago');
@@ -342,8 +341,8 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
     try {
       const post = await db.one('SELECT id FROM posts WHERE id=$1', [req.params.id]);
       if (!post) return res.status(404).json({ error: 'Post not found' });
-      const negotiation = await db.one('SELECT id,status,owner_id,interested_id,completed_at,proposal_status,proposal_amount_cents,proposal_method,proposal_created_at FROM negotiations WHERE post_id=$1 AND (owner_id=$2 OR interested_id=$2) ORDER BY updated_at DESC LIMIT 1', [post.id, req.user.id]);
-      return res.json({ negotiation: negotiation ? { id: negotiation.id, status: negotiation.status, ownerId: negotiation.owner_id, interestedId: negotiation.interested_id, completedAt: negotiation.completed_at, proposalStatus: negotiation.proposal_status || 'none', proposalAmountCents: negotiation.proposal_amount_cents || null, proposalMethod: negotiation.proposal_method || null, proposalCreatedAt: negotiation.proposal_created_at || null } : null });
+      const negotiation = await db.one("SELECT id,status,thread_id,owner_id,interested_id,completed_at,proposal_status,proposal_amount_cents,proposal_method,proposal_created_at FROM negotiations WHERE post_id=$1 AND (owner_id=$2 OR interested_id=$2) ORDER BY CASE WHEN status='reserved' THEN 0 WHEN status='completed' THEN 1 ELSE 2 END, updated_at DESC LIMIT 1", [post.id, req.user.id]);
+      return res.json({ negotiation: negotiation ? { id: negotiation.id, status: negotiation.status, threadId: negotiation.thread_id, ownerId: negotiation.owner_id, interestedId: negotiation.interested_id, completedAt: negotiation.completed_at, proposalStatus: negotiation.proposal_status || 'none', proposalAmountCents: negotiation.proposal_amount_cents || null, proposalMethod: negotiation.proposal_method || null, proposalCreatedAt: negotiation.proposal_created_at || null } : null });
     } catch (error) { return next(error); }
   });
   app.post('/api/negotiations/:id/proposal', authenticate, async (req, res, next) => {
@@ -431,70 +430,6 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
         }
       }
       return res.json({ payment: payment ? { ...paymentView(payment), ...(pix ? { pix } : {}) } : null });
-    } catch (error) { return next(error); }
-  });
-  const collectionView = async (row, includeQr = true) => {
-    const point = row.collection_point_id ? await db.one('SELECT id,name,location,latitude,longitude FROM collection_points WHERE id=$1', [row.collection_point_id]) : null;
-    return {
-      id: row.id, negotiationId: row.negotiation_id, mode: row.mode, scheduledFor: row.scheduled_for,
-      address: row.address || '', collectionPoint: point ? { id: point.id, name: point.name, location: point.location, latitude: point.latitude, longitude: point.longitude } : null,
-      status: row.status, confirmedAt: row.confirmed_at || null, createdAt: row.created_at, updatedAt: row.updated_at,
-      ...(includeQr ? { qrCodeDataUrl: row.qr_code_data_url } : {})
-    };
-  };
-  app.get('/api/negotiations/:id/collection', authenticate, async (req, res, next) => {
-    try {
-      const negotiation = await db.one('SELECT * FROM negotiations WHERE id=$1', [req.params.id]);
-      if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
-      if (![negotiation.owner_id, negotiation.interested_id].includes(req.user.id)) return res.status(403).json({ error: 'Collection access denied' });
-      const delivery = await db.one('SELECT * FROM collection_deliveries WHERE negotiation_id=$1', [negotiation.id]);
-      return res.json({ collection: delivery ? await collectionView(delivery) : null });
-    } catch (error) { return next(error); }
-  });
-  app.post('/api/negotiations/:id/collection', authenticate, async (req, res, next) => {
-    try {
-      const negotiation = await db.one('SELECT * FROM negotiations WHERE id=$1', [req.params.id]);
-      const mode = String(req.body?.mode || '').trim();
-      const scheduledFor = new Date(String(req.body?.scheduledFor || ''));
-      const address = String(req.body?.address || '').trim().slice(0, 240);
-      const pointId = String(req.body?.collectionPointId || '').trim() || null;
-      if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
-      if (![negotiation.owner_id, negotiation.interested_id].includes(req.user.id)) return res.status(403).json({ error: 'Collection access denied' });
-      if (negotiation.status !== 'reserved') return res.status(400).json({ error: 'Reserve the item before scheduling collection' });
-      if (await db.one('SELECT id FROM collection_deliveries WHERE negotiation_id=$1', [negotiation.id])) return res.status(409).json({ error: 'This collection is already scheduled' });
-      if (!['pickup', 'dropoff'].includes(mode) || Number.isNaN(scheduledFor.getTime()) || scheduledFor.getTime() < Date.now() + 1800000 || scheduledFor.getTime() > Date.now() + 7776000000) return res.status(400).json({ error: 'Choose a valid collection mode and date' });
-      if (mode === 'pickup' && !address) return res.status(400).json({ error: 'Provide the pickup address' });
-      if (mode === 'dropoff' && (!pointId || !(await db.one('SELECT id FROM collection_points WHERE id=$1', [pointId])))) return res.status(400).json({ error: 'Choose a valid collection point' });
-      const token = crypto.randomBytes(24).toString('base64url');
-      const now = new Date().toISOString();
-      const delivery = { id: id('collection'), negotiation_id: negotiation.id, mode, scheduled_for: scheduledFor.toISOString(), address, collection_point_id: pointId, status: 'scheduled', confirmation_token_hash: sha256(token), confirmation_token_expires_at: new Date(scheduledFor.getTime() + 86400000).toISOString(), qr_code_data_url: '', confirmed_at: null, created_at: now, updated_at: now };
-      delivery.qr_code_data_url = await QRCode.toDataURL(`reusa+://collection/${delivery.id}?token=${encodeURIComponent(token)}`, { errorCorrectionLevel: 'M', margin: 2, width: 280 });
-      await db.query('INSERT INTO collection_deliveries(id,negotiation_id,mode,scheduled_for,address,collection_point_id,status,confirmation_token_hash,confirmation_token_expires_at,qr_code_data_url,confirmed_at,created_at,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)', Object.values(delivery));
-      return res.status(201).json({ collection: await collectionView(delivery) });
-    } catch (error) { return next(error); }
-  });
-  app.post('/api/collection-deliveries/:id/confirm', authenticate, async (req, res, next) => {
-    try {
-      const delivery = await db.one('SELECT d.*,n.owner_id,n.interested_id FROM collection_deliveries d JOIN negotiations n ON n.id=d.negotiation_id WHERE d.id=$1', [req.params.id]);
-      if (!delivery) return res.status(404).json({ error: 'Collection not found' });
-      if (![delivery.owner_id, delivery.interested_id].includes(req.user.id)) return res.status(403).json({ error: 'Collection access denied' });
-      if (new Date(delivery.confirmation_token_expires_at).getTime() < Date.now()) return res.status(410).json({ error: 'This QR Code has expired' });
-      if (!req.body?.token || sha256(String(req.body.token)) !== delivery.confirmation_token_hash) return res.status(400).json({ error: 'Invalid QR Code' });
-      if (!['scheduled', 'confirmed'].includes(delivery.status)) return res.status(409).json({ error: 'This collection cannot be confirmed in its current status' });
-      const updated = await db.one("UPDATE collection_deliveries SET status='confirmed',confirmed_at=COALESCE(confirmed_at,now()),updated_at=now() WHERE id=$1 RETURNING *", [delivery.id]);
-      return res.json({ collection: await collectionView(updated) });
-    } catch (error) { return next(error); }
-  });
-  app.patch('/api/collection-deliveries/:id/status', authenticate, async (req, res, next) => {
-    try {
-      const delivery = await db.one('SELECT d.*,n.owner_id,n.interested_id FROM collection_deliveries d JOIN negotiations n ON n.id=d.negotiation_id WHERE d.id=$1', [req.params.id]);
-      const nextStatus = String(req.body?.status || '').trim();
-      const transitions = { scheduled: ['cancelled'], confirmed: ['in_transit', 'cancelled'], in_transit: ['completed'], completed: [] };
-      if (!delivery) return res.status(404).json({ error: 'Collection not found' });
-      if (![delivery.owner_id, delivery.interested_id].includes(req.user.id)) return res.status(403).json({ error: 'Collection access denied' });
-      if (!transitions[delivery.status]?.includes(nextStatus)) return res.status(400).json({ error: 'Invalid collection status transition' });
-      const updated = await db.one('UPDATE collection_deliveries SET status=$1,updated_at=now() WHERE id=$2 RETURNING *', [nextStatus, delivery.id]);
-      return res.json({ collection: await collectionView(updated) });
     } catch (error) { return next(error); }
   });
   app.get('/api/profile/payment-items', authenticate, async (req, res, next) => {
@@ -595,6 +530,7 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
         const locked = (await client.query('SELECT * FROM payments WHERE id=$1 FOR UPDATE', [current.id])).rows[0];
         if (!locked || locked.status === status || (['succeeded', 'refunded'].includes(locked.status) && status !== 'refunded')) return;
         await client.query('UPDATE payments SET status=$1,failure_code=$2,updated_at=$3,paid_at=$4,refunded_at=$5 WHERE id=$6', [status, failureCode, now, status === 'succeeded' ? now : locked.paid_at, status === 'refunded' ? now : locked.refunded_at, locked.id]);
+        if (['failed', 'refunded'].includes(status)) await client.query('UPDATE collection_deliveries SET payment_locked=0 WHERE negotiation_id=$1', [locked.negotiation_id]);
         await client.query('INSERT INTO payment_audit_events(id,payment_id,from_status,to_status,reason,correlation_id,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)', [id('payment-audit'), locked.id, locked.status, status, `mercado_pago_order_${providerOrder.status}`, id('webhook'), now]);
       });
       return res.sendStatus(200);
@@ -624,7 +560,7 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
         const postResult = await client.query('SELECT * FROM posts WHERE id=$1 FOR UPDATE', [req.params.id]);
         const post = postResult.rows[0]; if (!post) throw Object.assign(new Error('Post not found'), { status: 404 });
         if (post.author_id !== req.user.id) throw Object.assign(new Error('Only the owner can reserve this post'), { status: 403 });
-        if (mercadoPago.isConfigured()) {
+        if (post.goal === SALE_GOAL && mercadoPago.isConfigured()) {
           const seller = (await client.query('SELECT mercado_pago_access_token FROM users WHERE id=$1', [req.user.id])).rows[0];
           if (!mercadoPago.checkoutSellerToken(seller?.mercado_pago_access_token)) {
             throw Object.assign(new Error('Conecte sua conta Mercado Pago antes de reservar este item para receber o pagamento.'), { status: 409 });
@@ -634,7 +570,7 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
         const negotiation = (await client.query("SELECT * FROM negotiations WHERE post_id=$1 AND interested_id=$2 AND status <> 'cancelled'", [post.id, req.body?.interestedId])).rows[0];
         if (!negotiation) throw Object.assign(new Error('Choose a user who demonstrated interest'), { status: 400 });
         await client.query("UPDATE negotiations SET status='interested',updated_at=now() WHERE post_id=$1 AND status='reserved'", [post.id]);
-        await client.query("UPDATE negotiations SET status='reserved',updated_at=now() WHERE id=$1", [negotiation.id]);
+        await client.query("UPDATE negotiations SET status='reserved',proposal_status=CASE WHEN proposal_status='pending' THEN 'accepted' ELSE proposal_status END,updated_at=now() WHERE id=$1", [negotiation.id]);
         await client.query("UPDATE posts SET status='Reservado',reserved_by=$1,updated_at=now() WHERE id=$2", [negotiation.interested_id, post.id]);
         await emit(client, 'negotiation.reserved', { negotiationId: negotiation.id, postId: post.id, postTitle: post.title, ownerId: post.author_id, interestedId: negotiation.interested_id, status: 'reserved' }, req.correlationId);
         return client.query('SELECT * FROM posts WHERE id=$1', [post.id]).then((r) => r.rows[0]);
@@ -895,28 +831,6 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
     try {
       const rows = await db.many('SELECT r.*, u.name AS reviewer_name, u.avatar AS reviewer_avatar FROM reviews r JOIN users u ON u.id = r.reviewer_id WHERE r.reviewee_id=$1 ORDER BY r.created_at DESC', [req.params.id]);
       return res.json({ reviews: rows.map((row) => ({ id: row.id, rating: Number(row.rating), comment: row.comment, createdAt: row.created_at, reviewer: { id: row.reviewer_id, name: row.reviewer_name, avatar: row.reviewer_avatar || '' } })) });
-    } catch (error) { return next(error); }
-  });
-
-  app.post('/api/posts/:id/complete', authenticate, async (req, res, next) => {
-    try {
-      const post = await db.one('SELECT * FROM posts WHERE id=$1', [req.params.id]);
-      if (!post) return res.status(404).json({ error: 'Post not found' });
-      if (post.author_id !== req.user.id) return res.status(403).json({ error: 'Only the owner can complete this post' });
-      const outcome = String(req.body?.outcome || '').trim();
-      if (!post.reserved_by || post.status !== 'Reservado') return res.status(400).json({ error: 'Reserve the item before completing the negotiation' });
-      const allowedOutcomes = post.goal === SALE_GOAL ? ['Vendido'] : ['Doado', 'Trocado'];
-      if (!allowedOutcomes.includes(outcome)) return res.status(400).json({ error: post.goal === SALE_GOAL ? 'Choose Vendido as the outcome' : 'Choose Doado or Trocado as the outcome' });
-      const negotiation = await db.one("SELECT * FROM negotiations WHERE post_id=$1 AND interested_id=$2 AND status='reserved'", [post.id, post.reserved_by]);
-      if (!negotiation) return res.status(400).json({ error: 'Reserved negotiation not found' });
-
-      const now = new Date().toISOString();
-      await db.transaction(async (client) => {
-        await client.query("UPDATE negotiations SET status='completed', completed_at=$1, updated_at=$1 WHERE id=$2", [now, negotiation.id]);
-        await client.query('UPDATE posts SET status=$1, completed_with=$2, completed_at=$3, updated_at=$3 WHERE id=$4', [outcome, post.reserved_by, now, post.id]);
-        await emit(client, 'negotiation.completed', { negotiationId: negotiation.id, postId: post.id, postTitle: post.title, ownerId: post.author_id, interestedId: post.reserved_by, outcome, completedAt: now }, req.correlationId);
-      });
-      return res.json({ post: await postView(db, await db.one('SELECT * FROM posts WHERE id=$1', [post.id]), req.user.id), negotiationId: negotiation.id });
     } catch (error) { return next(error); }
   });
 

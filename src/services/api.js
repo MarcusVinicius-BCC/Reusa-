@@ -83,6 +83,7 @@ export const api = {
   payment: (negotiationId) => request(`/negotiations/${negotiationId}/payment`),
   collection: (negotiationId) => request(`/negotiations/${negotiationId}/collection`),
   scheduleCollection: (negotiationId, body) => request(`/negotiations/${negotiationId}/collection`, { method: 'POST', body: JSON.stringify(body) }),
+  acceptCollection: (id) => request(`/collection-deliveries/${id}/accept`, { method: 'POST' }),
   confirmCollection: (id, token) => request(`/collection-deliveries/${id}/confirm`, { method: 'POST', body: JSON.stringify({ token }) }),
   updateCollectionStatus: (id, status) => request(`/collection-deliveries/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
   paymentItems: () => request('/profile/payment-items'),

@@ -93,13 +93,26 @@ test('PostgreSQL provider persists a post, thread, reservation and outbox event'
     const reserved = await request(baseUrl, `/api/posts/${postId}/reserve`, { method: 'POST', headers: auth(owner.payload.token), body: JSON.stringify({ interestedId: interested.payload.user.id }) });
     assert.equal(reserved.response.status, 200);
     assert.equal(reserved.payload.post.status, 'Reservado');
+    const delivery = await request(baseUrl, `/api/negotiations/${negotiation.payload.negotiation.id}/collection`, { method:'POST', headers:auth(owner.payload.token), body:JSON.stringify({ mode:'pickup', scheduledFor:new Date(Date.now()+86400000).toISOString(), address:'Rua da Escola, 100, Belém, PA' }) });
+    assert.equal(delivery.response.status,201);
+    const prematurePayment = await request(baseUrl, `/api/negotiations/${negotiation.payload.negotiation.id}/payment`, { method:'POST', headers:auth(interested.payload.token), body:JSON.stringify({ amountCents:2500, currency:'BRL', method:'pix', idempotencyKey:`premature-${suffix}-payment` }) });
+    assert.equal(prematurePayment.response.status,409);
+    assert.equal((await request(baseUrl, `/api/collection-deliveries/${delivery.payload.collection.id}/accept`, { method:'POST', headers:auth(owner.payload.token) })).response.status,409);
+    const acceptedDelivery = await request(baseUrl, `/api/collection-deliveries/${delivery.payload.collection.id}/accept`, { method:'POST', headers:auth(interested.payload.token) });
+    assert.equal(acceptedDelivery.response.status,200);
     const payment = await request(baseUrl, `/api/negotiations/${negotiation.payload.negotiation.id}/payment`, {
       method: 'POST', headers: auth(interested.payload.token), body: JSON.stringify({ amountCents: 2500, currency: 'BRL', method: 'pix', idempotencyKey: `postgres-${suffix}-payment` })
     });
     assert.equal(payment.response.status, 201);
+    assert.equal((await request(baseUrl, `/api/collection-deliveries/${delivery.payload.collection.id}/status`, { method:'PATCH', headers:auth(owner.payload.token), body:JSON.stringify({ status:'cancelled' }) })).response.status,409);
+    assert.equal((await request(baseUrl, `/api/collection-deliveries/${delivery.payload.collection.id}/confirm`, { method:'POST', headers:auth(owner.payload.token) })).response.status,409);
+    assert.equal((await request(baseUrl, `/api/posts/${postId}/status`, { method:'PATCH', headers:auth(owner.payload.token), body:JSON.stringify({ status:'Disponível' }) })).response.status,409);
     const completed = await request(baseUrl, `/api/posts/${postId}/complete`, { method: 'POST', headers: auth(owner.payload.token), body: JSON.stringify({ outcome: 'Vendido' }) });
-    assert.equal(completed.response.status, 200);
-    assert.equal(completed.payload.post.status, 'Vendido');
+    assert.equal(completed.response.status, 409);
+    const receipt = await request(baseUrl, `/api/collection-deliveries/${delivery.payload.collection.id}/confirm`, { method:'POST', headers:auth(interested.payload.token) });
+    assert.equal(receipt.response.status,200);
+    assert.equal(receipt.payload.collection.status,'completed');
+    assert.equal((await request(baseUrl, `/api/posts/${postId}`)).payload.post.status,'Vendido');
     const campaign = await request(baseUrl, '/api/campaigns', { method: 'POST', headers: auth(owner.payload.token), body: JSON.stringify({ title: 'Cadeiras para escola', description: 'Uma sala de reforço precisa de cadeiras em boas condições.', beneficiary: 'Escola comunitária', material: 'Cadeiras', target: 2, city: 'Santarém, PA', logistics: 'Retirada na região central mediante agendamento.', deadline: '2099-12-31' }) });
     assert.equal(campaign.response.status, 201);
     const campaignUrl = `/api/campaigns/${campaign.payload.id}`;
