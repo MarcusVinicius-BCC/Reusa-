@@ -23,11 +23,10 @@
 @media(max-width:600px){.delivery-proposal .delivery-field>span{min-height:0}.delivery-status-row{grid-template-columns:62px minmax(0,1fr) minmax(0,1fr);gap:7px}.delivery-status-row button,.delivery-current-status{padding:9px 7px;font-size:11px}.delivery-overview>div:last-child{grid-column:auto}}
 
 /* The connecting line fills as the negotiation advances through its steps. */
-.delivery-steps{position:relative;isolation:isolate;--step-gap:10px;gap:var(--step-gap)}
-.delivery-steps::before,.delivery-steps::after{content:'';position:absolute;z-index:0;top:29.5px;left:13.5px;width:calc(75% + var(--step-gap)*.75);height:4px;border-radius:999px;pointer-events:none}
+.delivery-steps{position:relative;isolation:isolate;width:100%;max-width:640px;margin:18px auto;gap:0}
+.delivery-steps::before,.delivery-steps::after{content:'';position:absolute;z-index:0;top:29.5px;left:12.5%;width:75%;height:4px;border-radius:999px;pointer-events:none}
 .delivery-steps::before{background:#dce9e1}
 .delivery-steps::after{background:linear-gradient(90deg,var(--primary),#32c983);transform:scaleX(var(--delivery-progress,0));transform-origin:left center;transition:transform .45s ease}
-.delivery-steps li{position:relative;z-index:1}
-.delivery-steps li>span{position:relative;box-shadow:0 0 0 4px var(--app-card,#fff);transition:background .3s ease,color .3s ease}
-@media(max-width:600px){.delivery-steps{--step-gap:7px}}
+.delivery-steps li{position:relative;z-index:1;min-width:0;padding:0 3px;text-align:center}
+.delivery-steps li>span{position:relative;margin:0 auto 7px;box-shadow:0 0 0 4px var(--app-card,#fff);transition:background .3s ease,color .3s ease}
 @media(prefers-reduced-motion:reduce){.delivery-steps::after,.delivery-steps li>span{transition:none}}
