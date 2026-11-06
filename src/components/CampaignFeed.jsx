@@ -73,7 +73,7 @@ function CampaignCard({ campaign: c, session, refresh }) {
   </article>;
 }
 
-export default function CampaignFeed({ session, search = '', creating = false, onCloseCreate }) {
+export default function CampaignFeed({ session, search = '', creating = false, onCloseCreate, showCampaigns = true, onCountChange }) {
   const [campaigns, setCampaigns] = useState([]);
   const createForm = useRef(null);
   useEffect(() => {
@@ -82,15 +82,16 @@ export default function CampaignFeed({ session, search = '', creating = false, o
       createForm.current?.querySelector('input')?.focus({ preventScroll: true });
     }
   }, [creating, session?.id]);
-  const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
-  const [showAll, setShowAll] = useState(false);
   const refresh = async () => setCampaigns((await api.campaigns()).campaigns);
   useEffect(() => {
     let active = true;
-    api.campaigns().then(result => { if (active) setCampaigns(result.campaigns); }).catch(e => { if (active) setError(e.message); }).finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
+    const sync = () => api.campaigns().then(result => { if (active) setCampaigns(result.campaigns); }).catch(e => { if (active) setError(e.message); });
+    sync();
+    const timer = window.setInterval(sync, 15000);
+    window.addEventListener('focus', sync);
+    return () => { active = false; window.clearInterval(timer); window.removeEventListener('focus', sync); };
   }, []);
   async function create(event) {
     event.preventDefault(); setBusy(true); setError('');
@@ -100,10 +101,10 @@ export default function CampaignFeed({ session, search = '', creating = false, o
     finally { setBusy(false); }
   }
   const query = search.trim().toLocaleLowerCase('pt-BR');
-  const visible = campaigns.filter(c => (showAll || c.accepting || c.owner_id === session?.id) && (!query || [c.title,c.description,c.city,c.material,c.beneficiary].some(v => v.toLocaleLowerCase('pt-BR').includes(query))));
-  return <section className="campaign-feed" aria-labelledby="campaign-heading">
-    <div className="campaign-heading"><div><span className="campaign-tag">Ajude uma necessidade real</span><h2 id="campaign-heading">Campanhas da comunidade</h2><p>Conecte materiais disponíveis a quem precisa deles.</p></div>
-    </div>
+  const visible = campaigns.filter(c => showCampaigns && c.accepting && (!query || [c.title,c.description,c.city,c.material,c.beneficiary].some(v => v.toLocaleLowerCase('pt-BR').includes(query))));
+  useEffect(() => { onCountChange?.(visible.length); }, [visible.length, onCountChange]);
+  if (!creating && !visible.length && !error) return null;
+  return <div className="campaign-stream">
     {error && <p role="alert" className="campaign-error">{error} <button type="button" onClick={async () => { try { await refresh(); setError(''); } catch (e) { setError(e.message); } }}>Tentar novamente</button></p>}
     {creating && session && <form ref={createForm} id="campaign-create-form" className="campaign-form campaign-create" onSubmit={create} aria-labelledby="campaign-create-title" aria-busy={busy}>
       <div className="campaign-create-header">
@@ -130,7 +131,6 @@ export default function CampaignFeed({ session, search = '', creating = false, o
       </fieldset>
       <div className="campaign-create-footer"><p><svg className="campaign-hint-icon" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6Z"/><path d="m8 12 3 3 5-6"/></svg>A meta avança a cada recebimento confirmado por você.</p><div><button type="button" className="secondary-btn" disabled={busy} onClick={onCloseCreate}>Cancelar</button><button className="primary-btn" disabled={busy}>{busy ? 'Publicando…' : 'Publicar campanha'}<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 12h16m-6-6 6 6-6 6"/></svg></button></div></div>
     </form>}
-    <label className="campaign-filter"><input type="checkbox" checked={showAll} onChange={e => setShowAll(e.target.checked)} /> Incluir campanhas encerradas e metas atingidas</label>
-    {loading ? <p role="status">Carregando campanhas…</p> : !visible.length ? <p className="campaign-empty">{query ? 'Nenhuma campanha corresponde à busca.' : 'Nenhuma campanha aberta por enquanto. Organize um pedido de materiais para sua comunidade.'}</p> : <div className="campaign-grid">{visible.map(c => <CampaignCard key={c.id} campaign={c} session={session} refresh={refresh} />)}</div>}
-  </section>;
+    {visible.map(c => <CampaignCard key={c.id} campaign={c} session={session} refresh={refresh} />)}
+  </div>;
 }
