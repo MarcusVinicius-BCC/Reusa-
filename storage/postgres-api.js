@@ -1,3 +1,4 @@
+const { postExtras } = require('./community-api');
 // 
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
@@ -109,6 +110,7 @@ async function postView(db, row, viewerId) {
     db.many('SELECT image_url FROM post_images WHERE post_id=$1 ORDER BY sort_order,created_at', [row.id])
   ]);
   return {
+    transport: JSON.parse(row.transport_json || '{}'), hasApproximateLocation: row.area_lat != null && row.area_lng != null,
     id: row.id, authorId: row.author_id,
     author: author && { id: author.id, name: author.name, city: author.city, neighborhood: author.neighborhood || '', accountType: author.account_type, businessName: author.business_name || '', avatar: author.avatar || '' },
     title: row.title, description: row.description, category: row.category, condition: row.condition,
@@ -256,6 +258,7 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
   });
   app.post('/api/posts', authenticate, upload.array('images', 8), async (req, res, next) => {
     try {
+      let extras; try {extras=postExtras(req.body);} catch(error){return res.status(error.status||400).json({error:error.message});}
       const body = req.body || {};
       const imageUrl = req.files?.[0] ? (req.files[0].location || `/uploads/${req.files[0].filename}`) : String(body.imageUrl || '').trim();
       if (!String(body.title || '').trim() || !String(body.description || '').trim() || !String(body.category || '').trim()) return res.status(400).json({ error: 'Informe o título, a descrição e a categoria do item.' });
@@ -266,6 +269,7 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       if (isLikelyResidentialAddress(post.location)) return res.status(400).json({ error: 'Location must be a city or neighborhood, not an exact address' });
       const created = await db.transaction(async (client) => {
         await client.query('INSERT INTO posts(id,author_id,title,description,category,condition,goal,image_url,location,created_at,chip_icon,chip_label) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)', Object.values(post));
+        await client.query('UPDATE posts SET transport_json=$1,area_lat=$2,area_lng=$3 WHERE id=$4',[extras.json,extras.lat,extras.lng,post.id]);
         const files = req.files?.length ? req.files : [{ location: imageUrl }];
         for (const [index, file] of files.entries()) await client.query('INSERT INTO post_images(id,post_id,image_url,sort_order) VALUES($1,$2,$3,$4)', [id('post-image'), post.id, file.location || `/uploads/${file.filename}`, index]);
         await client.query('INSERT INTO threads(id,post_id,participants_json,last_message_at) VALUES($1,$2,$3,$4)', [id('thread'), post.id, JSON.stringify([req.user.id]), post.created_at]);

@@ -1,3 +1,4 @@
+const { registerCommunityRoutes, postExtras } = require('./storage/community-api');
 const { registerDeliveryRoutes } = require('./storage/delivery-api');
 const { registerCampaignRoutes, campaignSchema } = require('./storage/campaign-api');
 
@@ -710,6 +711,7 @@ function publicPost(row, viewerId = null) {
   const liked = viewerId ? Boolean(get('SELECT post_id FROM post_likes WHERE user_id = ? AND post_id = ?', [viewerId, row.id])) : false;
   const reputation = author ? get('SELECT ROUND(AVG(rating), 1) AS average, COUNT(*) AS count FROM reviews WHERE reviewee_id = ?', [author.id]) : null;
   return {
+    transport: JSON.parse(row.transport_json || '{}'), hasApproximateLocation: row.area_lat != null && row.area_lng != null,
     id: row.id,
     authorId: row.author_id,
     author: author ? { id: author.id, name: author.name, city: author.city, neighborhood: author.neighborhood || '', accountType: author.account_type || 'person', businessName: author.business_name || '', avatar: safeAvatar(author.avatar) } : null,
@@ -1514,6 +1516,10 @@ async function start() {
     const bytes = loadDbBytes();
     db = bytes ? new SQL.Database(bytes) : new SQL.Database();
     seedDatabase();
+    ensureColumn('posts','transport_json',"TEXT NOT NULL DEFAULT '{}'");
+    ensureColumn('posts','area_lat','REAL');
+    ensureColumn('posts','area_lng','REAL');
+    for (const statement of fs.readFileSync(path.join(ROOT,'migrations/015_community_tools.sql'),'utf8').split(';').filter(part=>part.trim()&&!part.trim().startsWith('ALTER TABLE'))) run(statement);
     for (const statement of campaignSchema.split(';').filter(part => part.trim())) run(statement);
     persistDb();
     console.log('[database] SQLite fallback enabled explicitly');
@@ -1591,6 +1597,10 @@ async function start() {
     res.setHeader('X-Correlation-Id', req.correlationId);
     next();
   });
+  const communityWorkflow=registerCommunityRoutes(app,{postgres:postgresEnabled()?postgres:null,sqlite:{all,run,persist:persistDb},authenticate:authMiddleware,flush:flushPendingEvents});
+  const checkDiscovery=()=>communityWorkflow.runDiscovery().catch(error=>console.error('[discovery]',error.message));
+  await checkDiscovery();
+  setInterval(checkDiscovery,60000).unref();
   const deliveryWorkflow = registerDeliveryRoutes(app, { postgres: postgresEnabled() ? postgres : null, sqlite: { all, run, persist: persistDb }, authenticate: authMiddleware, flush: flushPendingEvents, refreshMetrics: () => { for (const user of all('SELECT id FROM users')) refreshUserMetrics(user.id); persistDb(); } });
   const checkDeliveryReminders = () => deliveryWorkflow.runReminders().catch(error => console.error('[delivery-reminders]', error.message));
   await checkDeliveryReminders();
@@ -2534,6 +2544,7 @@ async function start() {
   });
 
   app.post('/api/posts', authMiddleware, upload.array('images', 8), (req, res) => {
+    let extras; try { extras=postExtras(req.body); } catch(error) {return res.status(error.status||400).json({error:error.message});}
     const { title, description, category, condition, goal, location, chipLabel, chipIcon } = req.body || {};
     const normalizedTitle = String(title || '').trim();
     const normalizedDescription = String(description || '').trim();
@@ -2588,6 +2599,7 @@ async function start() {
       : [[uid('post-image'), post.id, imageUrl, 0, createdAt]];
     imageRows.forEach((values) => run('INSERT INTO post_images (id, post_id, image_url, sort_order, created_at) VALUES (?, ?, ?, ?, ?)', values));
 
+    run('UPDATE posts SET transport_json=?,area_lat=?,area_lng=? WHERE id=?',[extras.json,extras.lat,extras.lng,post.id]);
     const threadId = uid('thread');
     run(
       `INSERT INTO threads (id, post_id, participants_json, unread_count, last_message_at)

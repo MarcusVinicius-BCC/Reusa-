@@ -858,3 +858,38 @@ painel, e notifica a outra pessoa. Enviar a mesma mensagem duas vezes em cinco
 minutos não duplica o registro. O aviso não altera o acordo ou libera mudanças
 em pagamentos; os participantes devem combinar uma solução pelo chat.
 A migração 014_negotiation_followup.sql cria o histórico e o controle de lembretes.
+
+## Descoberta de itens e ferramentas da comunidade
+
+- **Alertas (/alertas):** cada usuário pode salvar até 20 buscas por palavra,
+  cidade/bairro e categoria. O backend verifica novos anúncios disponíveis a
+  cada minuto e ao iniciar. As notificações são internas ao app; cada anúncio
+  avisa apenas uma vez por alerta, inclusive após reinício. Itens antigos,
+  próprios, indisponíveis ou de usuários bloqueados não geram avisos.
+- **Proximidade:** o feed permite filtrar a cidade/bairro e, com autorização de
+  geolocalização, escolher raio de 2 a 100 km. O resultado é aproximado e contém
+  apenas anúncios cuja região foi cadastrada. A posição de consulta não é salva.
+- **Transporte:** nova publicação e edição de transporte no detalhe permitem
+  medidas, peso, desmontagem, escadas, veículo e cuidados com retirada. O dono
+  pode alterar enquanto o anúncio estiver disponível. Coordenadas de anúncios
+  são arredondadas a duas casas decimais antes de armazenamento e não são
+  expostas na resposta pública. Informações exatas de entrega ficam no acordo.
+- **Perguntas públicas:** interessados perguntam no detalhe do item; somente
+  o anunciante responde. Perguntas e respostas são públicas; contatos e
+  endereços devem ser combinados no chat. Há notificação de pergunta/resposta.
+- **Pedidos (/pedidos):** uma pessoa publica uma necessidade individual com
+  descrição, cidade e prazo. Outra pode oferecer um anúncio próprio disponível
+  para doação. A oferta abre uma conversa e uma negociação com quem pediu,
+  seguindo reserva, acordo e recebimento existentes; não conclui uma doação
+  automaticamente. O backend marca o pedido como atendido após recebimento
+  confirmado (verificação a cada minuto). Pedidos abertos podem ser encerrados
+  pelo autor. Para metas de várias unidades, use campanhas.
+- **Problemas de negociação:** participantes de negociação reservada ou
+  concluída podem registrar não comparecimento, item diferente, não recebimento
+  ou outro problema. A central administrativa de Denúncias recebe o relato com
+  contexto de entrega/pagamento. Somente administradores alteram seu status.
+  Registrar um problema não cancela acordos nem estorna valores automaticamente.
+
+A migração 015_community_tools.sql prepara as tabelas e metadados no PostgreSQL;
+o SQLite recebe as mesmas estruturas ao iniciar. A suíte inclui permissões,
+concorrência de ofertas, localização aproximada e alertas sem duplicação.

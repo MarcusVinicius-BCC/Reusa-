@@ -141,6 +141,16 @@ test('PostgreSQL provider persists a post, thread, reservation and outbox event'
     assert.equal(saved.received, 2);
     assert.equal(saved.accepting, false);
     await require('./acceptance-flow').exerciseAcceptanceFlow((path, options) => request(baseUrl, path, options));
+    const communityResult=await require('./community-flow').exerciseCommunity((path,options)=>request(baseUrl,path,options));
+    const discoveryDb=new (require('../storage/postgres-repository').PostgresRepository)(require('../storage/database-config').postgresConnectionString());
+    try{
+      const workflow=require('../storage/community-api').registerCommunityRoutes({get(){},post(){},put(){},patch(){},delete(){}},{postgres:discoveryDb,authenticate(){},flush(){}});
+      await workflow.runDiscovery();await workflow.runDiscovery();
+      const messages=(await request(baseUrl,'/api/notifications',{headers:communityResult.recipientHeaders})).payload.notifications;
+      assert.equal(messages.filter(n=>n.title==='Encontramos um item que você procura'&&n.link==='/anuncios/'+communityResult.matchingPostId).length,1);
+      assert.ok(!(await request(baseUrl,'/api/needs')).payload.needs.some(n=>n.id===communityResult.needId));
+    }finally{await discoveryDb.close();}
+
     const outbox = await request(baseUrl, '/api/distributed/status');
     assert.equal(outbox.response.status, 200);
     assert.ok(outbox.payload.pendingEvents >= 2);

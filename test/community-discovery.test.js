@@ -1,0 +1,31 @@
+const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path');
+const {registerCommunityRoutes,postExtras}=require('../storage/community-api');
+test('transport coordinates are coarse and invalid transport fields are rejected',()=>{
+ const data=postExtras({areaLat:-1.451234,areaLng:-48.491234,weightKg:'12',disassembly:'yes'});
+ assert.equal(data.lat,-1.45);assert.equal(data.lng,-48.49);assert.equal(JSON.parse(data.json).weightKg,12);
+ for(const value of [{areaLat:1},{areaLat:99,areaLng:0},{weightKg:-1},{vehicle:'plane'},{disassembly:'maybe'}])assert.throws(()=>postExtras(value));
+});
+test('search alerts match new available items, persist deduplication and fulfill delivered requests',async()=>{
+ const SQL=await require('sql.js')(),db=new SQL.Database();
+ db.exec("CREATE TABLE users(id TEXT PRIMARY KEY); INSERT INTO users VALUES('watcher'),('donor'); CREATE TABLE posts(id TEXT PRIMARY KEY,author_id TEXT,title TEXT,description TEXT,category TEXT,location TEXT,status TEXT,created_at TEXT); CREATE TABLE negotiations(id TEXT PRIMARY KEY,status TEXT); CREATE TABLE threads(id TEXT PRIMARY KEY); CREATE TABLE blocked_users(blocker_id TEXT,blocked_id TEXT); CREATE TABLE notifications(id TEXT,user_id TEXT,type TEXT,title TEXT,text TEXT,link TEXT,created_at TEXT)");
+ for(const q of fs.readFileSync(path.join(__dirname,'../migrations/015_community_tools.sql'),'utf8').split(';').filter(q=>q.trim()&&!q.trim().startsWith('ALTER')))db.run(q);
+ db.run("INSERT INTO search_alerts VALUES('a','watcher','mesa','Belem','Móveis','2030-01-01T00:00:00.000Z')");
+ const insert=(id,author,status,date,city='Belém, PA')=>db.run('INSERT INTO posts VALUES(?,?,?,?,?,?,?,?)',[id,author,'Mesa para estudar','Mesa em bom estado','Móveis',city,status,date]);
+ insert('matching','donor','Disponível','2030-01-02T00:00:00.000Z');
+ insert('old','donor','Disponível','2029-01-01T00:00:00.000Z');
+ insert('own','watcher','Disponível','2030-01-02T00:00:00.000Z');
+ insert('reserved','donor','Reservado','2030-01-02T00:00:00.000Z');
+ insert('far','donor','Disponível','2030-01-02T00:00:00.000Z','São Paulo, SP');
+ const all=(q,p=[])=>{const r=db.exec(q,p)[0];return r?r.values.map(row=>Object.fromEntries(r.columns.map((k,i)=>[k,row[i]]))):[]};
+ const app={get(){},post(){},put(){},patch(){},delete(){}},options={sqlite:{all,run:(q,p=[])=>db.run(q,p),persist(){}},authenticate(){},flush(){},clock:()=>new Date('2030-01-03T00:00:00Z')};
+ await registerCommunityRoutes(app,options).runDiscovery();
+ assert.equal(all('SELECT * FROM notifications').length,1);
+ assert.equal(all('SELECT * FROM notifications')[0].link,'/anuncios/matching');
+ await registerCommunityRoutes(app,options).runDiscovery();assert.equal(all('SELECT * FROM notifications').length,1);
+ db.run("INSERT INTO blocked_users VALUES('watcher','donor')");insert('blocked','donor','Disponível','2030-01-02T00:00:00.000Z');
+ await registerCommunityRoutes(app,options).runDiscovery();assert.equal(all('SELECT * FROM notifications').length,1);
+ db.run("INSERT INTO material_needs VALUES('need','watcher','Preciso de mesa','Uma necessidade para estudar','Belém','2030-12-31','open','2030-01-01')");
+ db.run("INSERT INTO negotiations VALUES('n','completed'); INSERT INTO threads VALUES('t'); INSERT INTO need_offers VALUES('o','need','donor','matching','t','n','2030-01-01')");
+ await registerCommunityRoutes(app,options).runDiscovery();assert.equal(all("SELECT status FROM material_needs WHERE id='need'")[0].status,'fulfilled');
+ db.close();
+});

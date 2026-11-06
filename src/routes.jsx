@@ -1,3 +1,4 @@
+import {AlertsPage,NeedsPage,FeedDiscovery,Questions,TransportPanel,TransportFields} from './components/CommunityTools';
 import NegotiationsPage from './components/NegotiationsPage';
 import DeliveryCard from './components/DeliveryCard';
 import CampaignCreateForm from './components/CampaignCreateForm';
@@ -139,7 +140,7 @@ export function AppRoutes() {
   }, [initialize]);
 
   useEffect(() => {
-    const publicRoute = ['/splash', '/login', '/criar-conta', '/feed', '/mapa', '/inspiracoes', '/mensagens', '/mensagens/ana', '/nova-publicacao', '/perfil', '/sobre'].includes(location.pathname) || location.pathname.startsWith('/anuncios/');
+    const publicRoute = ['/splash', '/login', '/criar-conta', '/pedidos', '/feed', '/mapa', '/inspiracoes', '/mensagens', '/mensagens/ana', '/nova-publicacao', '/perfil', '/sobre'].includes(location.pathname) || location.pathname.startsWith('/anuncios/');
     if (initialized && !session && !publicRoute) {
       navigate('/login', { replace: true });
     }
@@ -200,6 +201,10 @@ function ScreenRouter({ location, navigate }) {
       return <MessagesScreen onOpenThread={(threadId) => threadId && navigate(`/mensagens/ana?thread=${threadId}`)} />;
     case '/mensagens/ana':
       return <ChatScreen onBack={() => navigate('/mensagens')} />;
+    case '/alertas':
+      return <div className="post-screen community-screen"><UnifiedTopbar onBack={()=>navigate('/feed')}/><AlertsPage/></div>;
+    case '/pedidos':
+      return <div className="post-screen community-screen"><UnifiedTopbar onBack={()=>navigate('/feed')}/><NeedsPage session={useAppStore.getState().session} onNavigate={navigate}/></div>;
     case '/negociacoes':
       return <div className="post-screen negotiations-screen"><UnifiedTopbar onBack={() => navigate('/feed')} /><NegotiationsPage onNavigate={navigate} /></div>;
     case '/nova-campanha':
@@ -597,6 +602,8 @@ function FeedScreen({ onNavigate }) {
   const loadNotifications = useAppStore((state) => state.loadNotifications);
   const session = useAppStore((state) => state.session);
   const [category, setCategory] = useState('Todos');
+  const [locality,setLocality]=useState('');
+  const [nearby,setNearby]=useState(null);
   const [campaignCount, setCampaignCount] = useState(0);
   const [categoriesOpen, setCategoriesOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -608,9 +615,9 @@ function FeedScreen({ onNavigate }) {
     return feedPosts.filter((post) => {
       const matchesCategory = category === 'Todos' || category === 'Salvos' || String(post.category || '').toLowerCase() === category.toLowerCase();
       const matchesSearch = !query || [post.title, post.description, post.category, post.author?.name].some((value) => String(value || '').toLowerCase().includes(query));
-      return matchesCategory && matchesSearch;
-    }).filter(Boolean);
-  }, [feedPosts, search, category]);
+      return matchesCategory && matchesSearch && (!locality.trim() || String(post.location||'').toLocaleLowerCase('pt-BR').includes(locality.trim().toLocaleLowerCase('pt-BR'))) && (nearby===null || nearby.some(p=>p.id===post.id));
+    }).filter(Boolean).sort((a,b)=>nearby===null?0:(nearby.find(p=>p.id===a.id)?.distanceKm??Infinity)-(nearby.find(p=>p.id===b.id)?.distanceKm??Infinity));
+  }, [feedPosts, search, category, locality, nearby]);
 
   useEffect(() => {
     loadFeed().catch(() => {});
@@ -661,12 +668,13 @@ function FeedScreen({ onNavigate }) {
       </header>
       <div className="feed-category-popover">{categoriesOpen ? <CategoryBar selected={category} onChange={(value) => { setCategory(value); setCategoriesOpen(false); }} showSaved={Boolean(session)} savedCount={favorites.length} /> : null}</div>
       <main className="feed-page">
+        <FeedDiscovery session={session} city={locality} onCity={setLocality} nearby={nearby} onNearby={setNearby} onNavigate={onNavigate}/>
         <section className="feed-available-heading" aria-labelledby="feed-available-title">
           <span className="material-symbols-outlined" aria-hidden="true">inventory_2</span>
           <h1 id="feed-available-title">No seu feed</h1>
         </section>
         <div className="feed-list">
-        <CampaignFeed session={session} search={search} showCampaigns={category === 'Todos'} onCountChange={setCampaignCount} />
+        <CampaignFeed session={session} search={search} showCampaigns={category === 'Todos' && nearby===null && !locality.trim()} onCountChange={setCampaignCount} />
           {filteredPosts.length ? filteredPosts.map((post) => <FeedCard key={post.id} post={post} onNavigate={onNavigate} onOpenChat={async () => { try { const thread = await useAppStore.getState().createThread(post.id); onNavigate(`/mensagens/ana?thread=${thread.id}`); } catch (error) { alert(error.message); } }} onOpenPayment={async () => useAppStore.getState().createThread(post.id)} />) : (category === 'Todos' && campaignCount > 0) ? null : <div className="empty-state"><span className="material-symbols-outlined">{category === 'Salvos' ? 'bookmark_border' : 'search_off'}</span><h2>{category === 'Salvos' ? 'Nenhum item salvo' : 'Nada encontrado'}</h2><p>{category === 'Salvos' ? 'Toque no marcador de um anúncio para encontrá-lo aqui.' : 'Tente outra busca ou categoria.'}</p></div>}
         </div>
       </main>
@@ -1195,6 +1203,7 @@ function CreatePostScreen({ onBack, onSuccess }) {
             <Field label="Localização aproximada" icon="location_on" value={postForm.location || ''} onChange={(value) => setPostForm((prev) => ({ ...prev, location: value }))} placeholder="Ex: Santarém, PA" required />
           </section>
 
+          <section className="publish-section"><h3>Retirada e transporte (opcional)</h3><p>Ajude quem vai buscar o item a se organizar.</p><TransportFields value={postForm} onChange={setPostForm}/></section>
           <aside className="publish-tip"><span className="material-symbols-outlined">tips_and_updates</span><span><strong>Dica REUSA+</strong> Fotos claras e uma descrição sincera aumentam as chances de um novo encontro.</span></aside>
           <div className="publish-submit"><button type="submit" className="primary-btn full" disabled={publishing} aria-busy={publishing}><span className="material-symbols-outlined">{publishing ? 'progress_activity' : 'arrow_forward'}</span>{publishing ? 'Publicando anúncio...' : 'Publicar anúncio'}</button><small>{publishing ? 'Aguarde enquanto salvamos seu anúncio.' : 'Você poderá conversar com interessados depois da publicação.'}</small></div>
         </form>
@@ -1610,6 +1619,8 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
           )}</article>)}</div> : null}
       </section>
     ) : null}
+    <TransportPanel key={post.id} post={post} own={ownPost} onSaved={refreshPost}/>
+    <Questions post={post} session={session}/>
     {!ownPost && isSale && negotiation?.status === 'interested' && negotiation.proposalStatus === 'none' ? <section className="review-form-card proposal-card"><span className="eyebrow">Oferta com pagamento</span><h2>Envie sua proposta</h2><p>Informe o valor e a forma de pagamento. O vendedor receberá sua proposta para análise.</p><form onSubmit={submitProposal}><label>Valor da oferta (R$)<input inputMode="decimal" value={proposalForm.amount} onChange={(event) => setProposalForm((current) => ({ ...current, amount: formatMoneyInput(event.target.value) }))} placeholder="10,00" required /></label>    <label>Forma de pagamento<select value={proposalForm.method} onChange={(event) => setProposalForm((current) => ({ ...current, method: event.target.value }))}><option value="pix">PIX</option><option value="card">Cartão</option></select></label><button className="primary-btn" disabled={proposalBusy}>{proposalBusy ? 'Enviando...' : 'Enviar proposta'}<span className="material-symbols-outlined">send</span></button></form></section> : null}
     {!ownPost && isSale && negotiation?.status === 'interested' && negotiation.proposalStatus === 'pending' ? <section className="payment-waiting-card"><div className="payment-waiting-icon"><span className="material-symbols-outlined">hourglass_top</span></div><div><span className="eyebrow">Proposta enviada</span><h2>Aguardando resposta do vendedor</h2><p>Sua oferta de R$ {((negotiation.proposalAmountCents || 0) / 100).toFixed(2).replace('.', ',')} foi enviada. O pagamento ficará disponível após o vendedor aceitar a oferta e as duas pessoas combinarem e aceitarem a entrega.</p></div><button className="secondary-btn" onClick={startConversation}><span className="material-symbols-outlined">chat_bubble</span>Conversar com o anunciante</button></section> : null}
     {negotiation && (['reserved','completed'].includes(negotiation.status) || payment) ? <DeliveryCard negotiation={negotiation} collection={collection} onChange={setCollection} isSale={isSale} payment={payment} isOwner={ownPost} onRefreshStatus={async () => { const [p, d] = await Promise.all([api.payment(negotiation.id), api.collection(negotiation.id)]); setPayment(p.payment); setCollection(d.collection); }} onReceived={refreshPost} onChat={() => onNavigate(`/mensagens/ana?thread=${negotiation.threadId || negotiation.thread_id}`)}>
@@ -1729,6 +1740,8 @@ function ProfileScreen({ onGoToFeed, onSettings, onOpenPost, onAdmin }) {
     <Shell nav={navRoutes} active="/perfil">
       <UnifiedTopbar />
       <main className="page profile-page">
+        <a className="negotiations-shortcut" href="/alertas">Meus alertas de itens <span aria-hidden="true">→</span></a>
+        <a className="negotiations-shortcut" href="/pedidos">Pedidos da comunidade <span aria-hidden="true">→</span></a>
         <a className="negotiations-shortcut" href="/negociacoes">Minhas negociações <span aria-hidden="true">→</span></a>
         <section className="profile-hero">
           <button className="avatar-wrap avatar-upload-button" type="button" onClick={() => avatarInput.current?.click()} aria-label="Alterar foto de perfil" title="Alterar foto de perfil" disabled={avatarBusy}>{user.avatar ? <img src={user.avatar} alt={user.name} /> : <span className="avatar-placeholder material-symbols-outlined" aria-label={`Perfil de ${user.name}`}>person</span>}<span className="avatar-upload-icon material-symbols-outlined">{avatarBusy ? 'progress_activity' : 'photo_camera'}</span><span className="verified material-symbols-outlined">verified</span></button>

@@ -620,3 +620,7 @@ test('community campaigns track only confirmed deliveries and enforce permission
 test('seller cancels acceptance only before delivery or payment and can choose another bid', async () => {
   await require('./acceptance-flow').exerciseAcceptanceFlow(request);
 });
+
+test('community tools protect alerts, coordinates, public questions, donation offers and reports',async()=>{
+ await require('./community-flow').exerciseCommunity(request);
+});

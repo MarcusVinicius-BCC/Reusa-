@@ -1,3 +1,4 @@
+import {NegotiationProblem} from './CommunityTools';
 import React, { useEffect, useState } from 'react';
 import { api } from '../services/api';
 import './delivery.css';
@@ -77,6 +78,7 @@ export default function DeliveryCard({ negotiation, collection, onChange, onRece
     </div>
     {children}
       {collection?.canReceive && <div className="delivery-receipt"><label><input type="checkbox" checked={receiptChecked} onChange={e => setReceiptChecked(e.target.checked)} />Já recebi e conferi o item pessoalmente.</label><button className="primary-btn" disabled={busy || !receiptChecked} onClick={() => { if (window.confirm('Confirmar que o item está com você? Isso conclui a negociação e não pode ser desfeito por esta tela.')) act(() => api.confirmCollection(collection.id), 'Recebimento confirmado. Negociação concluída!', true); }}>Confirmar recebimento do item</button></div>}
+    <NegotiationProblem negotiation={negotiation}/>
     <footer className="delivery-footer"><details><summary>Sobre entrega e pagamento</summary><p>O ReUsa+ não oferece transporte, guarda do valor ou reembolso automático. Em caso de não recebimento, não confirme a entrega: fale com o anunciante e use o suporte do Mercado Pago, conforme as regras do pagamento.</p></details></footer>
   </section>;
 }
