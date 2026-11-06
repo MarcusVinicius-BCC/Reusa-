@@ -814,3 +814,23 @@ O acesso público precisa estar habilitado na Cloudflare. O app não torna um
 bucket R2 público automaticamente. Valide um upload e abra a imagem em uma
 janela sem autenticação depois do deploy. Os testes locais verificam o SDK e um
 servidor S3 de teste; não validam as permissões do bucket real sem acesso a ele.
+
+### Cancelar o aceite de uma oferta
+
+Na lista de interessados, o anunciante pode usar **Cancelar aceite** enquanto a
+reserva aceita ainda não tiver proposta de entrega nem qualquer registro de
+pagamento. O servidor valida a regra na mesma transação que desfaz a reserva.
+Abrir a tela não conta como avanço; enviar uma proposta de entrega ou iniciar
+um pagamento conta, mesmo que a etapa seja cancelada ou o pagamento falhe depois.
+
+O cancelamento recusa a oferta selecionada, libera o anúncio e avisa o comprador.
+As demais propostas pendentes permanecem disponíveis para escolha; só são
+encerradas quando o recebimento conclui a negociação. Ofertas anteriormente
+recusadas podem ser reconsideradas explicitamente enquanto o anúncio estiver
+disponível, inclusive as recusadas automaticamente por versões antigas.
+
+`POST /api/negotiations/:id/cancel-acceptance` permite essa ação somente ao
+anunciante. A lista de interessados informa `canCancelAcceptance`; a interface
+atualiza a permissão periodicamente e o servidor sempre verifica novamente ao
+clicar. Cancelar o aceite e avançar para entrega simultaneamente não permite
+que as duas operações sejam concluídas.

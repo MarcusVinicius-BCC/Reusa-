@@ -1233,6 +1233,7 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
   const [collection, setCollection] = useState(null);
   const [proposalForm, setProposalForm] = useState({ amount: '', method: 'pix' });
   const [proposalBusy, setProposalBusy] = useState(false);
+  const [cancellingAcceptance, setCancellingAcceptance] = useState('');
   const [editing, setEditing] = useState(false);
   const [editForm, setEditForm] = useState({});
   const [editImages, setEditImages] = useState([]);
@@ -1261,6 +1262,15 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
 
   const ownPost = post?.authorId === session?.id;
   const isSale = post?.goal === 'Venda';
+  useEffect(() => {
+    if (!ownPost || !interested.length) return;
+    let active = true;
+    const sync = () => api.interested(postId).then(result => { if (active) setInterested(result.negotiations || []); }).catch(() => {});
+    const timer = window.setInterval(sync, 8000);
+    window.addEventListener('focus', sync);
+    return () => { active = false; window.clearInterval(timer); window.removeEventListener('focus', sync); };
+  }, [ownPost, postId, Boolean(interested.length)]);
+
 
   useEffect(() => {
     setStatusUpdating('');
@@ -1447,6 +1457,18 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
     try { const result = await api.interested(post.id); setInterested(result.negotiations || []); } catch (error) { alert(error.message); }
   }
 
+  function canCancelAcceptedOffer(item) {
+    return item.canCancelAcceptance && !(item.id === negotiation?.id && (collection || payment));
+  }
+
+  async function cancelAcceptance(id) {
+    if (cancellingAcceptance || !window.confirm('Cancelar o aceite? O item ficará disponível para aceitar outra oferta.')) return;
+    setCancellingAcceptance(id);
+    try { await api.cancelAcceptedProposal(id); await refreshPost(); await loadInterested(); }
+    catch (error) { await loadInterested().catch(() => {}); alert(error.message); }
+    finally { setCancellingAcceptance(''); }
+  }
+
   async function reserve(interestedId) {
     try { await useAppStore.getState().reservePost(post.id, interestedId); await refreshPost(); await loadInterested(); } catch (error) { alert(error.message); }
   }
@@ -1571,10 +1593,10 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
         ) : null}
         <PostStatusControls post={post} deliveryLocked={Boolean((collection && collection.status !== 'cancelled') || ['processing','succeeded'].includes(payment?.status))} statusUpdating={statusUpdating} statusMessage={statusMessage} onChange={updateStatus} />
         {interested.length ? <div className="interested-list">{interested.map((item) => <article key={item.id}>{item.user?.avatar ? <img className="interested-avatar" src={item.user.avatar} alt={`Foto de ${item.user.name || 'usuário'}`} /> : <span className="avatar-placeholder material-symbols-outlined">person</span>}<div><strong>{item.user?.name || 'Usuário'}</strong><small>{item.user?.city} · {negotiationStatusLabel(item.status)}</small>{item.proposalStatus !== 'none' ? <small>Proposta: {Number.isFinite(Number(item.proposalAmountCents)) && Number(item.proposalAmountCents) > 0 ? `R$ ${(Number(item.proposalAmountCents) / 100).toFixed(2).replace('.', ',')}` : 'Valor indisponível'} · {proposalStatusLabel(item.proposalStatus)}</small> : null}</div>{isSale ? (
-            item.proposalStatus === 'pending' ? <>
-              <button className="secondary-btn" onClick={() => api.decideProposal(item.id, 'rejected').then(loadInterested).catch((error) => alert(error.message))}>Recusar oferta</button>
-              <button className="primary-btn" onClick={() => api.decideProposal(item.id, 'accepted').then(async () => { await refreshPost(); await loadInterested(); }).catch((error) => alert(error.message))}>Aceitar oferta e reservar</button>
-            </> : item.proposalStatus === 'accepted' && item.status === 'reserved' ? <span className="reserve-btn reserve-btn-active"><span className="material-symbols-outlined">check_circle</span>Oferta aceita · Item reservado</span> : null
+            (item.proposalStatus === 'pending' || (item.proposalStatus === 'rejected' && post.status === 'Disponível')) ? <>
+              {item.proposalStatus === 'pending' && <button className="secondary-btn" onClick={() => api.decideProposal(item.id, 'rejected').then(loadInterested).catch((error) => alert(error.message))}>Recusar oferta</button>}
+              <button className="primary-btn" disabled={post.status !== 'Disponível' || Boolean(cancellingAcceptance)} title={post.status !== 'Disponível' ? 'Cancele o aceite atual antes de aceitar outra oferta' : undefined} onClick={() => api.decideProposal(item.id, 'accepted').then(async () => { await refreshPost(); await loadInterested(); }).catch((error) => alert(error.message))}>{item.proposalStatus === 'rejected' ? 'Reconsiderar oferta' : 'Aceitar oferta e reservar'}</button>
+            </> : item.proposalStatus === 'accepted' && item.status === 'reserved' ? <div className="accepted-offer-actions"><span className="reserve-btn reserve-btn-active"><span className="material-symbols-outlined" aria-hidden="true">check_circle</span>Oferta aceita · Item reservado</span><button type="button" className="cancel-acceptance-btn" disabled={!canCancelAcceptedOffer(item) || Boolean(cancellingAcceptance)} onClick={() => cancelAcceptance(item.id)} title={canCancelAcceptedOffer(item) ? 'Retirar o aceite e liberar o item para outra oferta' : 'Indisponível: a negociação já avançou para entrega ou pagamento'}>{cancellingAcceptance === item.id ? 'Cancelando…' : 'Cancelar aceite'}</button>{!canCancelAcceptedOffer(item) && <small>A negociação já avançou para entrega ou pagamento.</small>}</div> : null
           ) : (
             item.status === 'reserved'
               ? <span className="reserve-btn reserve-btn-active"><span className="material-symbols-outlined">check_circle</span>Item reservado</span>

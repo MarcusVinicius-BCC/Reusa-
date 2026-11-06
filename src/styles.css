@@ -3385,3 +3385,12 @@ body { background: var(--app-night-deep); }
     justify-self: end;
   }
 }
+
+.accepted-offer-actions { display:flex; flex-wrap:wrap; align-items:center; gap:9px; }
+.accepted-offer-actions>small { flex-basis:100%; color:var(--text-variant); font-size:11px; line-height:1.5; }
+.cancel-acceptance-btn { min-height:40px; padding:9px 13px; border:1px solid #e5c1ba; border-radius:12px; background:#fff; color:#983f35; font:inherit; font-size:12px; font-weight:700; cursor:pointer; }
+.cancel-acceptance-btn:hover:not(:disabled) { background:#fff1ee; border-color:#c97a6d; }
+.cancel-acceptance-btn:disabled { opacity:.55; cursor:not-allowed; }
+.cancel-acceptance-btn:focus-visible { outline:3px solid #983f3540; outline-offset:3px; }
+.accepted-offer-actions .reserve-btn { max-width:100%; white-space:normal; font-size:12px; font-weight:700; line-height:1.4; }
+@media(max-width:600px) { .interested-list article:has(.accepted-offer-actions) { flex-wrap:wrap; } .interested-list article>.accepted-offer-actions { flex:0 0 100%; } }

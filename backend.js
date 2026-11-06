@@ -2161,7 +2161,7 @@ async function start() {
     if (post.author_id !== req.user.id) return res.status(403).json({ error: 'Only the owner can view interested users' });
     const negotiations = all('SELECT * FROM negotiations WHERE post_id = ? ORDER BY created_at DESC', [post.id]).map((item) => {
       const user = get('SELECT id, name, city, avatar FROM users WHERE id = ?', [item.interested_id]);
-      return { id: item.id, status: item.status, proposalStatus: item.proposal_status || 'none', proposalAmountCents: item.proposal_amount_cents || null, proposalMethod: item.proposal_method || null, createdAt: item.created_at, threadId: item.thread_id, user: user ? { ...user, avatar: safeAvatar(user.avatar) } : null };
+      return { id: item.id, status: item.status, canCancelAcceptance: item.status === 'reserved' && item.proposal_status === 'accepted' && !get('SELECT id FROM collection_deliveries WHERE negotiation_id = ?', [item.id]) && !get('SELECT id FROM payments WHERE negotiation_id = ? LIMIT 1', [item.id]), proposalStatus: item.proposal_status || 'none', proposalAmountCents: item.proposal_amount_cents || null, proposalMethod: item.proposal_method || null, createdAt: item.created_at, threadId: item.thread_id, user: user ? { ...user, avatar: safeAvatar(user.avatar) } : null };
     });
     return res.json({ negotiations });
   });
@@ -2199,7 +2199,7 @@ async function start() {
     const decision = String(req.body?.decision || '').trim().toLowerCase();
     if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
     if (negotiation.owner_id !== req.user.id) return res.status(403).json({ error: 'Only the seller can decide this proposal' });
-    if (negotiation.proposal_status !== 'pending') return res.status(400).json({ error: 'There is no pending proposal to decide' });
+    if (negotiation.proposal_status !== 'pending' && !(decision === 'accepted' && negotiation.proposal_status === 'rejected')) return res.status(400).json({ error: 'There is no pending proposal to decide' });
     if (!['accepted', 'rejected'].includes(decision)) return res.status(400).json({ error: 'Decision must be accepted or rejected' });
     const now = new Date().toISOString();
     if (decision === 'accepted') {
@@ -2219,7 +2219,6 @@ async function start() {
       try {
         db.exec('BEGIN TRANSACTION');
         run("UPDATE negotiations SET status='interested',proposal_status=CASE WHEN proposal_status='pending' THEN 'rejected' ELSE proposal_status END,updated_at=? WHERE post_id=? AND id<>? AND status='reserved'", [now, post.id, negotiation.id]);
-        run("UPDATE negotiations SET proposal_status='rejected',updated_at=? WHERE post_id=? AND id<>? AND proposal_status='pending'", [now, post.id, negotiation.id]);
         run("UPDATE negotiations SET proposal_status='accepted',status='reserved',updated_at=? WHERE id=?", [now, negotiation.id]);
         run("UPDATE posts SET status='Reservado',reserved_by=?,updated_at=? WHERE id=?", [negotiation.interested_id, now, post.id]);
         emitDomainEvent('negotiation.reserved', { negotiationId: negotiation.id, postId: post.id, postTitle: post.title, ownerId: post.author_id, interestedId: negotiation.interested_id, status: 'reserved' }, req.correlationId);

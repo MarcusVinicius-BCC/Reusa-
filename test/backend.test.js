@@ -616,3 +616,7 @@ test('community campaigns track only confirmed deliveries and enforce permission
 
   assert.equal((await send('/api/campaigns/missing/contributions', donor, offer)).response.status, 404);
 });
+
+test('seller cancels acceptance only before delivery or payment and can choose another bid', async () => {
+  await require('./acceptance-flow').exerciseAcceptanceFlow(request);
+});

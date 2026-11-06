@@ -333,8 +333,8 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       const post = await db.one('SELECT id,author_id FROM posts WHERE id=$1', [req.params.id]);
       if (!post) return res.status(404).json({ error: 'Post not found' });
       if (post.author_id !== req.user.id) return res.status(403).json({ error: 'Only the owner can view interested users' });
-      const rows = await db.many('SELECT n.id,n.status,n.proposal_status,n.proposal_amount_cents,n.proposal_method,n.proposal_created_at,n.created_at,n.thread_id,u.id AS user_id,u.name,u.city,u.avatar FROM negotiations n JOIN users u ON u.id=n.interested_id WHERE n.post_id=$1 ORDER BY n.created_at DESC', [post.id]);
-      return res.json({ negotiations: rows.map((row) => ({ id: row.id, status: row.status, proposalStatus: row.proposal_status || 'none', proposalAmountCents: row.proposal_amount_cents || null, proposalMethod: row.proposal_method || null, proposalCreatedAt: row.proposal_created_at || null, createdAt: row.created_at, threadId: row.thread_id, user: { id: row.user_id, name: row.name, city: row.city, avatar: row.avatar || '' } })) });
+      const rows = await db.many('SELECT n.id,n.status,NOT EXISTS(SELECT 1 FROM collection_deliveries d WHERE d.negotiation_id=n.id) AND NOT EXISTS(SELECT 1 FROM payments p WHERE p.negotiation_id=n.id) AS can_cancel_acceptance,n.proposal_status,n.proposal_amount_cents,n.proposal_method,n.proposal_created_at,n.created_at,n.thread_id,u.id AS user_id,u.name,u.city,u.avatar FROM negotiations n JOIN users u ON u.id=n.interested_id WHERE n.post_id=$1 ORDER BY n.created_at DESC', [post.id]);
+      return res.json({ negotiations: rows.map((row) => ({ id: row.id, status: row.status, canCancelAcceptance: row.status === 'reserved' && row.proposal_status === 'accepted' && Boolean(row.can_cancel_acceptance), proposalStatus: row.proposal_status || 'none', proposalAmountCents: row.proposal_amount_cents || null, proposalMethod: row.proposal_method || null, proposalCreatedAt: row.proposal_created_at || null, createdAt: row.created_at, threadId: row.thread_id, user: { id: row.user_id, name: row.name, city: row.city, avatar: row.avatar || '' } })) });
     } catch (error) { return next(error); }
   });
   app.get('/api/posts/:id/negotiation', authenticate, async (req, res, next) => {
@@ -382,7 +382,7 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
         if (!post) throw Object.assign(new Error('Post not found'), { status: 404 });
         const negotiation = (await client.query('SELECT * FROM negotiations WHERE id=$1 FOR UPDATE', [req.params.id])).rows[0];
         if (negotiation.owner_id !== req.user.id || post.author_id !== req.user.id) throw Object.assign(new Error('Only the seller can decide this proposal'), { status: 403 });
-        if (negotiation.proposal_status !== 'pending') throw Object.assign(new Error('There is no pending proposal to decide'), { status: 400 });
+        if (negotiation.proposal_status !== 'pending' && !(decision === 'accepted' && negotiation.proposal_status === 'rejected')) throw Object.assign(new Error('There is no pending proposal to decide'), { status: 400 });
         if (decision === 'accepted') {
           if (post.goal !== SALE_GOAL) throw Object.assign(new Error('Only sale offers can be accepted here'), { status: 400 });
           if (!['Disponível', 'Reservado'].includes(post.status) ||
@@ -397,7 +397,6 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
             }
           }
           await client.query("UPDATE negotiations SET status='interested',proposal_status=CASE WHEN proposal_status='pending' THEN 'rejected' ELSE proposal_status END,updated_at=now() WHERE post_id=$1 AND id<>$2 AND status='reserved'", [post.id, negotiation.id]);
-          await client.query("UPDATE negotiations SET proposal_status='rejected',updated_at=now() WHERE post_id=$1 AND id<>$2 AND proposal_status='pending'", [post.id, negotiation.id]);
           await client.query("UPDATE negotiations SET proposal_status='accepted',status='reserved',updated_at=now() WHERE id=$1", [negotiation.id]);
           await client.query("UPDATE posts SET status='Reservado',reserved_by=$1,updated_at=now() WHERE id=$2", [negotiation.interested_id, post.id]);
           await emit(client, 'negotiation.reserved', { negotiationId: negotiation.id, postId: post.id, postTitle: post.title, ownerId: post.author_id, interestedId: negotiation.interested_id, status: 'reserved' }, req.correlationId);
@@ -677,19 +676,19 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
   });
   app.get('/api/notifications', authenticate, async (req, res, next) => {
     try {
-      const rows = await db.many('SELECT id,type,title,text,link,created_at AS "createdAt",read_at AS "readAt" FROM notification_service_notifications WHERE user_id=$1 ORDER BY created_at DESC LIMIT 100', [req.user.id]);
+      const rows = await db.many('SELECT id,type,title,text,link,created_at AS "createdAt",read_at AS "readAt" FROM (SELECT id,type,title,text,link,created_at,read_at FROM notifications WHERE user_id=$1 UNION ALL SELECT id,type,title,text,link,created_at,read_at FROM notification_service_notifications WHERE user_id=$1) notices ORDER BY created_at DESC LIMIT 100', [req.user.id]);
       return res.json({ notifications: rows });
     } catch (error) { return next(error); }
   });
   app.post('/api/notifications/:id/read', authenticate, async (req, res, next) => {
     try {
-      await db.query('UPDATE notification_service_notifications SET read_at=now() WHERE id=$1 AND user_id=$2', [req.params.id, req.user.id]);
+      for (const table of ['notifications', 'notification_service_notifications']) await db.query(`UPDATE ${table} SET read_at=now() WHERE id=$1 AND user_id=$2`, [req.params.id, req.user.id]);
       return res.json({ ok: true });
     } catch (error) { return next(error); }
   });
   app.post('/api/notifications/read-thread/:threadId', authenticate, async (req, res, next) => {
     try {
-      await db.query("UPDATE notification_service_notifications SET read_at=now() WHERE user_id=$1 AND type='message' AND link LIKE $2 AND read_at IS NULL", [req.user.id, `%thread=${req.params.threadId}`]);
+      for (const table of ['notifications', 'notification_service_notifications']) await db.query(`UPDATE ${table} SET read_at=now() WHERE user_id=$1 AND type='message' AND link LIKE $2 AND read_at IS NULL`, [req.user.id, `%thread=${req.params.threadId}`]);
       return res.json({ ok: true });
     } catch (error) { return next(error); }
   });

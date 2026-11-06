@@ -79,6 +79,7 @@ export const api = {
   interested: (id) => request(`/posts/${id}/interested`),
   negotiation: (id) => request(`/posts/${id}/negotiation`),
   createProposal: (negotiationId, body) => request(`/negotiations/${negotiationId}/proposal`, { method: 'POST', body: JSON.stringify(body) }),
+  cancelAcceptedProposal: (id) => request(`/negotiations/${id}/cancel-acceptance`, { method: 'POST' }),
   decideProposal: (negotiationId, decision) => request(`/negotiations/${negotiationId}/proposal`, { method: 'PATCH', body: JSON.stringify({ decision }) }),
   payment: (negotiationId) => request(`/negotiations/${negotiationId}/payment`),
   collection: (negotiationId) => request(`/negotiations/${negotiationId}/collection`),

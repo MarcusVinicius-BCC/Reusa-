@@ -50,6 +50,26 @@ function registerDeliveryRoutes(app, { postgres, sqlite, authenticate, flush, re
       paymentReady: validAgreement(d) && !expired && n.status === 'reserved',
       paymentStatus: paid?.status || null, paymentAttemptKey: userId === n.interested_id && !paid && d.payment_locked ? d.payment_attempt_key : null };
   };
+  app.post('/api/negotiations/:id/cancel-acceptance', authenticate, route(async (req, res) => {
+    await work(async c => {
+      const n = await negotiation(c, req.params.id, req.user.id);
+      if (n.owner_id !== req.user.id) error(403, 'Somente o anunciante pode cancelar o aceite.');
+      if (n.status !== 'reserved' || n.proposal_status !== 'accepted') error(409, 'Esta oferta não tem um aceite ativo para cancelar.');
+      const post = await one(c, `SELECT * FROM posts WHERE id=$1${postgres ? ' FOR UPDATE' : ''}`, [n.post_id]);
+      if (post?.goal !== 'Venda' || post.status !== 'Reservado' || post.reserved_by !== n.interested_id) error(409, 'A reserva atual não corresponde a esta oferta.');
+      // Any persisted delivery/payment step means the buyer has advanced,
+      // even if that step was later cancelled or the payment failed.
+      if (await delivery(c, n.id) || await one(c, 'SELECT id FROM payments WHERE negotiation_id=$1 LIMIT 1', [n.id])) {
+        error(409, 'O aceite não pode ser cancelado: esta negociação já avançou para entrega ou pagamento.');
+      }
+      const now = new Date().toISOString();
+      await c.query("UPDATE negotiations SET status='interested',proposal_status='rejected',updated_at=$1 WHERE id=$2", [now, n.id]);
+      await c.query("UPDATE posts SET status='Disponível',reserved_by=NULL,updated_at=$1 WHERE id=$2", [now, post.id]);
+      await notice(c, n.interested_id, 'Aceite da oferta cancelado', `O anunciante retirou o aceite da sua oferta em ${post.title}. Nenhum pagamento foi iniciado.`, n);
+      await emit(c, 'negotiation.acceptance_cancelled', { negotiationId:n.id, postId:post.id, ownerId:n.owner_id, interestedId:n.interested_id }, req);
+    });
+    void flush(); res.json({ ok:true });
+  }));
   app.get('/api/negotiations/:id/collection', authenticate, route(async (req, res) => {
     const result = await work(async c => { const n = await negotiation(c, req.params.id, req.user.id); return view(c, await delivery(c, n.id), n, req.user.id); });
     res.json({ collection: result });
@@ -109,6 +129,7 @@ function registerDeliveryRoutes(app, { postgres, sqlite, authenticate, flush, re
         const outcome = post.goal === 'Venda' ? 'Vendido' : post.goal === 'Troca' ? 'Trocado' : 'Doado';
         await c.query("UPDATE collection_deliveries SET status='completed',received_at=$1,confirmed_at=$2,updated_at=$3 WHERE id=$4", [now, now, now, d.id]);
         await c.query("UPDATE negotiations SET status='completed',completed_at=$1,updated_at=$2 WHERE id=$3", [now, now, n.id]);
+        await c.query("UPDATE negotiations SET status='cancelled',proposal_status=CASE WHEN proposal_status='pending' THEN 'rejected' ELSE proposal_status END,updated_at=$1 WHERE post_id=$2 AND id<>$3 AND status='interested'", [now, n.post_id, n.id]);
         await c.query('UPDATE posts SET status=$1,completed_with=$2,completed_at=$3,updated_at=$4 WHERE id=$5', [outcome, n.interested_id, now, now, n.post_id]);
         await emit(c, 'negotiation.completed', { negotiationId: n.id, postId: n.post_id, postTitle: post.title, ownerId: n.owner_id, interestedId: n.interested_id, outcome, completedAt: now }, req);
       } else error(400, 'Etapa de entrega inválida.');

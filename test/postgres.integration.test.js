@@ -125,6 +125,7 @@ test('PostgreSQL provider persists a post, thread, reservation and outbox event'
     const saved = campaigns.payload.campaigns.find(item => item.id === campaign.payload.id);
     assert.equal(saved.received, 2);
     assert.equal(saved.accepting, false);
+    await require('./acceptance-flow').exerciseAcceptanceFlow((path, options) => request(baseUrl, path, options));
     const outbox = await request(baseUrl, '/api/distributed/status');
     assert.equal(outbox.response.status, 200);
     assert.ok(outbox.payload.pendingEvents >= 2);
