@@ -70,3 +70,10 @@
 .campaign-stream .campaign-card { margin: 0 0 20px; background: var(--app-card, #fff); border-color: var(--app-line, var(--outline)); box-shadow: 0 12px 30px rgba(4,33,22,.09); }
 .campaign-stream .campaign-create { margin: 0 0 20px; }
 .campaign-stream > .campaign-error { padding: 14px; border-radius: 12px; background: #fff; }
+
+.campaign-create-page { padding-bottom: 40px; }
+.campaign-page-title { margin: 0 0 18px; color: #f2fff6; font: 800 clamp(24px, 5vw, 32px)/1.15 'Hanken Grotesk', sans-serif; letter-spacing: -.03em; }
+.campaign-create-page .campaign-create { margin: 0; }
+.campaign-create-page .secondary-btn { display: inline-flex; align-items: center; justify-content: center; padding: 10px 14px; border: 1px solid var(--outline); background: #fff; color: var(--on-primary-container); cursor: pointer; }
+.campaign-create-page button:disabled { opacity: .6; cursor: wait; }
+.campaign-create-screen { overflow-x: clip; }

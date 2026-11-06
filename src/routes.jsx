@@ -1,3 +1,4 @@
+import CampaignCreateForm from './components/CampaignCreateForm';
 import CampaignFeed from './components/CampaignFeed';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
@@ -137,10 +138,10 @@ export function AppRoutes() {
 
   useEffect(() => {
     const publicRoute = ['/splash', '/login', '/criar-conta', '/feed', '/mapa', '/inspiracoes', '/mensagens', '/mensagens/ana', '/nova-publicacao', '/perfil', '/sobre'].includes(location.pathname) || location.pathname.startsWith('/anuncios/');
-    if (!session && !publicRoute) {
+    if (initialized && !session && !publicRoute) {
       navigate('/login', { replace: true });
     }
-  }, [session, location.pathname, navigate]);
+  }, [initialized, session, location.pathname, navigate]);
 
   if (!initialized) return <div className="loading-stage"><span className="material-symbols-outlined">recycling</span><p>Carregando seu espaço...</p></div>;
   return <ScreenErrorBoundary><ScreenRouter location={location.pathname} navigate={navigate} /></ScreenErrorBoundary>;
@@ -197,6 +198,8 @@ function ScreenRouter({ location, navigate }) {
       return <MessagesScreen onOpenThread={(threadId) => threadId && navigate(`/mensagens/ana?thread=${threadId}`)} />;
     case '/mensagens/ana':
       return <ChatScreen onBack={() => navigate('/mensagens')} />;
+    case '/nova-campanha':
+      return <CreateCampaignScreen onBack={() => navigate('/feed')} onSuccess={() => navigate('/feed')} />;
     case '/nova-publicacao':
       return <CreatePostScreen onBack={() => navigate('/feed')} onSuccess={() => navigate('/feed')} />;
     case '/perfil':
@@ -590,7 +593,6 @@ function FeedScreen({ onNavigate }) {
   const loadNotifications = useAppStore((state) => state.loadNotifications);
   const session = useAppStore((state) => state.session);
   const [category, setCategory] = useState('Todos');
-  const [creatingCampaign, setCreatingCampaign] = useState(false);
   const [campaignCount, setCampaignCount] = useState(0);
   const [categoriesOpen, setCategoriesOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -646,7 +648,7 @@ function FeedScreen({ onNavigate }) {
         <a className="brand unified-brand" href="/feed" aria-label="ReUsa+, início"><img className="feed-logo" src={feedLogo} alt="ReUsa+" /></a>
         {searchOpen ? <label className="searchbar feed-search-expanded"><span className="material-symbols-outlined">search</span><input value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') setSearchOpen(false); }} placeholder="Buscar anúncios" autoFocus /><button type="button" className={categoriesOpen ? 'category-trigger category-trigger-active' : 'category-trigger'} onClick={toggleCategories} aria-expanded={categoriesOpen} aria-label="Escolher categoria"><span className="material-symbols-outlined">category</span></button><button type="button" className="feed-search-close" onClick={() => setSearchOpen(false)} aria-label="Fechar busca"><span className="material-symbols-outlined">close</span></button></label> : <div className="feed-search-tools"><button type="button" className="icon-btn feed-search-trigger" onClick={() => setSearchOpen(true)} aria-label="Abrir busca"><span className="material-symbols-outlined">search</span></button><button type="button" className={categoriesOpen ? 'category-trigger category-trigger-active' : 'category-trigger'} onClick={toggleCategories} aria-expanded={categoriesOpen} aria-label="Escolher categoria"><span className="material-symbols-outlined">category</span></button></div>}
         <div className="topbar-actions">
-          {session && <button id="create-campaign-trigger" type="button" className="campaign-header-trigger" aria-label="Criar campanha" title="Criar campanha" aria-expanded={creatingCampaign} aria-controls="campaign-create-form" onClick={() => { setHeaderHidden(false); setCreatingCampaign(open => !open); }}>
+          {session && <button id="create-campaign-trigger" type="button" className="campaign-header-trigger" aria-label="Criar campanha" title="Criar campanha" onClick={() => onNavigate('/nova-campanha')}>
             <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"/><path d="M12 9v6m-3-3h6"/></svg>
           </button>}
           <HeaderProfileButton />
@@ -659,7 +661,7 @@ function FeedScreen({ onNavigate }) {
           <h1 id="feed-available-title">No seu feed</h1>
         </section>
         <div className="feed-list">
-        <CampaignFeed session={session} search={search} creating={creatingCampaign} showCampaigns={category === 'Todos'} onCountChange={setCampaignCount} onCloseCreate={() => { setCreatingCampaign(false); setHeaderHidden(false); document.getElementById('create-campaign-trigger')?.focus({ preventScroll: true }); }} />
+        <CampaignFeed session={session} search={search} showCampaigns={category === 'Todos'} onCountChange={setCampaignCount} />
           {filteredPosts.length ? filteredPosts.map((post) => <FeedCard key={post.id} post={post} onNavigate={onNavigate} onOpenChat={async () => { try { const thread = await useAppStore.getState().createThread(post.id); onNavigate(`/mensagens/ana?thread=${thread.id}`); } catch (error) { alert(error.message); } }} onOpenPayment={async () => useAppStore.getState().createThread(post.id)} />) : (category === 'Todos' && campaignCount > 0) ? null : <div className="empty-state"><span className="material-symbols-outlined">{category === 'Salvos' ? 'bookmark_border' : 'search_off'}</span><h2>{category === 'Salvos' ? 'Nenhum item salvo' : 'Nada encontrado'}</h2><p>{category === 'Salvos' ? 'Toque no marcador de um anúncio para encontrá-lo aqui.' : 'Tente outra busca ou categoria.'}</p></div>}
         </div>
       </main>
@@ -1043,6 +1045,19 @@ function ChatScreen({ onBack }) {
       <footer className="chat-compose"><textarea value={text} onChange={(e) => setText(e.target.value)} placeholder="Digite sua mensagem..." rows={1} /><button className="send-btn" onClick={send}><span className="material-symbols-outlined">send</span></button></footer>
     </div>
   );
+}
+
+function CreateCampaignScreen({ onBack, onSuccess }) {
+  const session = useAppStore((state) => state.session);
+  useEffect(() => { window.scrollTo(0, 0); }, []);
+  if (!session) return <Navigate to="/login" replace />;
+  return <div className="post-screen publish-screen campaign-create-screen">
+    <UnifiedTopbar onBack={onBack} />
+    <main className="page publish-page campaign-create-page">
+      <h1 className="campaign-page-title">Criar campanha</h1>
+      <CampaignCreateForm session={session} onCancel={onBack} onSuccess={onSuccess} />
+    </main>
+  </div>;
 }
 
 function CreatePostScreen({ onBack, onSuccess }) {
@@ -1785,7 +1800,6 @@ function MapScreen({ onSuggest }) {
   const [selectedPoint, setSelectedPoint] = useState(null);
   const [userLocation, setUserLocation] = useState(null);
   const [category, setCategory] = useState('Todos');
-  const [creatingCampaign, setCreatingCampaign] = useState(false);
   const [campaignCount, setCampaignCount] = useState(0);
   const [search, setSearch] = useState('');
   const [mapCenter, setMapCenter] = useState([-2.4431, -54.7083]);

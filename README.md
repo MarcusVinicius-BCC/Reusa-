@@ -711,7 +711,7 @@ podem ser alteradas, e repetir uma confirmação não soma a quantidade novament
 
 O organizador pode encerrar a campanha e ainda confirmar entregas combinadas.
 Prazo vencido, encerramento ou meta atingida impedem novas ofertas. Campanhas abertas aparecem junto às publicações do feed. O ícone de campanha no
-cabeçalho abre e fecha o formulário; não há painel fixo quando não existem
+cabeçalho abre a tela `/nova-campanha`, com cabeçalho e botão de voltar; não há painel fixo quando não existem
 campanhas abertas. A busca do feed também pesquisa título, material, beneficiário
 e cidade. Não há selo de verificação de
 instituições nem integração de contribuições com anúncios nesta versão.
