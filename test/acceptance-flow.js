@@ -57,6 +57,22 @@ async function exerciseAcceptanceFlow(request) {
   assert.equal((await cancel(item.second)).response.status,409,'a cancelled delivery still records that the negotiation advanced');
   assert.equal((await send(`/api/negotiations/${item.second}/collection`,other,schedule)).response.status,201);
   assert.equal((await send(`/api/collection-deliveries/${deliveryId}/accept`,seller)).response.status,200);
+  assert.equal((await request('/api/negotiations')).response.status,401);
+  const dashboard=await request('/api/negotiations',{headers:other.headers});
+  assert.equal(dashboard.response.status,200);
+  assert.equal(dashboard.payload.negotiations.find(n=>n.id===item.second).stage,'payment');
+  assert.ok(!dashboard.payload.negotiations.some(n=>n.id===item.first));
+  const issueUrl='/api/collection-deliveries/'+deliveryId+'/incidents';
+  assert.equal((await send(issueUrl,buyer,{kind:'delay',detail:'Vou chegar atrasado, podemos combinar pelo chat.'})).response.status,403);
+  assert.equal((await send(issueUrl,other,{kind:'delay',detail:'curto'})).response.status,400);
+  const issue={kind:'delay',detail:'Vou chegar 20 minutos atrasado. Podemos conversar pelo chat?'};
+  assert.equal((await send(issueUrl,other,issue)).response.status,201);
+  assert.equal((await send(issueUrl,other,issue)).response.status,201);
+  const detail=(await request('/api/negotiations/'+item.second+'/collection',{headers:seller.headers})).payload.collection;
+  assert.equal(detail.incidents.length,1);
+  assert.equal(detail.status,'confirmed');
+  assert.equal((await request('/api/negotiations',{headers:seller.headers})).payload.negotiations.find(n=>n.id===item.second).incident.detail,issue.detail);
+
   assert.equal((await send(`/api/negotiations/${item.second}/payment`,other,{amountCents:2000,currency:'BRL',method:'card',idempotencyKey:`accepted-buyer-${suffix}`})).response.status,201);
   assert.equal((await cancel(item.second)).response.status,409);
   assert.equal((await request(`/api/posts/${item.id}`)).payload.post.status,'Reservado');

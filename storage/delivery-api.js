@@ -3,7 +3,7 @@ const error = (status, message) => { throw Object.assign(new Error(message), { s
 
 // The same state machine backs SQLite and PostgreSQL. No QR code is evidence of
 // receipt: only the authenticated recipient can acknowledge an actual handover.
-function registerDeliveryRoutes(app, { postgres, sqlite, authenticate, flush, refreshMetrics }) {
+function registerDeliveryRoutes(app, { postgres, sqlite, authenticate, flush, refreshMetrics, clock = () => new Date() }) {
   let tail = Promise.resolve();
   const work = (fn) => {
     if (postgres) return postgres.transaction(fn);
@@ -48,8 +48,52 @@ function registerDeliveryRoutes(app, { postgres, sqlite, authenticate, flush, re
       canDispatch: n.status === 'reserved' && userId === n.owner_id && validAgreement(d) && d.status === 'confirmed' && !expired && (!isSale || paid?.status === 'succeeded'),
       canReceive: n.status === 'reserved' && userId === n.interested_id && validAgreement(d) && (!isSale || paid?.status === 'succeeded'),
       paymentReady: validAgreement(d) && !expired && n.status === 'reserved',
+      incidents: await rows(c, 'SELECT i.id,i.kind,i.detail,i.created_at AS created_at,u.name AS reporter_name FROM delivery_incidents i JOIN users u ON u.id=i.reporter_id WHERE delivery_id=$1 ORDER BY i.created_at DESC LIMIT 20', [d.id]),
       paymentStatus: paid?.status || null, paymentAttemptKey: userId === n.interested_id && !paid && d.payment_locked ? d.payment_attempt_key : null };
   };
+  app.get('/api/negotiations', authenticate, route(async (req, res) => {
+    const items = await work(async c => {
+      const all = await rows(c, `SELECT n.*,p.title,p.image_url,p.goal,p.location,owner.name AS owner_name,buyer.name AS buyer_name
+        FROM negotiations n JOIN posts p ON p.id=n.post_id JOIN users owner ON owner.id=n.owner_id JOIN users buyer ON buyer.id=n.interested_id
+        WHERE n.owner_id=$1 OR n.interested_id=$2 ORDER BY n.updated_at DESC`, [req.user.id,req.user.id]);
+      return Promise.all(all.map(async n => {
+        const d=await delivery(c,n.id);
+        const p=await one(c,'SELECT status,amount_cents,method FROM payments WHERE negotiation_id=$1 ORDER BY created_at DESC LIMIT 1',[n.id]);
+        const owner=n.owner_id===req.user.id;
+        let stage='decision', label='Aguardando resposta', action=owner;
+        if(n.status==='completed') {stage='completed';label='Concluída';action=false;}
+        else if(n.status==='cancelled'||n.proposal_status==='rejected'){stage='closed';label='Oferta encerrada';action=false;}
+        else if(n.status==='reserved') {
+          if(!d||d.status==='cancelled'){stage='agreement';label='Combinar entrega';action=true;}
+          else if(d.status==='scheduled'){stage='agreement';label='Aguardando aceite da entrega';action=d.proposed_by!==req.user.id;}
+          else if(n.goal==='Venda'&&p?.status!=='succeeded'){stage='payment';label=p?.status==='processing'?'Aguardando confirmação do pagamento':'Aguardando pagamento';action=!owner&&p?.status!=='processing';}
+          else{stage=owner?'delivery':'receipt';label=owner?'Preparar entrega':'Confirmar recebimento';action=true;}
+        }
+        const incident=d?await one(c,'SELECT detail,created_at FROM delivery_incidents WHERE delivery_id=$1 ORDER BY created_at DESC LIMIT 1',[d.id]):null;
+        return {id:n.id,postId:n.post_id,title:n.title,imageUrl:n.image_url,goal:n.goal,location:n.location,
+          role:owner?'owner':'interested',counterparty:owner?n.buyer_name:n.owner_name,threadId:n.thread_id,stage,label,needsYourAction:action,
+          amountCents:Number(p?.amount_cents||n.proposal_amount_cents||0),paymentStatus:p?.status||null,scheduledFor:d&&!['cancelled'].includes(d.status)?d.scheduled_for:null,
+          deliveryStatus:d?.status||null,incident:incident||null,updatedAt:n.updated_at};
+      }));
+    });
+    res.json({negotiations:items});
+  }));
+  app.post('/api/collection-deliveries/:id/incidents', authenticate, route(async (req,res) => {
+    const kind=req.body?.kind, detail=typeof req.body?.detail==='string'?req.body.detail.trim():'';
+    if(!['delay','cannot_attend','location','other'].includes(kind)||detail.length<10||detail.length>500)error(400,'Escolha o tipo de imprevisto e descreva o ocorrido em 10 a 500 caracteres.');
+    await work(async c=>{
+      const d=await one(c,'SELECT * FROM collection_deliveries WHERE id=$1',[req.params.id]);
+      if(!d)error(404,'Entrega não encontrada.');
+      const n=await negotiation(c,d.negotiation_id,req.user.id);
+      if(n.status!=='reserved'||!['scheduled','confirmed','in_transit'].includes(d.status))error(409,'Esta entrega não está ativa para registrar imprevistos.');
+      const duplicate=await one(c,'SELECT id FROM delivery_incidents WHERE delivery_id=$1 AND reporter_id=$2 AND kind=$3 AND detail=$4 AND created_at>$5',[d.id,req.user.id,kind,detail,new Date(clock().getTime()-300000).toISOString()]);
+      if(duplicate)return;
+      await c.query('INSERT INTO delivery_incidents(id,delivery_id,reporter_id,kind,detail,created_at) VALUES($1,$2,$3,$4,$5,$6)',[crypto.randomUUID(),d.id,req.user.id,kind,detail,clock().toISOString()]);
+      await notice(c,req.user.id===n.owner_id?n.interested_id:n.owner_id,'Imprevisto na entrega',`${req.user.name} informou um imprevisto. Confira os detalhes no acordo e combine a solução pelo chat.`,n);
+      await emit(c,'collection.incident_reported',{negotiationId:n.id,collectionId:d.id,reporterId:req.user.id,kind},req);
+    });
+    void flush();res.status(201).json({ok:true});
+  }));
   app.post('/api/negotiations/:id/cancel-acceptance', authenticate, route(async (req, res) => {
     await work(async c => {
       const n = await negotiation(c, req.params.id, req.user.id);
@@ -195,5 +239,31 @@ function registerDeliveryRoutes(app, { postgres, sqlite, authenticate, flush, re
       next();
     }));
   }
+  let reminding=false;
+  async function runReminders(now=clock()) {
+    if(reminding)return;
+    reminding=true;
+    try {
+      await work(async c=>{
+        const deliveries=await rows(c,`SELECT d.*,n.owner_id,n.interested_id,n.post_id,p.title FROM collection_deliveries d
+          JOIN negotiations n ON n.id=d.negotiation_id JOIN posts p ON p.id=n.post_id
+          WHERE d.status IN ('confirmed','in_transit') AND n.status='reserved' AND d.scheduled_for>$1 AND d.scheduled_for<=$2`,[now.toISOString(),new Date(now.getTime()+86400000).toISOString()]);
+        for(const d of deliveries){
+          const distance=new Date(d.scheduled_for).getTime()-now.getTime();
+          if(distance<=0||distance>86400000)continue;
+          const kind=distance<=3600000?'1h':'24h';
+          for(const userId of [d.owner_id,d.interested_id]){
+            const inserted=await c.query('INSERT INTO delivery_reminders(delivery_id,user_id,scheduled_for,kind) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING',[d.id,userId,new Date(d.scheduled_for).toISOString(),kind]);
+            const claimed=postgres?inserted.rowCount:(await one(c,'SELECT changes() AS count')).count;
+            if(!claimed)continue;
+            const date=new Intl.DateTimeFormat('pt-BR',{dateStyle:'short',timeStyle:'short',timeZone:'America/Sao_Paulo'}).format(new Date(d.scheduled_for));
+            await notice(c,userId,'Lembrete da entrega',`${d.title}: encontro em ${date} (Brasília). ${kind==='1h'?'Falta até 1 hora.':'Faltam até 24 horas.'} Confira o acordo e avise se houver um imprevisto.`,d);
+          }
+        }
+      });
+    } finally { reminding=false; }
+  }
+  return {runReminders};
+
 }
 module.exports = { registerDeliveryRoutes };

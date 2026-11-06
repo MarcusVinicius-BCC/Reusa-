@@ -45,6 +45,8 @@ async function request(path, options = {}) {
 }
 
 export const api = {
+  negotiations: () => request('/negotiations'),
+  reportDeliveryIncident: (id, body) => request('/collection-deliveries/'+id+'/incidents', { method: 'POST', body: JSON.stringify(body) }),
   health: () => request('/health'),
   login: (body) => request('/auth/login', { method: 'POST', body: JSON.stringify(body) }),
   register: (body) => request('/auth/register', { method: 'POST', body: JSON.stringify(body) }),

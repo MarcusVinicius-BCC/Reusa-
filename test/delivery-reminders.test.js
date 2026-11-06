@@ -1,0 +1,26 @@
+const {test}=require('node:test');
+const assert=require('node:assert/strict');
+const fs=require('node:fs');
+const {registerDeliveryRoutes}=require('../storage/delivery-api');
+test('delivery reminders run at 24h and 1h, persist deduplication and skip inactive deliveries',async()=>{
+ const SQL=await require('sql.js')();const db=new SQL.Database();
+ const all=(sql,params=[])=>{const result=db.exec(sql,params)[0];return result?result.values.map(row=>Object.fromEntries(result.columns.map((key,i)=>[key,row[i]]))):[]};
+ db.exec("CREATE TABLE users(id TEXT PRIMARY KEY); INSERT INTO users VALUES('owner'),('buyer'); CREATE TABLE posts(id TEXT,title TEXT); INSERT INTO posts VALUES('post','Mesa'); CREATE TABLE negotiations(id TEXT,owner_id TEXT,interested_id TEXT,post_id TEXT,status TEXT); INSERT INTO negotiations VALUES('n','owner','buyer','post','reserved'); CREATE TABLE collection_deliveries(id TEXT PRIMARY KEY,negotiation_id TEXT,status TEXT,scheduled_for TEXT); INSERT INTO collection_deliveries VALUES('d','n','confirmed','2030-01-02T15:00:00.000Z'); CREATE TABLE notifications(id TEXT,user_id TEXT,type TEXT,title TEXT,text TEXT,link TEXT,created_at TEXT)");
+ db.exec(fs.readFileSync(require('node:path').join(__dirname,'../migrations/014_negotiation_followup.sql'),'utf8'));
+ const app={get(){},post(){},patch(){},put(){},delete(){}};
+ const service=()=>registerDeliveryRoutes(app,{sqlite:{all,run:(sql,params=[])=>db.run(sql,params),persist(){}},authenticate(){},flush(){}});
+ let workflow=service();
+ await workflow.runReminders(new Date('2030-01-01T14:00:00Z'));assert.equal(all('SELECT * FROM notifications').length,0);
+ await workflow.runReminders(new Date('2030-01-01T16:00:00Z'));assert.equal(all('SELECT * FROM notifications').length,2);
+ workflow=service();await workflow.runReminders(new Date('2030-01-01T17:00:00Z'));assert.equal(all('SELECT * FROM notifications').length,2);
+ await workflow.runReminders(new Date('2030-01-02T14:30:00Z'));assert.equal(all('SELECT * FROM notifications').length,4);
+ await workflow.runReminders(new Date('2030-01-02T14:45:00Z'));assert.equal(all('SELECT * FROM notifications').length,4);
+ assert.deepEqual(all('SELECT DISTINCT user_id FROM notifications ORDER BY user_id').map(r=>r.user_id),['buyer','owner']);
+ assert.ok(all('SELECT text FROM notifications').every(r=>r.text.includes('Brasília')));
+ db.run("UPDATE collection_deliveries SET scheduled_for='2030-01-03T15:00:00.000Z',status='cancelled'");
+ await workflow.runReminders(new Date('2030-01-03T14:30:00Z'));assert.equal(all('SELECT * FROM notifications').length,4);
+ db.run("UPDATE collection_deliveries SET status='completed'");await workflow.runReminders(new Date('2030-01-03T14:30:00Z'));assert.equal(all('SELECT * FROM notifications').length,4);
+ db.run("UPDATE collection_deliveries SET status='confirmed'");await workflow.runReminders(new Date('2030-01-03T15:01:00Z'));assert.equal(all('SELECT * FROM notifications').length,4);
+ await workflow.runReminders(new Date('2030-01-03T14:30:00Z'));assert.equal(all('SELECT * FROM notifications').length,6,'new scheduled time receives its own reminders');
+ db.close();
+});

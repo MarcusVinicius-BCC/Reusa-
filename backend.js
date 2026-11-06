@@ -1032,6 +1032,7 @@ function seedDatabase() {
     );
   `);
   run('CREATE INDEX IF NOT EXISTS collection_deliveries_status_idx ON collection_deliveries(status, scheduled_for)');
+  for (const statement of fs.readFileSync(path.join(ROOT, 'migrations/014_negotiation_followup.sql'), 'utf8').split(';').filter(part => part.trim())) run(statement);
   for (const column of ['proposed_by', 'accepted_by', 'accepted_at', 'received_at', 'payment_attempt_key']) ensureColumn('collection_deliveries', column, 'TEXT');
   ensureColumn('collection_deliveries', 'payment_locked', 'INTEGER NOT NULL DEFAULT 0');
   run("UPDATE collection_deliveries SET status='cancelled' WHERE proposed_by IS NULL AND status IN ('scheduled','confirmed','in_transit')");
@@ -1590,7 +1591,10 @@ async function start() {
     res.setHeader('X-Correlation-Id', req.correlationId);
     next();
   });
-  registerDeliveryRoutes(app, { postgres: postgresEnabled() ? postgres : null, sqlite: { all, run, persist: persistDb }, authenticate: authMiddleware, flush: flushPendingEvents, refreshMetrics: () => { for (const user of all('SELECT id FROM users')) refreshUserMetrics(user.id); persistDb(); } });
+  const deliveryWorkflow = registerDeliveryRoutes(app, { postgres: postgresEnabled() ? postgres : null, sqlite: { all, run, persist: persistDb }, authenticate: authMiddleware, flush: flushPendingEvents, refreshMetrics: () => { for (const user of all('SELECT id FROM users')) refreshUserMetrics(user.id); persistDb(); } });
+  const checkDeliveryReminders = () => deliveryWorkflow.runReminders().catch(error => console.error('[delivery-reminders]', error.message));
+  await checkDeliveryReminders();
+  setInterval(checkDeliveryReminders, 60000).unref();
   if (postgresEnabled()) {
     registerPostgresRoutes(app, {
       db: postgres,

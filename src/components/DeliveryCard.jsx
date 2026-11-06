@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { api } from '../services/api';
 import './delivery.css';
+import './negotiations.css';
 
 const labels = { scheduled: 'Aguardando aceite', confirmed: 'Entrega combinada', in_transit: 'Entrega em andamento', completed: 'Recebimento confirmado', cancelled: 'Proposta cancelada' };
 const dateText = value => new Intl.DateTimeFormat('pt-BR', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'America/Sao_Paulo' }).format(new Date(value));
@@ -12,6 +13,7 @@ export default function DeliveryCard({ negotiation, collection, onChange, onRece
   const [busy, setBusy] = useState(false);
   const [receiptChecked, setReceiptChecked] = useState(false);
   const [pointsLoading, setPointsLoading] = useState(false);
+  const [incident, setIncident] = useState({kind:'delay',detail:''});
   useEffect(() => {
     let active = true;
     if (form.mode === 'dropoff') {
@@ -66,6 +68,8 @@ export default function DeliveryCard({ negotiation, collection, onChange, onRece
       </div>
       {collection.paymentLocked && collection.status !== 'completed' && <p className="delivery-help">Com pagamento em andamento ou aprovado, não é possível trocar local, horário ou pessoa da reserva pelo sistema. Use o chat para resolver imprevistos.</p>}
     </>}
+    {collection && negotiation.status==='reserved' && ['scheduled','confirmed','in_transit'].includes(collection.status) && <details className="delivery-incident"><summary>Informar imprevisto</summary><form onSubmit={e=>{e.preventDefault();act(async()=>{await api.reportDeliveryIncident(collection.id,incident);const result=await api.collection(negotiation.id);setIncident({kind:'delay',detail:''});return result},'Imprevisto registrado. A outra pessoa foi avisada.')}}><p>Avise o que aconteceu. Isso não altera automaticamente a data, o local ou o pagamento; combinem a solução pelo chat.</p><label>Tipo de imprevisto<select value={incident.kind} onChange={e=>setIncident({...incident,kind:e.target.value})}><option value="delay">Vou me atrasar</option><option value="cannot_attend">Não poderei comparecer</option><option value="location">Problema com o local</option><option value="other">Outro</option></select></label><label>O que aconteceu?<textarea required minLength={10} maxLength={500} value={incident.detail} onChange={e=>setIncident({...incident,detail:e.target.value})} placeholder="Explique a situação e sugira como combinar a entrega."/></label><button className="secondary-btn" disabled={busy}>Avisar a outra pessoa</button></form></details>}
+    {collection?.incidents?.length>0 && <ul className="delivery-incident-history" aria-label="Imprevistos da entrega">{collection.incidents.map(item=><li key={item.id}><strong>{item.reporter_name}</strong>{item.detail}<time>{dateText(item.created_at)}</time></li>)}</ul>}
     <div className="delivery-status-row" aria-label="Status e conversa">
       <button type="button" className="delivery-refresh-status" aria-label="Atualizar status" title="Atualizar status" disabled={busy} onClick={async () => { setBusy(true); setError(''); try { await onRefreshStatus(); } catch(e) { setError(e.message); } finally { setBusy(false); } }}>Status</button>
       <span role="status" aria-live="polite" className={`delivery-current-status is-${isSale ? payment?.status || 'waiting' : collection?.status || 'waiting'}`}>{isSale ? paymentLabel : labels[collection?.status] || 'Entrega a combinar'}</span>

@@ -1,3 +1,4 @@
+import NegotiationsPage from './components/NegotiationsPage';
 import DeliveryCard from './components/DeliveryCard';
 import CampaignCreateForm from './components/CampaignCreateForm';
 import CampaignFeed from './components/CampaignFeed';
@@ -199,6 +200,8 @@ function ScreenRouter({ location, navigate }) {
       return <MessagesScreen onOpenThread={(threadId) => threadId && navigate(`/mensagens/ana?thread=${threadId}`)} />;
     case '/mensagens/ana':
       return <ChatScreen onBack={() => navigate('/mensagens')} />;
+    case '/negociacoes':
+      return <div className="post-screen negotiations-screen"><UnifiedTopbar onBack={() => navigate('/feed')} /><NegotiationsPage onNavigate={navigate} /></div>;
     case '/nova-campanha':
       return <CreateCampaignScreen onBack={() => navigate('/feed')} onSuccess={() => navigate('/feed')} />;
     case '/nova-publicacao':
@@ -649,6 +652,7 @@ function FeedScreen({ onNavigate }) {
         <a className="brand unified-brand" href="/feed" aria-label="ReUsa+, início"><img className="feed-logo" src={feedLogo} alt="ReUsa+" /></a>
         {searchOpen ? <label className="searchbar feed-search-expanded"><span className="material-symbols-outlined">search</span><input value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') setSearchOpen(false); }} placeholder="Buscar anúncios" autoFocus /><button type="button" className={categoriesOpen ? 'category-trigger category-trigger-active' : 'category-trigger'} onClick={toggleCategories} aria-expanded={categoriesOpen} aria-label="Escolher categoria"><span className="material-symbols-outlined">category</span></button><button type="button" className="feed-search-close" onClick={() => setSearchOpen(false)} aria-label="Fechar busca"><span className="material-symbols-outlined">close</span></button></label> : <div className="feed-search-tools"><button type="button" className="icon-btn feed-search-trigger" onClick={() => setSearchOpen(true)} aria-label="Abrir busca"><span className="material-symbols-outlined">search</span></button><button type="button" className={categoriesOpen ? 'category-trigger category-trigger-active' : 'category-trigger'} onClick={toggleCategories} aria-expanded={categoriesOpen} aria-label="Escolher categoria"><span className="material-symbols-outlined">category</span></button></div>}
         <div className="topbar-actions">
+          {session && <button className="icon-btn" aria-label="Minhas negociações" title="Minhas negociações" onClick={()=>onNavigate('/negociacoes')}><svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 7h16m-4-4 4 4-4 4M20 17H4m4-4-4 4 4 4"/></svg></button>}
           {session && <button id="create-campaign-trigger" type="button" className="campaign-header-trigger" aria-label="Criar campanha" title="Criar campanha" onClick={() => onNavigate('/nova-campanha')}>
             <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"/><path d="M12 9v6m-3-3h6"/></svg>
           </button>}
@@ -1725,6 +1729,7 @@ function ProfileScreen({ onGoToFeed, onSettings, onOpenPost, onAdmin }) {
     <Shell nav={navRoutes} active="/perfil">
       <UnifiedTopbar />
       <main className="page profile-page">
+        <a className="negotiations-shortcut" href="/negociacoes">Minhas negociações <span aria-hidden="true">→</span></a>
         <section className="profile-hero">
           <button className="avatar-wrap avatar-upload-button" type="button" onClick={() => avatarInput.current?.click()} aria-label="Alterar foto de perfil" title="Alterar foto de perfil" disabled={avatarBusy}>{user.avatar ? <img src={user.avatar} alt={user.name} /> : <span className="avatar-placeholder material-symbols-outlined" aria-label={`Perfil de ${user.name}`}>person</span>}<span className="avatar-upload-icon material-symbols-outlined">{avatarBusy ? 'progress_activity' : 'photo_camera'}</span><span className="verified material-symbols-outlined">verified</span></button>
           <input ref={avatarInput} className="visually-hidden" type="file" accept="image/jpeg,image/png,image/gif,image/webp,image/avif" onChange={changeAvatar} />

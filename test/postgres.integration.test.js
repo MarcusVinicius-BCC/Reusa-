@@ -100,6 +100,21 @@ test('PostgreSQL provider persists a post, thread, reservation and outbox event'
     assert.equal((await request(baseUrl, `/api/collection-deliveries/${delivery.payload.collection.id}/accept`, { method:'POST', headers:auth(owner.payload.token) })).response.status,409);
     const acceptedDelivery = await request(baseUrl, `/api/collection-deliveries/${delivery.payload.collection.id}/accept`, { method:'POST', headers:auth(interested.payload.token) });
     assert.equal(acceptedDelivery.response.status,200);
+    const {PostgresRepository,postgresConnectionString}=require('../storage/postgres-repository');
+    const reminderDb=new PostgresRepository(postgresConnectionString());
+    try {
+      const dummy={get(){},post(){},patch(){},put(){},delete(){}};
+      const workflow=require('../storage/delivery-api').registerDeliveryRoutes(dummy,{postgres:reminderDb,authenticate(){},flush(){}});
+      const scheduled=new Date(delivery.payload.collection.scheduledFor).getTime();
+      await workflow.runReminders(new Date(scheduled-36000000));
+      await workflow.runReminders(new Date(scheduled-36000000));
+      let notices=(await request(baseUrl,'/api/notifications',{headers:auth(interested.payload.token)})).payload.notifications;
+      assert.equal(notices.filter(n=>n.title==='Lembrete da entrega').length,1);
+      await workflow.runReminders(new Date(scheduled-1800000));
+      notices=(await request(baseUrl,'/api/notifications',{headers:auth(interested.payload.token)})).payload.notifications;
+      assert.equal(notices.filter(n=>n.title==='Lembrete da entrega').length,2);
+    } finally {await reminderDb.close();}
+
     const payment = await request(baseUrl, `/api/negotiations/${negotiation.payload.negotiation.id}/payment`, {
       method: 'POST', headers: auth(interested.payload.token), body: JSON.stringify({ amountCents: 2500, currency: 'BRL', method: 'pix', idempotencyKey: `postgres-${suffix}-payment` })
     });

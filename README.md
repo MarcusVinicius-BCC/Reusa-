@@ -834,3 +834,27 @@ anunciante. A lista de interessados informa `canCancelAcceptance`; a interface
 atualiza a permissão periodicamente e o servidor sempre verifica novamente ao
 clicar. Cancelar o aceite e avançar para entrega simultaneamente não permite
 que as duas operações sejam concluídas.
+
+## Painel de negociações, lembretes e imprevistos
+
+A tela /negociacoes, disponível pelo ícone no cabeçalho do feed e pelo perfil,
+reúne as ofertas enviadas e recebidas, com busca e filtros por resposta, acordo,
+pagamento, entrega/recebimento e encerradas. “Minha vez” destaca ações que
+dependem do usuário. Os botões abrem o anúncio com seu acordo ou a conversa.
+A lista é privada e atualiza a cada 15 segundos e quando a janela ganha foco.
+
+Entregas aceitas e ativas geram lembretes para os dois participantes nas janelas
+de até 24 horas e até 1 hora antes do encontro. O backend verifica a agenda ao
+iniciar e a cada minuto. As notificações são internas ao app, não e-mail/SMS.
+A tabela delivery_reminders impede repetição por usuário, horário e janela,
+inclusive após reinício e em réplicas PostgreSQL. Se o servidor ficar desligado,
+só as janelas ainda futuras são processadas ao voltar; não há envio retroativo
+após o encontro. Entregas pendentes de aceite, canceladas ou concluídas não
+recebem lembretes.
+
+“Informar imprevisto” no acordo permite comunicar atraso, ausência, problema com
+o local ou outra situação. O registro fica visível aos dois participantes e no
+painel, e notifica a outra pessoa. Enviar a mesma mensagem duas vezes em cinco
+minutos não duplica o registro. O aviso não altera o acordo ou libera mudanças
+em pagamentos; os participantes devem combinar uma solução pelo chat.
+A migração 014_negotiation_followup.sql cria o histórico e o controle de lembretes.
