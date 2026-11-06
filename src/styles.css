@@ -3394,3 +3394,37 @@ body { background: var(--app-night-deep); }
 .cancel-acceptance-btn:focus-visible { outline:3px solid #983f3540; outline-offset:3px; }
 .accepted-offer-actions .reserve-btn { max-width:100%; white-space:normal; font-size:12px; font-weight:700; line-height:1.4; }
 @media(max-width:600px) { .interested-list article:has(.accepted-offer-actions) { flex-wrap:wrap; } .interested-list article>.accepted-offer-actions { flex:0 0 100%; } }
+
+/* Botões do cabeçalho do feed compartilham tamanho e destaque. */
+.feed-shell { --feed-control-size: 42px; }
+.feed-shell .feed-topbar :is(button, a.header-profile-btn) {
+  display: inline-grid;
+  place-items: center;
+  box-sizing: border-box;
+  width: var(--feed-control-size);
+  height: var(--feed-control-size);
+  min-width: var(--feed-control-size);
+  min-height: var(--feed-control-size);
+  flex: 0 0 var(--feed-control-size);
+  padding: 0;
+  border: 1px solid rgba(180, 255, 213, .32);
+  border-radius: 14px;
+  background: linear-gradient(145deg, rgba(155, 245, 190, .24), rgba(155, 245, 190, .08));
+  color: #effff5;
+  cursor: pointer;
+}
+.feed-shell .feed-topbar :is(button, a.header-profile-btn):hover,
+.feed-shell .feed-topbar button[aria-expanded="true"] {
+  background: #078b52;
+  border-color: #81e7ab;
+}
+.feed-shell .feed-topbar :is(button, a.header-profile-btn):focus-visible {
+  outline: 3px solid #9bf5be;
+  outline-offset: 3px;
+}
+@media (max-width: 600px) {
+  .feed-shell { --feed-control-size: 38px; }
+  .feed-shell .feed-topbar { grid-template-rows: 40px 38px; }
+  .feed-topbar > .feed-search-tools,
+  .feed-topbar > .feed-search-expanded { height: 38px; min-height: 38px; }
+}
