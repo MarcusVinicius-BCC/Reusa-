@@ -4,7 +4,7 @@ import './delivery.css';
 
 const labels = { scheduled: 'Aguardando aceite', confirmed: 'Entrega combinada', in_transit: 'Entrega em andamento', completed: 'Recebimento confirmado', cancelled: 'Proposta cancelada' };
 const dateText = value => new Intl.DateTimeFormat('pt-BR', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'America/Sao_Paulo' }).format(new Date(value));
-export default function DeliveryCard({ negotiation, collection, onChange, onReceived, onChat, isSale, payment }) {
+export default function DeliveryCard({ negotiation, collection, onChange, onReceived, onChat, isSale, payment, children }) {
   const [form, setForm] = useState({ mode: 'pickup', scheduledFor: '', address: '', collectionPointId: '' });
   const [points, setPoints] = useState([]);
   const [error, setError] = useState('');
@@ -37,8 +37,13 @@ export default function DeliveryCard({ negotiation, collection, onChange, onRece
   const newProposal = !collection || collection.status === 'cancelled';
   const step = !collection || collection.status === 'cancelled' ? 0 : collection.status === 'scheduled' ? 1 : collection.status === 'completed' ? 3 : 2;
   return <section className="review-form-card collection-card delivery-card" aria-labelledby="delivery-title">
-    <header className="delivery-heading"><span className="delivery-symbol" aria-hidden="true"><svg width="25" height="25" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h11v12H3zM14 10h4l3 4v4h-7"/><circle cx="7" cy="18" r="2"/><circle cx="18" cy="18" r="2"/></svg></span><div><span className="eyebrow">Do acordo ao recebimento</span><h2 id="delivery-title">Coleta e entrega</h2><p>Combine os detalhes com a outra pessoa antes de pagar.</p></div></header>
-    <ol className="delivery-steps">{['Propor entrega','Aceitar acordo',isSale ? 'Pagar e entregar' : 'Entregar item','Confirmar recebimento'].map((label,index) => <li key={label} className={index <= step ? 'is-current' : ''}><span>{index+1}</span>{label}</li>)}</ol>
+    <header className="delivery-heading"><span className="delivery-symbol" aria-hidden="true"><svg width="25" height="25" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h11v12H3zM14 10h4l3 4v4h-7"/><circle cx="7" cy="18" r="2"/><circle cx="18" cy="18" r="2"/></svg></span><div><span className="eyebrow">Do acordo ao recebimento</span><h2 id="delivery-title">{isSale ? 'Compra e entrega' : 'Coleta e entrega'}</h2><p>{collection?.status === 'completed' ? 'Item recebido e negociação concluída.' : 'Acompanhe o acordo e as próximas etapas em um só lugar.'}</p></div></header>
+    {isSale && <div className="delivery-overview">
+      <div><span>Valor combinado</span><strong>{new Intl.NumberFormat('pt-BR', { style:'currency', currency:'BRL' }).format(Number(payment?.amountCents || negotiation.proposalAmountCents || 0)/100)}</strong></div>
+      <div><span>Forma de pagamento</span><strong>{{card:'Cartão',pix:'Pix'}[payment?.method || negotiation.proposalMethod] || 'A combinar'}</strong></div>
+      <div><span>Pagamento</span><strong className={`delivery-payment-badge is-${payment?.status || 'waiting'}`}>{{succeeded:'Confirmado',processing:'Em processamento',failed:'Não aprovado',refunded:'Estornado'}[payment?.status] || 'Não iniciado'}</strong></div>
+    </div>}
+    <ol className="delivery-steps">{['Local e horário','Aceite do acordo',isSale ? 'Pagamento' : 'Entrega do item','Recebimento'].map((label,index) => <li key={label} className={index <= step ? 'is-current' : ''} aria-current={index === step ? 'step' : undefined}><span>{index+1}</span>{label}</li>)}</ol>
     {error && <p className="delivery-error" role="alert">{error}</p>}
     {message && <p className="delivery-feedback" role="status">{message}</p>}
     {payment?.status === 'succeeded' && !collection?.acceptedBy && <p className="delivery-help">Seu pagamento já consta como aprovado. Combine e aceite a entrega para regularizar o recebimento; você não precisa pagar novamente.</p>}
@@ -51,7 +56,7 @@ export default function DeliveryCard({ negotiation, collection, onChange, onRece
       </fieldset>
       <button className="primary-btn" disabled={busy || (form.mode === 'dropoff' && (pointsLoading || !points.length))}>{busy ? 'Enviando…' : 'Propor local e horário'}</button>
     </form> : collection && <>
-      <div className="delivery-summary"><span className="delivery-status">{labels[collection.status]}</span><dl><div><dt>Quando</dt><dd>{dateText(collection.scheduledFor)} (Brasília)</dd></div><div><dt>Onde</dt><dd>{collection.address || `${collection.collectionPoint?.name || 'Ponto de coleta'} · ${collection.collectionPoint?.location || ''}`}</dd></div><div><dt>Pagamento</dt><dd>{!isSale ? 'Sem pagamento nesta negociação' : collection.paymentStatus === 'succeeded' ? 'Aprovado. Falta confirmar o recebimento do item.' : collection.paymentStatus === 'processing' ? 'Aguardando confirmação do Mercado Pago' : collection.paymentReady ? 'Acordo aceito. Confira o item antes de pagar.' : 'Bloqueado até o aceite do acordo de entrega'}</dd></div></dl></div>
+      <div className="delivery-summary"><span className="delivery-status">{labels[collection.status]}</span><dl><div><dt>Quando</dt><dd>{dateText(collection.scheduledFor)} (Brasília)</dd></div><div><dt>Onde</dt><dd>{collection.address || `${collection.collectionPoint?.name || 'Ponto de coleta'} · ${collection.collectionPoint?.location || ''}`}</dd></div></dl></div>
       {collection.status === 'scheduled' && <p className="delivery-help">{collection.canAccept ? 'Confira os detalhes. Ao aceitar, você concorda com este local e horário.' : 'Aguardando a outra pessoa aceitar. Você não pode aceitar a própria proposta.'}</p>}
       {collection.expired && collection.status !== 'completed' && <p className="delivery-help">O prazo deste acordo venceu. Sem pagamento em andamento, cancele e proponha outra data; se já pagou, combine a solução pelo chat.</p>}
       <div className="delivery-actions">
@@ -59,9 +64,10 @@ export default function DeliveryCard({ negotiation, collection, onChange, onRece
         {collection.canDispatch && <button className="secondary-btn" disabled={busy} onClick={() => act(() => api.updateCollectionStatus(collection.id,'in_transit'), 'Entrega iniciada. Quem recebe deverá confirmar o recebimento.')}>Informar saída para entrega</button>}
         {collection.canCancel && <button className="secondary-btn" disabled={busy} onClick={() => { if (window.confirm('Cancelar este acordo? Uma nova proposta precisará de outro aceite.')) act(() => api.updateCollectionStatus(collection.id,'cancelled'), 'Acordo cancelado. Você pode propor outros detalhes.'); }}>Cancelar acordo</button>}
       </div>
-      {collection.canReceive && <div className="delivery-receipt"><label><input type="checkbox" checked={receiptChecked} onChange={e => setReceiptChecked(e.target.checked)} />Já recebi e conferi o item pessoalmente.</label><button className="primary-btn" disabled={busy || !receiptChecked} onClick={() => { if (window.confirm('Confirmar que o item está com você? Isso conclui a negociação e não pode ser desfeito por esta tela.')) act(() => api.confirmCollection(collection.id), 'Recebimento confirmado. Negociação concluída!', true); }}>Confirmar recebimento do item</button></div>}
       {collection.paymentLocked && collection.status !== 'completed' && <p className="delivery-help">Com pagamento em andamento ou aprovado, não é possível trocar local, horário ou pessoa da reserva pelo sistema. Use o chat para resolver imprevistos.</p>}
     </>}
-    <footer className="delivery-footer"><button type="button" className="text-btn" onClick={onChat}>Conversar sobre a entrega</button><p>O ReUsa+ não oferece transporte, guarda do valor ou reembolso automático. Em caso de não recebimento, não confirme a entrega: fale com o anunciante e use o suporte do Mercado Pago, conforme as regras do pagamento.</p></footer>
+    {children}
+      {collection?.canReceive && <div className="delivery-receipt"><label><input type="checkbox" checked={receiptChecked} onChange={e => setReceiptChecked(e.target.checked)} />Já recebi e conferi o item pessoalmente.</label><button className="primary-btn" disabled={busy || !receiptChecked} onClick={() => { if (window.confirm('Confirmar que o item está com você? Isso conclui a negociação e não pode ser desfeito por esta tela.')) act(() => api.confirmCollection(collection.id), 'Recebimento confirmado. Negociação concluída!', true); }}>Confirmar recebimento do item</button></div>}
+    <footer className="delivery-footer"><button type="button" className="text-btn" onClick={onChat}>Conversar sobre a entrega</button><details><summary>Sobre entrega e pagamento</summary><p>O ReUsa+ não oferece transporte, guarda do valor ou reembolso automático. Em caso de não recebimento, não confirme a entrega: fale com o anunciante e use o suporte do Mercado Pago, conforme as regras do pagamento.</p></details></footer>
   </section>;
 }
