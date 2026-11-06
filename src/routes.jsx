@@ -1137,14 +1137,14 @@ function CreatePostScreen({ onBack, onSuccess }) {
 
   return (
     <div className="post-screen publish-screen">
-      <UnifiedTopbar />
+      <UnifiedTopbar onBack={onBack} />
       <main className="page publish-page">
         <section className="publish-hero">
           <span className="publish-hero-icon material-symbols-outlined">volunteer_activism</span>
           <div><span className="eyebrow">Dê um novo ciclo</span><h2>O que vai ganhar uma nova história?</h2><p>Capriche nos detalhes para encontrar a pessoa certa.</p></div>
         </section>
-        <p className="publish-required-note"><strong>*</strong> Campos obrigatórios</p>
         <form onSubmit={submit} className="publish-form">
+          <p className="publish-required-note"><strong>*</strong> Campos obrigatórios</p>
           <section className="publish-section publish-photo-section">
             <div className="publish-section-head"><div><span className="publish-step">01</span><h3>Mostre seu item <strong className="required-mark" title="Campo obrigatório" aria-label="Campo obrigatório">*</strong></h3></div><span>Uma boa foto faz diferença</span></div>
             <label className={images.length ? 'publish-image-picker has-image' : 'publish-image-picker'}>
