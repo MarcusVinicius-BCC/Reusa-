@@ -1,4 +1,4 @@
-import {AlertsPage,NeedsPage,FeedDiscovery,Questions,TransportPanel,TransportFields} from './components/CommunityTools';
+import {AlertsPage,NeedsPage,FeedLocationFilters,Questions,TransportPanel,TransportFields} from './components/CommunityTools';
 import NegotiationsPage from './components/NegotiationsPage';
 import DeliveryCard from './components/DeliveryCard';
 import CampaignCreateForm from './components/CampaignCreateForm';
@@ -604,6 +604,7 @@ function FeedScreen({ onNavigate }) {
   const [category, setCategory] = useState('Todos');
   const [locality,setLocality]=useState('');
   const [nearby,setNearby]=useState(null);
+  const [nearbyRadius,setNearbyRadius]=useState(10);
   const [campaignCount, setCampaignCount] = useState(0);
   const [categoriesOpen, setCategoriesOpen] = useState(false);
   const [searchOpen, setSearchOpen] = useState(false);
@@ -641,12 +642,12 @@ function FeedScreen({ onNavigate }) {
     const onScroll = () => {
       const currentScroll = window.scrollY;
       const scrollingDown = currentScroll > previousScroll;
-      setHeaderHidden(scrollingDown && currentScroll > 80 && !searchOpen);
+      setHeaderHidden(scrollingDown && currentScroll > 80 && !searchOpen && !categoriesOpen);
       previousScroll = currentScroll;
     };
     window.addEventListener('scroll', onScroll, { passive: true });
     return () => window.removeEventListener('scroll', onScroll);
-  }, [searchOpen]);
+  }, [searchOpen, categoriesOpen]);
 
   function toggleCategories() {
     setHeaderHidden(false);
@@ -657,8 +658,11 @@ function FeedScreen({ onNavigate }) {
     <Shell nav={navRoutes} active="/feed" className="feed-shell">
       <header className={headerHidden ? 'topbar feed-topbar feed-topbar-hidden' : 'topbar feed-topbar'}>
         <a className="brand unified-brand" href="/feed" aria-label="ReUsa+, início"><img className="feed-logo" src={feedLogo} alt="ReUsa+" /></a>
-        {searchOpen ? <label className="searchbar feed-search-expanded"><span className="material-symbols-outlined">search</span><input value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') setSearchOpen(false); }} placeholder="Buscar anúncios" autoFocus /><button type="button" className={categoriesOpen ? 'category-trigger category-trigger-active' : 'category-trigger'} onClick={toggleCategories} aria-expanded={categoriesOpen} aria-label="Escolher categoria"><span className="material-symbols-outlined">category</span></button><button type="button" className="feed-search-close" onClick={() => setSearchOpen(false)} aria-label="Fechar busca"><span className="material-symbols-outlined">close</span></button></label> : <div className="feed-search-tools"><button type="button" className="icon-btn feed-search-trigger" onClick={() => setSearchOpen(true)} aria-label="Abrir busca"><span className="material-symbols-outlined">search</span></button><button type="button" className={categoriesOpen ? 'category-trigger category-trigger-active' : 'category-trigger'} onClick={toggleCategories} aria-expanded={categoriesOpen} aria-label="Escolher categoria"><span className="material-symbols-outlined">category</span></button></div>}
+        {searchOpen ? <label className="searchbar feed-search-expanded"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg><input value={search} onChange={(e) => setSearch(e.target.value)} onKeyDown={(event) => { if (event.key === 'Escape') setSearchOpen(false); }} placeholder="Buscar anúncios" autoFocus /><button type="button" className={categoriesOpen ? 'category-trigger category-trigger-active' : 'category-trigger'} onClick={toggleCategories} aria-expanded={categoriesOpen} title="Preferências do feed" aria-label="Preferências do feed" aria-controls="feed-preferences"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><path d="M4 7h4m4 0h8M4 17h8m4 0h4"/><circle cx="10" cy="7" r="2"/><circle cx="14" cy="17" r="2"/></svg></button><button type="button" className="feed-search-close" onClick={() => setSearchOpen(false)} aria-label="Fechar busca"><span className="material-symbols-outlined">close</span></button></label> : <div className="feed-search-tools"><button type="button" className="icon-btn feed-search-trigger" onClick={() => setSearchOpen(true)} aria-label="Abrir busca"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5"/><path d="m16 16 5 5"/></svg></button><button type="button" className={categoriesOpen ? 'category-trigger category-trigger-active' : 'category-trigger'} onClick={toggleCategories} aria-expanded={categoriesOpen} title="Preferências do feed" aria-label="Preferências do feed" aria-controls="feed-preferences"><svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" aria-hidden="true"><path d="M4 7h4m4 0h8M4 17h8m4 0h4"/><circle cx="10" cy="7" r="2"/><circle cx="14" cy="17" r="2"/></svg></button></div>}
         <div className="topbar-actions">
+          <button type="button" className="icon-btn feed-header-shortcut" aria-label="Pedidos da comunidade" title="Pedidos da comunidade" onClick={()=>onNavigate('/pedidos')}><svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 5h16v15H4zM8 3v4m8-4v4M8 11h8m-8 4h5"/></svg></button>
+          <button type="button" className="icon-btn feed-header-shortcut" aria-label="Meus alertas de itens" title="Meus alertas de itens" onClick={()=>onNavigate(session?'/alertas':'/login')}><svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4m-2-19v1"/></svg></button>
+
           {session && <button className="icon-btn" aria-label="Minhas negociações" title="Minhas negociações" onClick={()=>onNavigate('/negociacoes')}><svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M4 7h16m-4-4 4 4-4 4M20 17H4m4-4-4 4 4 4"/></svg></button>}
           {session && <button id="create-campaign-trigger" type="button" className="campaign-header-trigger" aria-label="Criar campanha" title="Criar campanha" onClick={() => onNavigate('/nova-campanha')}>
             <svg width="23" height="23" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true"><path d="M20.8 4.6a5.5 5.5 0 0 0-7.8 0L12 5.7l-1.1-1.1a5.5 5.5 0 0 0-7.8 7.8L12 21l8.8-8.6a5.5 5.5 0 0 0 0-7.8Z"/><path d="M12 9v6m-3-3h6"/></svg>
@@ -666,9 +670,12 @@ function FeedScreen({ onNavigate }) {
           <HeaderProfileButton />
         </div>
       </header>
-      <div className="feed-category-popover">{categoriesOpen ? <CategoryBar selected={category} onChange={(value) => { setCategory(value); setCategoriesOpen(false); }} showSaved={Boolean(session)} savedCount={favorites.length} /> : null}</div>
+      <div className="feed-category-popover">{categoriesOpen && <section id="feed-preferences" className="feed-preferences-panel" aria-label="Preferências do feed">
+        <header><h2>Preferências do feed</h2><button type="button" className="text-btn" aria-label="Fechar preferências" onClick={()=>{setCategoriesOpen(false);document.querySelector('[aria-controls="feed-preferences"]')?.focus()}}>Fechar</button></header>
+        <CategoryBar selected={category} onChange={setCategory} showSaved={Boolean(session)} savedCount={favorites.length}/>
+        <FeedLocationFilters session={session} city={locality} onCity={setLocality} nearby={nearby} onNearby={setNearby} onNavigate={onNavigate} radius={nearbyRadius} onRadius={setNearbyRadius}/>
+      </section>}</div>
       <main className="feed-page">
-        <FeedDiscovery session={session} city={locality} onCity={setLocality} nearby={nearby} onNearby={setNearby} onNavigate={onNavigate}/>
         <section className="feed-available-heading" aria-labelledby="feed-available-title">
           <span className="material-symbols-outlined" aria-hidden="true">inventory_2</span>
           <h1 id="feed-available-title">No seu feed</h1>
