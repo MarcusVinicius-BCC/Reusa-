@@ -35,8 +35,6 @@ const ADMIN_EMAILS = new Set(
 );
 const SQLITE_ADMIN_EMAILS = ADMIN_EMAILS.size ? ADMIN_EMAILS : new Set(['mariana@reusa.com']);
 const APP_BASE_URL = String(process.env.APP_BASE_URL || '').trim().replace(/\/$/, '');
-const MERCADO_PAGO_REDIRECT_URI = String(process.env.MERCADOPAGO_REDIRECT_URI || '').trim();
-const MERCADO_PAGO_CLIENT_ID = String(process.env.MERCADOPAGO_CLIENT_ID || '').trim();
 const NOTIFICATION_SERVICE_URL = String(process.env.NOTIFICATION_SERVICE_URL || '').trim().replace(/\/$/, '');
 const IMPACT_SERVICE_URL = String(process.env.IMPACT_SERVICE_URL || '').trim().replace(/\/$/, '');
 const SERVICE_AUTH_TOKEN = String(process.env.SERVICE_AUTH_TOKEN || '').trim();
@@ -278,10 +276,6 @@ function appOrigin(req) {
     }
   }
   return `${req.protocol}://${req.get('host')}`;
-}
-
-function mercadoPagoRedirectUri(req) {
-  return MERCADO_PAGO_REDIRECT_URI || `${appOrigin(req)}/api/payments/mercadopago/callback`;
 }
 
 function googleRedirectUri(req) {
