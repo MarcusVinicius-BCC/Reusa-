@@ -137,6 +137,7 @@ function webhookEvent(rawBody, signature, connected = false) {
   try { return signatureVerifier.webhooks.constructEvent(rawBody, signature, secret, 300); } catch { return null; }
 }
 const liveMode = () => secretKey().startsWith('sk_live_');
+const isTestEnvironment = () => configured() && secretKey().startsWith('sk_test_');
 const dashboardLink = accountId => request('POST', '/accounts/' + encodeURIComponent(accountId) + '/login_links');
 const paymentIntent = (id, accountId) => request('GET', '/payment_intents/' + encodeURIComponent(id) + '?expand[]=latest_charge', undefined, {accountId});
 const dispute = (id, accountId) => request('GET', '/disputes/' + encodeURIComponent(id), undefined, {accountId});
@@ -149,4 +150,4 @@ function sellerView(account) {
     detailsSubmitted:!!account?.details_submitted, requirementsDue:(account?.requirements?.currently_due || []).map(String),
     pendingVerification:!!account?.requirements?.pending_verification?.length, disabledReason:account?.requirements?.disabled_reason || null};
 }
-module.exports = { configured, requireReady, liveMode, demoEnabled, testMode, createConnectedAccount, accountLink, connectedAccount, createCheckout, checkoutSession, verifiedSessionStatus, webhookEvent, dashboardLink, paymentIntent, dispute, disputes, refund, refundStatus, refunds, sellerView };
+module.exports = { configured, requireReady, liveMode, isTestEnvironment, demoEnabled, testMode, createConnectedAccount, accountLink, connectedAccount, createCheckout, checkoutSession, verifiedSessionStatus, webhookEvent, dashboardLink, paymentIntent, dispute, disputes, refund, refundStatus, refunds, sellerView };

@@ -6,7 +6,7 @@ import './negotiations.css';
 
 const labels = { scheduled: 'Aguardando aceite', confirmed: 'Entrega combinada', in_transit: 'Entrega em andamento', completed: 'Recebimento confirmado', cancelled: 'Proposta cancelada' };
 const dateText = value => new Intl.DateTimeFormat('pt-BR', { dateStyle: 'medium', timeStyle: 'short', timeZone: 'America/Sao_Paulo' }).format(new Date(value));
-export default function DeliveryCard({ negotiation, collection, onChange, onReceived, onChat, isSale, payment, isOwner, onRefreshStatus, children }) {
+export default function DeliveryCard({ negotiation, collection, onChange, onReceived, onChat, isSale, payment, isOwner, onRefreshStatus, children, testMode = false }) {
   const [form, setForm] = useState({ mode: 'pickup', scheduledFor: '', address: '', collectionPointId: '' });
   const [points, setPoints] = useState([]);
   const [error, setError] = useState('');
@@ -44,6 +44,7 @@ export default function DeliveryCard({ negotiation, collection, onChange, onRece
   const step = !collection || collection.status === 'cancelled' ? 0 : collection.status === 'scheduled' ? 1 : collection.status === 'completed' ? 3 : 2;
   return <section className="review-form-card collection-card delivery-card" aria-labelledby="delivery-title">
     <header className="delivery-heading"><span className="delivery-symbol" aria-hidden="true"><svg width="25" height="25" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h11v12H3zM14 10h4l3 4v4h-7"/><circle cx="7" cy="18" r="2"/><circle cx="18" cy="18" r="2"/></svg></span><h2 id="delivery-title">{isSale ? 'Entrega e pagamento' : 'Detalhes da entrega'}</h2></header>
+    {isSale && testMode && <p className="delivery-feedback" role="status">Ambiente de teste: este pagamento não movimenta dinheiro real.</p>}
     {isSale && <div className="delivery-overview">
       <div><span>Valor combinado</span><strong>{new Intl.NumberFormat('pt-BR', { style:'currency', currency:'BRL' }).format(Number(payment?.amountCents || negotiation.proposalAmountCents || 0)/100)}</strong></div>
       <div><span>Forma de pagamento</span><strong>{{card:'Cartão',pix:'Pix'}[payment?.method || negotiation.proposalMethod] || 'A combinar'}</strong></div>

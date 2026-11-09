@@ -14,7 +14,7 @@ function paymentView(p) {
     providerReference:p.provider_reference, checkoutUrl:p.checkout_url, failureCode:p.failure_code,
     createdAt:p.created_at, updatedAt:p.updated_at, paidAt:p.paid_at, refundedAt:p.refunded_at,
     refundedAmountCents:Number(p.refunded_amount_cents || 0), disputeStatus:p.dispute_status,
-    refundStatus:p.refund_status, provider:p.provider_reference?.startsWith('cs_') || p.provider_request_json ? 'stripe' : 'mercadopago'};
+    refundStatus:p.refund_status, testMode:p.provider_livemode===0, provider:p.provider_reference?.startsWith('cs_') || p.provider_request_json ? 'stripe' : 'mercadopago'};
 }
 
 function registerStripeRoutes(app, {postgres, sqlite, authenticate, jwt, jwtSecret, clock=()=>new Date()}) {
@@ -47,11 +47,11 @@ function registerStripeRoutes(app, {postgres, sqlite, authenticate, jwt, jwtSecr
     const user=await queryOne('SELECT * FROM users WHERE id=$1',[userId]);
     if(!user)fail(404,'Usuário não encontrado.');
     const id=user[accountColumn()];
-    if(!id)return {...stripe.sellerView(null),demoMode:stripe.demoEnabled(),liveMode:stripe.liveMode(),connectEnabled:process.env.STRIPE_CONNECT_ENABLED==='true'};
+    if(!id)return {...stripe.sellerView(null),demoMode:stripe.demoEnabled(),testMode:stripe.isTestEnvironment(),liveMode:stripe.liveMode(),connectEnabled:process.env.STRIPE_CONNECT_ENABLED==='true'};
     const account=await stripe.connectedAccount(id);
     const view=stripe.sellerView(account);
     await work(c=>c.query('UPDATE users SET stripe_status_json=$1,stripe_checked_at=$2 WHERE id=$3',[JSON.stringify(view),now(),userId]));
-    return {...view,demoMode:stripe.demoEnabled(),liveMode:stripe.liveMode(),connectEnabled:process.env.STRIPE_CONNECT_ENABLED==='true'};
+    return {...view,demoMode:stripe.demoEnabled(),testMode:stripe.isTestEnvironment(),liveMode:stripe.liveMode(),connectEnabled:process.env.STRIPE_CONNECT_ENABLED==='true'};
   }
   const onboardingLink=async(userId,accountId)=>{
     const state=jwt.sign({purpose:'stripe-onboarding',sub:userId,accountId,live:stripe.liveMode()},jwtSecret,{expiresIn:'15m'});
@@ -59,7 +59,7 @@ function registerStripeRoutes(app, {postgres, sqlite, authenticate, jwt, jwtSecr
     return stripe.accountLink(accountId,base+'/api/payments/stripe/refresh?state='+encodeURIComponent(state),base+'/configuracoes?stripe_onboarding=1');
   };
   app.get('/api/payments/stripe/status',authenticate,route(async(req,res)=>{
-    if(stripe.demoEnabled())return res.json({demoMode:true,connected:false,chargesEnabled:false,payoutsEnabled:false,liveMode:false,connectEnabled:false});
+    if(stripe.demoEnabled())return res.json({demoMode:true,connected:false,chargesEnabled:false,payoutsEnabled:false,liveMode:false,testMode:true,connectEnabled:false});
     res.json(await sellerStatus(req.user.id));
   }));
   app.get('/api/payments/stripe/connect',authenticate,route(async(req,res)=>{

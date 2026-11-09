@@ -434,6 +434,8 @@ A integração inclui verificação de assinatura pelo SDK oficial, registro per
 
 Veja **[configuração completa de produção, vendedores e webhooks](docs/stripe-production.md)**. O documento contém as variáveis exatas do Railway, os dois destinos de eventos e os procedimentos de validação e suporte.
 
+Veja também o [cadastro de vendedores e pagamentos em teste](docs/stripe-testing.md), sem ativação da conta de produção.
+
 Para demonstração sem dinheiro real, use `sk_test_`, `STRIPE_DEMO_MODE=true`, `STRIPE_ENABLE_LIVE=false`, `STRIPE_CONNECT_ENABLED=false` e o webhook do ambiente de teste. Para testar vendedores em sandbox, mantenha a chave `sk_test_`, desligue demonstração e habilite Connect no ambiente de teste. Nenhuma chave secreta deve ir ao frontend, Git ou chat.
 
 ## Testes e validação

@@ -105,6 +105,7 @@ async function workflow(provider){
   assert.equal((await call('/api/payments/stripe/connect','seller')).status,200);
   assert.equal((await one("SELECT stripe_test_account_id FROM users WHERE id='seller'")).stripe_test_account_id,'acct_seller');
   assert.equal((await call('/api/payments/stripe/status','seller')).data.chargesEnabled,false);
+  assert.equal((await call('/api/payments/stripe/status','seller')).data.testMode,true);
   const n=await addSale('p1');
   const agreement=await one('SELECT * FROM collection_deliveries WHERE negotiation_id=$1',[n]);await sql('DELETE FROM collection_deliveries WHERE negotiation_id=$1',[n]);
   assert.equal((await call('/api/negotiations/'+n+'/proposal','seller',{decision:'accepted'},'PATCH')).status,409);
@@ -124,6 +125,7 @@ async function workflow(provider){
   assert.equal((await call('/api/payments/stripe/webhook','buyer',{id:'evt_unsigned',type:'checkout.session.completed'})).status,401);
   assert.equal((await webhook('checkout.session.completed',payment,'evt_paid')).status,200);
   assert.equal((await get(payment.id)).status,'succeeded');
+  assert.equal((await call('/api/negotiations/'+n+'/payment','seller')).data.payment.testMode,true);
   const notices=Number((await one('SELECT COUNT(*) AS count FROM notifications')).count);
   assert.equal((await webhook('checkout.session.completed',payment,'evt_paid')).status,200);
   assert.equal(Number((await one('SELECT COUNT(*) AS count FROM notifications')).count),notices);
