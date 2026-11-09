@@ -18,7 +18,7 @@ const { applyMigrations } = require('./scripts/run-postgres-migrations');
 const { createObjectStorage } = require('./distributed/object-storage');
 const { connectRedis } = require('./distributed/redis-client');
 const { metricsText, requestMetrics } = require('./distributed/observability');
-const mercadoPago = require('./services/mercado-pago');
+const stripe = require('./services/stripe-payments');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -567,8 +567,8 @@ function userFromRow(row) {
     role: row.role || 'user',
     suspended: Boolean(row.suspended),
     notificationPreferences: jsonArray(row.notification_preferences_json)
-    , mercadoPagoConnected: Boolean(row.mercado_pago_user_id),
-    mercadoPagoDemoMode: mercadoPago.testMode() && mercadoPago.isConfigured()
+    , stripeConnected: Boolean(row.stripe_account_id),
+    stripeDemoMode: stripe.demoEnabled()
   };
 }
 
@@ -1167,7 +1167,8 @@ function seedDatabase() {
   ensureColumn('users', 'role', "TEXT NOT NULL DEFAULT 'user'");
   ensureColumn('users', 'suspended', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('users', 'notification_preferences_json', "TEXT NOT NULL DEFAULT '[]'");
-  ensureColumn('users', 'mercado_pago_user_id', 'TEXT');
+  ensureColumn('users', 'stripe_account_id', 'TEXT');
+  ensureColumn('users', 'mercado_pago_user_id', 'TEXT'); // Legacy history only
   ensureColumn('users', 'mercado_pago_access_token', 'TEXT');
   ensureColumn('users', 'mercado_pago_refresh_token', 'TEXT');
   ensureColumn('users', 'mercado_pago_token_expires_at', 'TEXT');
@@ -1589,7 +1590,7 @@ async function start() {
   const publicLookupRateLimit = createRateLimiter({ windowMs: 15 * 60 * 1000, maxRequests: 60 });
   const mapRouteRateLimit = createRateLimiter({ windowMs: 15 * 60 * 1000, maxRequests: 60 });
 
-  app.use(express.json({ limit: '100kb' }));
+  app.use(express.json({ limit: '100kb', verify: (req, _res, buf) => { if (req.path === '/api/payments/stripe/webhook') req.rawBody = Buffer.from(buf); } }));
   app.use(express.urlencoded({ extended: true }));
   app.use(requestMetrics);
   app.use((req, res, next) => {
@@ -1762,44 +1763,54 @@ async function start() {
     res.json({ user: req.user });
   });
 
-  app.get('/api/payments/mercadopago/connect', authMiddleware, (req, res) => {
-    const returnTo = safeReturnTo(req.query.return_to || '/configuracoes');
-    const state = jwt.sign({ purpose: 'mercado-pago-seller-oauth', sub: req.user.id, returnTo }, JWT_SECRET, { expiresIn: '10m' });
-    try {
-      const redirectUri = mercadoPagoRedirectUri(req);
-      const authorizationUrl = mercadoPago.authorizationUrl(state, redirectUri);
-      if (req.query.format === 'json') return res.json({ authorizationUrl });
-      return res.redirect(authorizationUrl);
-    } catch (error) {
-      return res.status(error.status || 503).json({ error: error.message || 'Mercado Pago seller connection is not configured' });
-    }
-  });
 
-  app.get('/api/payments/mercadopago/callback', async (req, res) => {
-    let returnTo = '/configuracoes';
+  // Stripe Express Connect onboarding; never trusts a query-string account ID.
+  app.get('/api/payments/stripe/connect', authMiddleware, async (req, res) => {
+    try {
+      if (stripe.demoEnabled()) return res.status(400).json({ error: 'O modo demonstração já utiliza pagamentos simulados. Não é necessário conectar um vendedor.' });
+      if (!stripe.configured()) return res.status(503).json({ error: 'Configure STRIPE_SECRET_KEY no servidor.' });
+      if (process.env.STRIPE_CONNECT_ENABLED !== 'true') return res.status(503).json({ error: 'Ative STRIPE_CONNECT_ENABLED=true após habilitar Stripe Connect na conta.' });
+      const row = postgresEnabled()
+        ? await postgres.one('SELECT stripe_account_id,email FROM users WHERE id=$1', [req.user.id])
+        : get('SELECT stripe_account_id,email FROM users WHERE id=?', [req.user.id]);
+      if (!row) return res.sendStatus(404);
+      let accountId = row.stripe_account_id;
+      if (!accountId) {
+        const account = await stripe.createConnectedAccount(row.email, 'reusa-seller-' + req.user.id);
+        accountId = account.id;
+        if (postgresEnabled()) await postgres.query('UPDATE users SET stripe_account_id=$1 WHERE id=$2 AND stripe_account_id IS NULL', [accountId, req.user.id]);
+        else { run('UPDATE users SET stripe_account_id=? WHERE id=? AND stripe_account_id IS NULL', [accountId, req.user.id]); persistDb(); }
+      }
+      const state = jwt.sign({ purpose: 'stripe-onboarding', sub: req.user.id, accountId }, JWT_SECRET, { expiresIn: '15m' });
+      const refresh = appOrigin(req) + '/api/payments/stripe/refresh?state=' + encodeURIComponent(state);
+      const returned = appOrigin(req) + '/configuracoes?stripe_onboarding=1';
+      const link = await stripe.accountLink(accountId, refresh, returned);
+      return res.json({ authorizationUrl: link.url });
+    } catch (error) { console.error('[stripe-connect] onboarding failed', { status: error.status, code: error.stripeCode }); return res.status(error.status || 502).json({ error: error.message || 'Não foi possível iniciar conexão Stripe.' }); }
+  });
+  app.get('/api/payments/stripe/refresh', async (req, res) => {
     try {
       const state = jwt.verify(String(req.query.state || ''), JWT_SECRET);
-      if (state.purpose !== 'mercado-pago-seller-oauth') throw new Error('Invalid OAuth state');
-      returnTo = safeReturnTo(state.returnTo);
-      if (req.query.error) throw new Error('Mercado Pago authorization was cancelled');
-      const redirectUri = mercadoPagoRedirectUri(req);
-      const token = await mercadoPago.exchangeCode(String(req.query.code || ''), redirectUri);
-      const values = [token.user_id ? String(token.user_id) : null, mercadoPago.protectToken(token.access_token), token.refresh_token ? mercadoPago.protectToken(token.refresh_token) : null, new Date(Date.now() + Number(token.expires_in || 0) * 1000).toISOString(), state.sub];
-      if (postgresEnabled()) {
-        await postgres.query('UPDATE users SET mercado_pago_user_id=$1,mercado_pago_access_token=$2,mercado_pago_refresh_token=$3,mercado_pago_token_expires_at=$4 WHERE id=$5', values);
-      } else {
-        run('UPDATE users SET mercado_pago_user_id=?,mercado_pago_access_token=?,mercado_pago_refresh_token=?,mercado_pago_token_expires_at=? WHERE id=?', values);
-        persistDb();
-      }
-      const target = new URL(returnTo, appOrigin(req));
-      target.hash = 'payment_connected=1';
-      return res.redirect(target.toString());
-    } catch (error) {
-      console.error('Mercado Pago seller OAuth failed:', error.message);
-      const target = new URL(returnTo, appOrigin(req));
-      target.hash = 'payment_connected=0';
-      return res.redirect(target.toString());
-    }
+      if (state.purpose !== 'stripe-onboarding') return res.sendStatus(403);
+      const row = postgresEnabled()
+        ? await postgres.one('SELECT stripe_account_id FROM users WHERE id=$1', [state.sub])
+        : get('SELECT stripe_account_id FROM users WHERE id=?', [state.sub]);
+      if (!row || row.stripe_account_id !== state.accountId) return res.sendStatus(403);
+      const freshState = jwt.sign({ purpose: 'stripe-onboarding', sub: state.sub, accountId: state.accountId }, JWT_SECRET, { expiresIn: '15m' });
+      const link = await stripe.accountLink(state.accountId, appOrigin(req) + '/api/payments/stripe/refresh?state=' + encodeURIComponent(freshState), appOrigin(req) + '/configuracoes?stripe_onboarding=1');
+      return res.redirect(link.url);
+    } catch (error) { console.error('[stripe-connect] refresh failed', { status: error.status }); return res.redirect(appOrigin(req) + '/configuracoes?stripe_onboarding=error'); }
+  });
+  app.get('/api/payments/stripe/status', authMiddleware, async (req, res) => {
+    if (stripe.demoEnabled()) return res.json({ demoMode: true, connected: false, chargesEnabled: false, payoutsEnabled: false });
+    const row = postgresEnabled()
+      ? await postgres.one('SELECT stripe_account_id FROM users WHERE id=$1', [req.user.id])
+      : get('SELECT stripe_account_id FROM users WHERE id=?', [req.user.id]);
+    if (!row?.stripe_account_id) return res.json({ demoMode: false, connected: false, chargesEnabled: false, payoutsEnabled: false });
+    try {
+      const account = await stripe.connectedAccount(row.stripe_account_id);
+      return res.json({ demoMode: false, connected: true, chargesEnabled: Boolean(account.charges_enabled), payoutsEnabled: Boolean(account.payouts_enabled), detailsSubmitted: Boolean(account.details_submitted) });
+    } catch (error) { return res.status(error.status || 502).json({ error: 'Não foi possível consultar o cadastro do vendedor.' }); }
   });
 
   app.get('/api/auth/google', (req, res) => {
