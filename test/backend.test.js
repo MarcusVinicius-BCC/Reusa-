@@ -390,7 +390,7 @@ test('sale posts allow money offers and are completed as sold', async () => {
 
   const proposal = await request(`/api/negotiations/${negotiation.payload.negotiation.id}/proposal`, {
     method: 'POST', headers: interestedAuth,
-    body: JSON.stringify({ amountCents: 2500, method: 'pix' })
+    body: JSON.stringify({ amountCents: 2500, method: 'card' })
   });
   assert.equal(proposal.response.status, 201);
   assert.equal(proposal.payload.proposal.status, 'pending');
@@ -415,7 +415,7 @@ test('sale posts allow money offers and are completed as sold', async () => {
   assert.equal((await request(`/api/negotiations/${negotiationId}/collection`, { headers: { Authorization:`Bearer ${outsider.payload.token}` } })).response.status,403);
 
   const sendDelivery = (url, headers, body = {}, method = 'POST') => request(url, { method, headers, body: JSON.stringify(body) });
-  const paymentBody = { amountCents: 2500, currency: 'BRL', method: 'pix', idempotencyKey: `sale-${suffix}-payment` };
+  const paymentBody = { amountCents: 2500, currency: 'BRL', method: 'card', idempotencyKey: `sale-${suffix}-payment` };
   assert.equal((await sendDelivery(`/api/negotiations/${negotiationId}/payment`, interestedAuth, paymentBody)).response.status, 409);
   const collectionBody = { mode: 'pickup', scheduledFor: new Date(Date.now()+86400000).toISOString(), address: 'Rua do Encontro, 100, Belém, PA' };
   assert.equal((await sendDelivery(`/api/negotiations/${negotiationId}/collection`, ownerAuth, { ...collectionBody, scheduledFor: new Date().toISOString() })).response.status, 400);
@@ -442,7 +442,7 @@ test('sale posts allow money offers and are completed as sold', async () => {
   assert.equal((await request(`/api/negotiations/${negotiationId}/collection`, { headers:interestedAuth })).payload.collection.paymentLocked,false);
   const payment = await request(`/api/negotiations/${negotiation.payload.negotiation.id}/payment`, {
     method: 'POST', headers: interestedAuth,
-    body: JSON.stringify({ amountCents: 2500, currency: 'BRL', method: 'pix', idempotencyKey: `sale-${suffix}-payment` })
+    body: JSON.stringify({ amountCents: 2500, currency: 'BRL', method: 'card', idempotencyKey: `sale-${suffix}-payment` })
   });
   assert.equal(payment.response.status, 201);
   assert.equal(payment.payload.payment.status, 'succeeded');
