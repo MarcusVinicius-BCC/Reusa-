@@ -115,7 +115,7 @@ function verifiedSessionStatus(session, payment, eventType) {
   return null;
 }
 function webhookEvent(rawBody, signature, connected = false) {
-  const secret = String(connected ? process.env.STRIPE_CONNECT_WEBHOOK_SECRET : process.env.STRIPE_WEBHOOK_SECRET || '').trim();
+  const secret = String((connected ? process.env.STRIPE_CONNECT_WEBHOOK_SECRET : process.env.STRIPE_WEBHOOK_SECRET) || '').trim();
   if (!secret || !Buffer.isBuffer(rawBody) || rawBody.length > 1024 * 1024) return null;
   const parts = Object.fromEntries(String(signature || '').split(',').map(x => x.trim().split('=', 2)).filter(x => x.length === 2));
   const timestamp = Number(parts.t);
