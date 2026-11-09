@@ -1,6 +1,8 @@
 import {AlertsPage,NeedsPage,FeedLocationFilters,Questions,TransportPanel,TransportFields} from './components/CommunityTools';
 import NegotiationsPage from './components/NegotiationsPage';
 import DeliveryCard from './components/DeliveryCard';
+import StripeConnectionCard from './components/StripeConnectionCard';
+import { stripeConnectionState } from './services/stripe-connection-state.mjs';
 import CampaignCreateForm from './components/CampaignCreateForm';
 import CampaignFeed from './components/CampaignFeed';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
@@ -2155,9 +2157,9 @@ function SettingsScreen({ onBack, onLogout }) {
   const [stripeStatus, setStripeStatus] = useState(null);
   const [stripeBusy, setStripeBusy] = useState(false);
   const [stripeError, setStripeError] = useState('');
-  const paymentConnected = Boolean(stripeStatus?.chargesEnabled && stripeStatus?.payoutsEnabled);
-  const paymentLinked = Boolean(stripeStatus?.connected);
-  const paymentDemoMode = Boolean(profile?.user?.stripeDemoMode);
+  const stripeMounted = useRef(true);
+  const stripeRequest = useRef(null);
+  const paymentDemoMode = Boolean(stripeStatus?.demoMode ?? profile?.user?.stripeDemoMode);
   const paymentTestMode = Boolean(stripeStatus?.testMode ?? profile?.user?.stripeTestMode);
   const [form, setForm] = useState({ name: profile?.user?.name || '', city: profile?.user?.city || '', neighborhood: profile?.user?.neighborhood || '', cep: profile?.user?.cep || '', address: profile?.user?.address || '', businessName: profile?.user?.businessName || '' });
   const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '' });
@@ -2167,8 +2169,40 @@ function SettingsScreen({ onBack, onLogout }) {
     api.paymentItems().then((result) => setPaymentItems(result.items || [])).catch(() => {});
   }, []);
   useEffect(() => {
-    api.stripeStatus().then(setStripeStatus).catch(error => setStripeError(error.message));
+    stripeMounted.current = true;
+    return () => { stripeMounted.current = false; };
   }, []);
+
+  const syncStripeStatus = useCallback(() => {
+    if (!stripeRequest.current) {
+      stripeRequest.current = api.stripeStatus().then((status) => {
+        if (stripeMounted.current) { setStripeStatus(status); setStripeError(''); }
+        return status;
+      }).catch((error) => {
+        if (stripeMounted.current) setStripeError(error.message);
+        throw error;
+      }).finally(() => { stripeRequest.current = null; });
+    }
+    return stripeRequest.current;
+  }, []);
+
+  useEffect(() => {
+    if (activeSection !== 'pagamentos') return;
+    const refresh = () => {
+      if (document.visibilityState !== 'hidden') syncStripeStatus().catch(() => {});
+    };
+    refresh();
+    const interval = window.setInterval(refresh, 15000);
+    window.addEventListener('focus', refresh);
+    window.addEventListener('pageshow', refresh);
+    document.addEventListener('visibilitychange', refresh);
+    return () => {
+      window.clearInterval(interval);
+      window.removeEventListener('focus', refresh);
+      window.removeEventListener('pageshow', refresh);
+      document.removeEventListener('visibilitychange', refresh);
+    };
+  }, [activeSection, syncStripeStatus]);
 
   useEffect(() => {
     if (profile?.user) setForm({ name: profile.user.name || '', city: profile.user.city || '', neighborhood: profile.user.neighborhood || '', cep: profile.user.cep || '', address: profile.user.address || '', businessName: profile.user.businessName || '' });
@@ -2197,6 +2231,8 @@ function SettingsScreen({ onBack, onLogout }) {
   async function connectStripe() {
     setStripeBusy(true); setStripeError('');
     try {
+      const status = await syncStripeStatus();
+      if (!stripeConnectionState(status).canResume) return;
       const { authorizationUrl } = await api.stripeConnect();
       window.location.assign(authorizationUrl);
     } catch (error) {
@@ -2211,7 +2247,7 @@ function SettingsScreen({ onBack, onLogout }) {
 
   async function refreshStripeStatus() {
     setStripeBusy(true); setStripeError('');
-    try { setStripeStatus(await api.stripeStatus()); } catch(error) { setStripeError(error.message); } finally { setStripeBusy(false); }
+    try { await syncStripeStatus(); } catch(error) { setStripeError(error.message); } finally { setStripeBusy(false); }
   }
 
   async function removeAccount() {
@@ -2269,34 +2305,7 @@ function SettingsScreen({ onBack, onLogout }) {
             </section> : null}
             {activeSection === 'pagamentos' ? <section className="card settings-card settings-panel" id="pagamentos">
               <div className="settings-panel-heading"><div><span className="settings-panel-icon payments"><span className="material-symbols-outlined">payments</span></span><div><h2>Ofertas e pagamentos</h2><p>Acompanhe os itens que aguardam sua decisão ou pagamento.</p></div></div></div>
-              {paymentTestMode && <p className="delivery-feedback" role="status"><strong>Ambiente de teste.</strong> Cadastros de vendedores, saldos e pagamentos são simulados. Nenhum dinheiro real é movimentado.</p>}
-              <div className={`marketplace-connection ${paymentConnected || paymentDemoMode ? 'is-connected' : ''}`}>
-                {paymentDemoMode ? (
-                  <>
-                    <div>
-                      <strong>Modo de demonstração — pagamentos de teste</strong>
-                      <small>As vendas são simuladas usando a conta de teste do projeto. Nenhum vendedor conecta uma conta real ou recebe repasses.</small>
-                    </div>
-                    <span className="connection-status"><span className="material-symbols-outlined">science</span>Simulação</span>
-                  </>
-                ) : (
-                  <>
-                    <div>
-                      <strong>{paymentConnected ? (paymentTestMode ? 'Conta Stripe de teste conectada' : 'Conta Stripe pronta para receber') : paymentLinked ? 'Conclua seu cadastro na Stripe' : 'Receba suas vendas pela Stripe'}</strong>
-                      <small>{paymentTestMode && !paymentConnected ? 'Conclua o cadastro usando os dados de teste indicados pela Stripe. Não é necessário ativar a conta de produção.' : paymentConnected ? (paymentTestMode ? 'Use esta conta para testar vendas e acompanhar o saldo simulado no painel Stripe.' : 'Receba diretamente na sua conta. A Stripe administra o saldo, as taxas e os repasses.') : stripeStatus?.pendingVerification ? 'A Stripe está analisando seu cadastro. Aguarde a verificação para receber pagamentos.' : paymentLinked ? 'Há dados ou documentos pendentes. Continue o cadastro seguro na Stripe para liberar cobranças e repasses.' : 'Cadastre seus dados e sua conta bancária na página segura da Stripe para receber pelas vendas.'}</small>
-                    </div>
-                    {paymentConnected
-                      ? <span className="connection-status"><span className="material-symbols-outlined">check_circle</span>{paymentTestMode ? 'Teste habilitado' : 'Habilitada'}</span>
-                      : <button className="primary-btn" disabled={stripeBusy} onClick={connectStripe}><span className="material-symbols-outlined">account_balance_wallet</span>{paymentLinked ? 'Continuar cadastro' : 'Conectar Stripe'}</button>}
-                  </>
-                )}
-              </div>
-              {stripeError && <p className="delivery-error" role="alert">{stripeError}</p>}
-              {!paymentDemoMode && <div className="seller-payment-actions">
-                {paymentLinked && <button className="secondary-btn" disabled={stripeBusy} onClick={openStripeDashboard}>Abrir painel de recebimentos</button>}
-                <button className="secondary-btn" disabled={stripeBusy} onClick={refreshStripeStatus}>{stripeBusy ? 'Consultando…' : 'Atualizar situação da conta'}</button>
-              </div>}
-              {paymentLinked && stripeStatus?.dashboard === 'full' && <p className="community-hint">No painel da Stripe, entre com o e-mail usado no cadastro do vendedor e selecione sua conta para acompanhar os recebimentos.</p>}
+              <StripeConnectionCard status={stripeStatus} testMode={paymentTestMode} demoMode={paymentDemoMode} error={stripeError} busy={stripeBusy} onConnect={connectStripe} onDashboard={openStripeDashboard} onRefresh={refreshStripeStatus} />
               <div className="payment-items-list">{paymentItems.length ? paymentItems.map((item) => <article className="payment-item" key={item.negotiationId}><span className="payment-item-icon material-symbols-outlined">shopping_bag</span><div><strong>{item.title}</strong><small>R$ {((item.amountCents || 0) / 100).toFixed(2).replace('.', ',')} · {item.method === 'pix' ? 'PIX' : item.method === 'card' ? 'Cartão' : 'Boleto'}</small><small>{item.negotiationStatus === 'reserved' ? 'Reserva confirmada: combine a entrega antes de pagar' : 'Oferta enviada: aguardando resposta'}</small></div><button className="payment-item-action" onClick={() => window.location.assign(`/anuncios/${item.postId}`)}><span className="material-symbols-outlined">{item.negotiationStatus === 'reserved' ? 'payments' : 'open_in_new'}</span><span>{item.negotiationStatus === 'reserved' ? 'Entrega e pagamento' : 'Acompanhar oferta'}</span></button></article>) : <EmptyState icon="payments" title="Nenhum pagamento pendente" text="Quando você enviar uma oferta, ela aparecerá aqui para acompanhamento." />}</div>
             </section> : null}
           </div>

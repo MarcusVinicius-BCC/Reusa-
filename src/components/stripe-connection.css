@@ -1,0 +1,8 @@
+.stripe-account-status{display:flex;flex-wrap:wrap;gap:16px 24px;margin:16px 0;padding:14px;border:1px solid var(--outline);border-radius:12px;background:var(--surface-lowest,#fff)}
+.stripe-account-status>div{display:grid;gap:5px;min-width:0}
+.stripe-account-status dt{font-size:11px;color:var(--text-variant)}
+.stripe-account-status dd{margin:0;font-size:12px;font-weight:700;color:var(--text)}
+.stripe-connection-status.is-pending{color:#715300;background:#fff4d6}
+.stripe-account-requirements{margin:12px 0;font-size:12px;line-height:1.6;color:var(--text-variant)}
+.stripe-account-requirements summary{cursor:pointer;font-weight:700}
+.stripe-account-requirements li{overflow-wrap:anywhere}
