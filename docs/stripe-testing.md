@@ -2,7 +2,7 @@
 
 É possível demonstrar cadastro de vendedores, compras, saldos e reembolsos sem dinheiro real e sem ativar a conta de produção.
 
-No Stripe, habilite Connect no mesmo ambiente de teste/sandbox da chave utilizada. Configure contas Express brasileiras, cadastro hospedado e cobranças diretas. Use somente os dados e cartões de teste indicados pela [documentação Stripe Connect](https://docs.stripe.com/connect/testing).
+No Stripe, habilite Connect no mesmo ambiente de teste/sandbox da chave utilizada. Configure contas brasileiras com Accounts v2, cadastro hospedado, painel completo e cobranças diretas. A API define a Stripe como responsável pela coleta de perdas e tarifas, conforme o modelo exigido pela plataforma. Use somente os dados e cartões de teste indicados pela [documentação Stripe Connect](https://docs.stripe.com/connect/testing).
 
 No backend do Railway, configure:
 
@@ -15,6 +15,7 @@ STRIPE_ENABLE_LIVE=false
 STRIPE_PIX_ENABLED=false
 STRIPE_WEBHOOK_SECRET=whsec_SEGREDO_DA_CONTA_EM_TESTE
 STRIPE_CONNECT_WEBHOOK_SECRET=whsec_SEGREDO_CONNECT_EM_TESTE
+STRIPE_ACCOUNT_WEBHOOK_SECRET=whsec_SEGREDO_CONTAS_V2_EM_TESTE
 ```
 
 `STRIPE_DEMO_MODE=false` permite que cada vendedor conecte sua conta de teste. O modo `true` usa apenas a conta de teste da plataforma e dispensa a conexão de vendedores. A chave `sk_test_` determina que as operações sejam de teste; desligar o modo de demonstração não as transforma em operações reais. Mantenha `NODE_ENV=production` no Railway: o ambiente do servidor é independente do ambiente financeiro Stripe.
@@ -25,7 +26,9 @@ Crie os dois destinos de eventos **no ambiente de teste/sandbox**, ambos com a U
 https://reusa.up.railway.app/api/payments/stripe/webhook
 ```
 
-Um destino deve receber eventos da sua conta e o outro de contas conectadas. Use formato snapshot, os eventos listados no [guia de webhooks](stripe-production.md#configuração-da-conta-stripe) e os segredos correspondentes ao ambiente de teste. Chaves e segredos de sandboxes diferentes não devem ser misturados.
+Um destino deve receber eventos da sua conta e o outro de contas conectadas. Para estes dois destinos de pagamentos, use formato snapshot e os eventos listados no [guia de webhooks](stripe-production.md#configuração-da-conta-stripe).
+
+Para as atualizações de cadastro Accounts v2, crie ainda um destino **Sua conta → Mínimo** apontando para `https://reusa.up.railway.app/api/payments/stripe/accounts-webhook`. Salve o segredo em `STRIPE_ACCOUNT_WEBHOOK_SECRET`; os eventos estão na seção [Eventos de contas Accounts v2](stripe-production.md#eventos-de-contas-accounts-v2). A conexão e a consulta manual da conta não dependem desse terceiro webhook; ele permite acompanhar as alterações automaticamente. Use os segredos correspondentes ao mesmo ambiente de teste. Chaves e segredos de sandboxes diferentes não devem ser misturados.
 
 Após reimplantar, entre no ReUsa+, acesse **Configurações → Ofertas e pagamentos → Conectar Stripe** e conclua o cadastro com dados de teste. O aviso “Ambiente de teste” deve aparecer; quando a conta estiver habilitada, será exibido “Conta Stripe de teste conectada”. O vendedor pode abrir o painel e visualizar saldos simulados. Teste a compra com um segundo usuário do ReUsa+ e cartão de teste, após aceitar a oferta e o acordo de entrega.
 

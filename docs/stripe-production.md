@@ -1,11 +1,11 @@
 # Stripe em produção — ReUsa+
 
-O backend usa Stripe Checkout hospedado, cobrança direta em contas Connect Express brasileiras e BRL. Cada vendedor cadastra seus dados na Stripe e recebe na própria conta conectada. A plataforma não cobra comissão nem mantém custódia dos valores. Taxas, repasses, saldos negativos e contestações seguem o contrato Connect da plataforma com a Stripe.
+O backend usa Stripe Checkout hospedado, cobrança direta em contas Connect Accounts v2 brasileiras e BRL. Cada vendedor cadastra seus dados na Stripe e recebe na própria conta conectada. A plataforma não cobra comissão nem mantém custódia dos valores. Taxas, repasses, saldos negativos e contestações seguem o contrato Connect da plataforma com a Stripe.
 
 ## Configuração da conta Stripe
 
 1. Ative a conta **de produção** e conclua os dados da plataforma solicitados pela Stripe.
-2. Habilite **Connect**, com onboarding hospedado e contas Express no Brasil, compatíveis com **direct charges**. A implementação usa Accounts v1 Express; não configure somente um fluxo Accounts v2 diferente deste contrato.
+2. Habilite **Connect**, com onboarding hospedado, contas Accounts v2 no Brasil e **direct charges**. Os novos cadastros usam `configuration.merchant`, `dashboard=full` e `defaults.responsibilities` com `losses_collector=stripe` e `fees_collector=stripe`, conforme o modelo de risco gerenciado pela Stripe. A API não envia o campo legado `type` ao criar contas.
 3. Habilite cartão. Pix é opcional e só deve ser exposto quando estiver liberado para as contas conectadas e para este fluxo de cobrança.
 4. Crie os destinos de eventos em produção abaixo, em formato **snapshot**. Cada destino recebe seu próprio segredo de assinatura. Não use eventos thin nesta integração.
 
@@ -40,6 +40,28 @@ account.application.deauthorized
 
 Eventos da conta da plataforma e de contas conectadas são validados com segredos separados. O backend compara conta conectada e ambiente com o pagamento registrado. O SDK oficial Stripe valida a assinatura do corpo original, com tolerância de cinco minutos. O servidor consulta o objeto atualizado na API antes de alterar estados financeiros.
 
+## Eventos de contas Accounts v2
+
+Crie um terceiro destino **Sua conta**, com conteúdo **Mínimo (thin)**. Contas Accounts v2 criadas pela plataforma geram seus eventos de cadastro no escopo da própria plataforma. URL:
+
+```text
+https://reusa.up.railway.app/api/payments/stripe/accounts-webhook
+```
+
+Selecione:
+
+```text
+v2.core.account.created
+v2.core.account.updated
+v2.core.account.closed
+v2.core.account[configuration.merchant].capability_status_updated
+v2.core.account[configuration.merchant].updated
+v2.core.account[requirements].updated
+v2.core.account[defaults].updated
+```
+
+Salve o segredo próprio em `STRIPE_ACCOUNT_WEBHOOK_SECRET`. Este endpoint usa `parseEventNotification` do SDK oficial; cada notificação assinada é persistida e dispara uma consulta aos dados atuais da conta. Não reutilize os segredos dos dois destinos snapshot. As consultas de status e a verificação antes de cobrar continuam funcionando mesmo antes de configurar esse destino.
+
 ## Railway
 
 Mantenha o serviço apontando para `main`, com Node 22, PostgreSQL configurado e `JWT_SECRET` estável. As migrações são aplicadas ao iniciar. Não exclua banco, volume, negociações ou pagamentos na troca de provedor.
@@ -51,13 +73,14 @@ APP_BASE_URL=https://reusa.up.railway.app
 STRIPE_SECRET_KEY=sk_live_SEU_SEGREDO
 STRIPE_WEBHOOK_SECRET=whsec_SEGREDO_DA_SUA_CONTA
 STRIPE_CONNECT_WEBHOOK_SECRET=whsec_SEGREDO_DAS_CONTAS_CONECTADAS
+STRIPE_ACCOUNT_WEBHOOK_SECRET=whsec_SEGREDO_DE_CONTAS_V2
 STRIPE_DEMO_MODE=false
 STRIPE_CONNECT_ENABLED=true
 STRIPE_PIX_ENABLED=false
 STRIPE_ENABLE_LIVE=false
 ```
 
-Os valores acima são exemplos, não credenciais. Use os dois segredos dos destinos de **produção**, não os do Stripe CLI ou do ambiente de teste. Esta integração não usa chave publicável `pk_`, cadastro manual de produtos ou redirect URI de OAuth.
+Os valores acima são exemplos, não credenciais. Use os segredos dos destinos de **produção**, não os do Stripe CLI ou do ambiente de teste. Esta integração não usa chave publicável `pk_`, cadastro manual de produtos ou redirect URI de OAuth.
 
 Após configurar destinos e credenciais, habilite novas operações reais com:
 
@@ -74,7 +97,7 @@ Em **Configurações → Ofertas e pagamentos**, cada vendedor:
 1. Seleciona **Conectar Stripe** e conclui o cadastro hospedado com seus dados e conta bancária.
 2. Retorna ao ReUsa+ e consulta a situação da conta. Contas de teste e de produção têm identificadores separados no banco.
 3. Aguarda a Stripe habilitar `charges_enabled` e `payouts_enabled`.
-4. Usa **Abrir painel de recebimentos** para acessar saldo, repasses, dados pendentes e contestações. Links temporários são criados no backend apenas para o proprietário autenticado.
+4. Usa **Abrir painel de recebimentos** para acessar saldo, repasses, dados pendentes e contestações no painel completo da Stripe. O vendedor entra com o e-mail usado no cadastro e escolhe sua conta no seletor da Stripe. Contas antigas Express continuam usando seus links temporários, criados apenas para o proprietário autenticado.
 
 Uma conta apenas criada não é considerada pronta. A API consulta a Stripe antes de permitir a aceitação de vendas e novamente antes de abrir o checkout. Revogação do acesso e restrições impedem novas cobranças.
 
@@ -116,4 +139,6 @@ NODE_ENV=test DATABASE_PROVIDER=postgres POSTGRES_URL=postgres://usuario:senha@l
 
 Os testes HTTP exercitam assinatura, concorrência, conta de vendedor, perda de respostas, replay, reembolso, contestação e recuperação com respostas Stripe simuladas. A integração real deve ser validada no Railway com conta e vendedores autorizados: onboarding, cobrança, entrega do evento, pagamento confirmado, consulta do vendedor e reembolso. Testes locais não comprovam habilitação da conta Stripe, repasse bancário ou entrega de eventos ao domínio público.
 
-Referências: [Connect Express](https://docs.stripe.com/connect/express-accounts), [Direct charges](https://docs.stripe.com/connect/direct-charges), [Webhooks](https://docs.stripe.com/webhooks), [Reembolsos](https://docs.stripe.com/refunds).
+As contas já conectadas antes desta atualização mantêm seus identificadores e continuam consultadas pela API correspondente. Duas colunas adicionais registram a versão de cada conta, separadamente em teste e produção; a atualização não cria uma segunda conta para um vendedor já conectado nem altera suas responsabilidades antigas. Novos cadastros usam uma chave de idempotência específica para v2. Checkout, reembolsos e contestações continuam nos endpoints financeiros v1 com o ID da conta conectada.
+
+Referências: [Risco gerenciado pela Stripe](https://docs.stripe.com/connect/risk-management/connected-accounts-with-managed-risk), [Accounts v2](https://docs.stripe.com/connect/accounts-v2), [Direct charges](https://docs.stripe.com/connect/direct-charges), [Webhooks](https://docs.stripe.com/webhooks), [Reembolsos](https://docs.stripe.com/refunds).

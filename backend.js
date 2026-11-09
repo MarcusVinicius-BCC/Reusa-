@@ -1515,7 +1515,7 @@ async function start() {
     ensureColumn('posts','area_lng','REAL');
     for (const statement of fs.readFileSync(path.join(ROOT,'migrations/015_community_tools.sql'),'utf8').split(';').filter(part=>part.trim()&&!part.trim().startsWith('ALTER TABLE'))) run(statement);
     for (const statement of campaignSchema.split(';').filter(part => part.trim())) run(statement);
-    for (const col of ['stripe_live_account_id','stripe_test_account_id','stripe_checked_at']) ensureColumn('users',col,'TEXT');
+    for (const col of ['stripe_live_account_id','stripe_test_account_id','stripe_live_account_version','stripe_test_account_version','stripe_checked_at']) ensureColumn('users',col,'TEXT');
     ensureColumn('users','stripe_status_json',"TEXT NOT NULL DEFAULT '{}'");
     for (const col of ['provider_account_id','provider_payment_intent','provider_request_json','dispute_id','dispute_status','refund_id','refund_status','refund_requested_at','reconciled_at','reconcile_after','reconcile_until']) ensureColumn('payments',col,'TEXT');
     ensureColumn('payments','provider_livemode','INTEGER');
@@ -1590,7 +1590,7 @@ async function start() {
   const publicLookupRateLimit = createRateLimiter({ windowMs: 15 * 60 * 1000, maxRequests: 60 });
   const mapRouteRateLimit = createRateLimiter({ windowMs: 15 * 60 * 1000, maxRequests: 60 });
 
-  app.use(express.json({ limit: '100kb', verify: (req, _res, buf) => { if (req.path === '/api/payments/stripe/webhook') req.rawBody = Buffer.from(buf); } }));
+  app.use(express.json({ limit: '100kb', verify: (req, _res, buf) => { if (['/api/payments/stripe/webhook','/api/payments/stripe/accounts-webhook'].includes(req.path)) req.rawBody = Buffer.from(buf); } }));
   app.use(express.urlencoded({ extended: true }));
   app.use(requestMetrics);
   app.use((req, res, next) => {

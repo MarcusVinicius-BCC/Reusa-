@@ -29,7 +29,7 @@ function baseUrl() { return String(process.env.APP_BASE_URL || '').trim().replac
 
 function safeProviderMessage(value) {
   let message = typeof value === 'string' ? value : '';
-  for (const secret of [secretKey(), process.env.STRIPE_WEBHOOK_SECRET, process.env.STRIPE_CONNECT_WEBHOOK_SECRET]) {
+  for (const secret of [secretKey(), process.env.STRIPE_WEBHOOK_SECRET, process.env.STRIPE_CONNECT_WEBHOOK_SECRET, process.env.STRIPE_ACCOUNT_WEBHOOK_SECRET]) {
     if (secret && secret.length >= 8) message = message.split(secret).join('[segredo ocultado]');
   }
   return message
@@ -66,7 +66,7 @@ function stripeFailure(method, path, response, data) {
     publicMessage = 'A conta ou o pagamento não foi encontrado neste ambiente Stripe. Confira se a chave pertence ao mesmo ambiente de teste ou produção utilizado no cadastro.';
   } else if (code === 'idempotency_key_in_use' || response.status === 409 || response.status === 429) {
     publicMessage = 'A Stripe ainda está processando a solicitação. Aguarde e consulte o status antes de tentar novamente.';
-  } else if (['/accounts','/account_links'].includes(path) && message) {
+  } else if (['/accounts','/account_links','/v2/core/accounts','/v2/core/account_links'].includes(path) && message) {
     publicMessage = 'A Stripe não conseguiu iniciar o cadastro do vendedor. Motivo: ' + message;
   } else {
     publicMessage = 'A Stripe não conseguiu concluir a solicitação. Consulte o suporte com o ID deste erro.';
@@ -114,21 +114,47 @@ async function request(method, path, body, { accountId, idempotencyKey } = {}) {
   }
   return data;
 }
-async function connectedAccount(accountId) {
+let v2Client;
+let v2ClientKey;
+function accountClient() {
+  requireReady({operational:true});
+  if (!v2Client || v2ClientKey !== secretKey()) {
+    v2ClientKey = secretKey();
+    v2Client = new Stripe(v2ClientKey, {apiVersion:Stripe.API_VERSION, timeout:15000, maxNetworkRetries:0,
+      httpClient:Stripe.createFetchHttpClient((...args) => globalThis.fetch(...args))});
+  }
+  return v2Client;
+}
+async function accountRequest(path, method, operation) {
+  try {return await operation(accountClient());}
+  catch (error) {
+    if (error.stripeCode || error.status) throw error;
+    if (!error.statusCode) throw Object.assign(new Error('A conexão com a Stripe demorou. Tente retomar o cadastro em instantes.'),{status:502,uncertain:true});
+    throw stripeFailure(method,path,{status:error.statusCode || 502,headers:new Headers(error.headers || {})},
+      {error:error.raw || {type:error.rawType,code:error.code,message:error.message,param:error.param}});
+  }
+}
+const accountInclude = ['configuration.merchant','defaults','requirements'];
+async function connectedAccount(accountId, version='v1') {
   if (!accountId) return null;
+  if (version === 'v2') return accountRequest('/v2/core/accounts/' + accountId,'GET',client => client.v2.core.accounts.retrieve(accountId,{include:accountInclude}));
   return request('GET', '/accounts/' + encodeURIComponent(accountId));
 }
 async function createConnectedAccount(email, idempotencyKey) {
   if (demoEnabled()) throw Object.assign(new Error('Contas de vendedores são simuladas no modo demonstração.'), { status: 400 });
-  return request('POST', '/accounts', {
-    type: 'express', country: 'BR', email,
-    capabilities: { card_payments: { requested: true }, transfers: { requested: true } }
-  }, { idempotencyKey });
+  return accountRequest('/v2/core/accounts','POST',client => client.v2.core.accounts.create({
+    contact_email:email, identity:{country:'BR'}, dashboard:'full',
+    defaults:{currency:'brl',locales:['pt-BR'],responsibilities:{fees_collector:'stripe',losses_collector:'stripe'}},
+    configuration:{merchant:{capabilities:{card_payments:{requested:true}}}}, include:accountInclude
+  },{idempotencyKey}));
 }
-async function accountLink(accountId, refreshUrl, returnUrl) {
+async function accountLink(accountId, refreshUrl, returnUrl, version='v2') {
+  if (version === 'v2') return accountRequest('/v2/core/account_links','POST',client => client.v2.core.accountLinks.create({
+    account:accountId,use_case:{type:'account_onboarding',account_onboarding:{refresh_url:refreshUrl,return_url:returnUrl}}
+  }));
   return request('POST', '/account_links', { account: accountId, type: 'account_onboarding', refresh_url: refreshUrl, return_url: returnUrl });
 }
-async function createCheckout({ paymentId, postId, title, amountCents, payerEmail, method, sellerAccountId, returnBaseUrl, expiresAt }) {
+async function createCheckout({ paymentId, postId, title, amountCents, payerEmail, method, sellerAccountId, sellerAccountVersion='v1', returnBaseUrl, expiresAt }) {
   requireReady();
   if (!Number.isSafeInteger(amountCents) || amountCents < 100 || !payerEmail || !['card', 'pix'].includes(method)) {
     throw Object.assign(new Error('Invalid checkout details'), { status: 400 });
@@ -139,8 +165,8 @@ async function createCheckout({ paymentId, postId, title, amountCents, payerEmai
   let accountId = null;
   if (!demoEnabled()) {
     if (!sellerAccountId) throw Object.assign(new Error('O vendedor precisa conectar sua conta Stripe.'), { status: 409 });
-    const account = await connectedAccount(sellerAccountId);
-    if (!account?.charges_enabled || !account?.payouts_enabled) throw Object.assign(new Error('A conta Stripe do vendedor ainda não está habilitada para cobranças e repasses.'), { status: 409 });
+    const account = sellerView(await connectedAccount(sellerAccountId,sellerAccountVersion));
+    if (!account.chargesEnabled || !account.payoutsEnabled) throw Object.assign(new Error('A conta Stripe do vendedor ainda não está habilitada para cobranças e repasses.'), { status: 409 });
     accountId = sellerAccountId;
   }
   const returnUrl = (returnBaseUrl || baseUrl()) + '/anuncios/' + encodeURIComponent(postId);
@@ -185,9 +211,14 @@ function webhookEvent(rawBody, signature, connected = false) {
   if (!secret || !Buffer.isBuffer(rawBody) || rawBody.length > 1024 * 1024) return null;
   try { return signatureVerifier.webhooks.constructEvent(rawBody, signature, secret, 300); } catch { return null; }
 }
+function accountWebhookEvent(rawBody, signature) {
+  const secret=String(process.env.STRIPE_ACCOUNT_WEBHOOK_SECRET||'').trim();
+  if(!secret || !Buffer.isBuffer(rawBody) || rawBody.length>1024*1024)return null;
+  try {return signatureVerifier.parseEventNotification(rawBody,signature,secret,300);}catch{return null;}
+}
 const liveMode = () => secretKey().startsWith('sk_live_');
 const isTestEnvironment = () => configured() && secretKey().startsWith('sk_test_');
-const dashboardLink = accountId => request('POST', '/accounts/' + encodeURIComponent(accountId) + '/login_links');
+const dashboardLink = (accountId,version='v2') => version === 'v2' ? Promise.resolve({url:'https://dashboard.stripe.com/'}) : request('POST', '/accounts/' + encodeURIComponent(accountId) + '/login_links');
 const paymentIntent = (id, accountId) => request('GET', '/payment_intents/' + encodeURIComponent(id) + '?expand[]=latest_charge', undefined, {accountId});
 const dispute = (id, accountId) => request('GET', '/disputes/' + encodeURIComponent(id), undefined, {accountId});
 const disputes = (intent, accountId) => request('GET', '/disputes?payment_intent=' + encodeURIComponent(intent) + '&limit=10', undefined, {accountId});
@@ -195,8 +226,17 @@ const refund = (intent, accountId, paymentId) => request('POST', '/refunds', {pa
 const refundStatus = (id, accountId) => request('GET', '/refunds/' + encodeURIComponent(id), undefined, {accountId});
 const refunds = (intent, accountId) => request('GET', '/refunds?payment_intent=' + encodeURIComponent(intent) + '&limit=100', undefined, {accountId});
 function sellerView(account) {
+  if(account?.object==='v2.core.account'){
+    const merchant=account.configuration?.merchant,capabilities=merchant?.capabilities||{},entries=account.requirements?.entries||[];
+    const managed=account.dashboard==='full'&&account.defaults?.responsibilities?.losses_collector==='stripe'&&account.defaults?.responsibilities?.fees_collector==='stripe';
+    const charges=capabilities.card_payments?.status==='active'||process.env.STRIPE_PIX_ENABLED==='true'&&capabilities.pix_payments?.status==='active';
+    const due=entries.filter(e=>e.awaiting_action_from==='user'&&['currently_due','past_due'].includes(e.minimum_deadline?.status));
+    return {connected:true,chargesEnabled:managed&&!account.closed&&merchant?.active!==false&&charges,payoutsEnabled:managed&&!account.closed&&merchant?.active!==false&&capabilities.stripe_balance?.payouts?.status==='active',
+      detailsSubmitted:due.length===0,requirementsDue:due.map(e=>e.description||'Dados pendentes'),pendingVerification:entries.some(e=>e.awaiting_action_from==='stripe'),
+      disabledReason:account.closed?'account_closed':!managed?'unsupported_account_configuration':(!charges?capabilities.card_payments?.status_details?.[0]?.code||'requirements_pending':null),dashboard:'full',accountVersion:'v2'};
+  }
   return {connected:!!account, chargesEnabled:!!account?.charges_enabled, payoutsEnabled:!!account?.payouts_enabled,
     detailsSubmitted:!!account?.details_submitted, requirementsDue:(account?.requirements?.currently_due || []).map(String),
-    pendingVerification:!!account?.requirements?.pending_verification?.length, disabledReason:account?.requirements?.disabled_reason || null};
+    pendingVerification:!!account?.requirements?.pending_verification?.length, disabledReason:account?.requirements?.disabled_reason || null,accountVersion:'v1'};
 }
-module.exports = { configured, requireReady, liveMode, isTestEnvironment, demoEnabled, testMode, createConnectedAccount, accountLink, connectedAccount, createCheckout, checkoutSession, verifiedSessionStatus, webhookEvent, dashboardLink, paymentIntent, dispute, disputes, refund, refundStatus, refunds, sellerView };
+module.exports = { configured, requireReady, liveMode, isTestEnvironment, demoEnabled, testMode, createConnectedAccount, accountLink, connectedAccount, createCheckout, checkoutSession, verifiedSessionStatus, webhookEvent, accountWebhookEvent, dashboardLink, paymentIntent, dispute, disputes, refund, refundStatus, refunds, sellerView };

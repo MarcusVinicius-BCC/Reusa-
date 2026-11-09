@@ -129,13 +129,13 @@ test('Connect errors without error.code retain the provider reason and Stripe re
     const originalFetch=global.fetch,originalError=console.error,logs=[];
     try {
       console.error=(...args)=>logs.push(args);
-      global.fetch=async()=>({ok:false,status:400,headers:new Headers({'request-id':'req_connect_error'}),json:async()=>({error:{type:'invalid_request_error',message:"You can only create new accounts if you've signed up for Connect, which you can learn how to do at https://stripe.com/docs/connect."}})});
+      global.fetch=async()=>new Response(JSON.stringify({error:{type:'invalid_request_error',message:"You can only create new accounts if you've signed up for Connect, which you can learn how to do at https://stripe.com/docs/connect."}}),{status:400,headers:{'Content-Type':'application/json','request-id':'req_connect_error'}});
       await assert.rejects(stripe.createConnectedAccount('seller@example.test','test-onboarding-key'),error=>{
         assert.equal(error.status,400);assert.equal(error.stripeCode,'invalid_request_error');
         assert.equal(error.stripeRequestId,'req_connect_error');assert.match(error.stripeMessage,/signed up for Connect/);
         assert.match(error.message,/perfil da plataforma Connect/);assert.equal(error.checkoutRejected,false);return true;
       });
-      const diagnostic=logs[0][1];assert.equal(diagnostic.endpoint,'/accounts');assert.equal(diagnostic.stripeRequestId,'req_connect_error');assert.match(diagnostic.message,/signed up for Connect/);
+      const diagnostic=logs[0][1];assert.equal(diagnostic.endpoint,'/v2/core/accounts');assert.equal(diagnostic.stripeRequestId,'req_connect_error');assert.match(diagnostic.message,/signed up for Connect/);
     }finally{global.fetch=originalFetch;console.error=originalError;}
   });
 });
@@ -145,7 +145,7 @@ test('Onboarding diagnostics redact API keys, webhook secrets, email, personal n
     const originalFetch=global.fetch,originalError=console.error,logs=[];
     try {
       console.error=(...args)=>logs.push(args);
-      global.fetch=async()=>({ok:false,status:400,headers:new Headers({'request-id':'req_redacted'}),json:async()=>({error:{type:'invalid_request_error',param:'return_url',message:'Invalid return_url https://user:private-password@reusa.example/configuracoes?state=private-state#private-fragment; sk_test_do_not_log_me whsec_do_not_log_me seller@example.test 123.456.789-00'}})});
+      global.fetch=async()=>new Response(JSON.stringify({error:{type:'invalid_request_error',param:'return_url',message:'Invalid return_url https://user:private-password@reusa.example/configuracoes?state=private-state#private-fragment; sk_test_do_not_log_me whsec_do_not_log_me seller@example.test 123.456.789-00'}}),{status:400,headers:{'Content-Type':'application/json','request-id':'req_redacted'}});
       await assert.rejects(stripe.accountLink('acct_example','https://reusa.example/refresh','https://reusa.example/configuracoes'),error=>{
         assert.match(error.message,/Invalid return_url/);assert.equal(error.stripeParam,'return_url');
         const captured=JSON.stringify(logs)+' '+error.message+' '+error.stripeMessage;
@@ -161,7 +161,7 @@ test('Stripe authentication errors explain which configuration to update without
     const originalFetch=global.fetch,originalError=console.error;
     try {
       console.error=()=>{};
-      global.fetch=async()=>({ok:false,status:401,json:async()=>({error:{type:'authentication_error',message:'Invalid API Key provided: sk_test_rejected_key'}})});
+      global.fetch=async()=>new Response(JSON.stringify({error:{type:'authentication_error',message:'Invalid API Key provided: sk_test_rejected_key'}}),{status:401,headers:{'Content-Type':'application/json'}});
       await assert.rejects(stripe.createConnectedAccount('seller@example.test','test-onboarding-key'),error=>{
         assert.equal(error.status,503);assert.match(error.message,/STRIPE_SECRET_KEY/);assert.equal(error.stripeMessage.includes('sk_test_rejected_key'),false);return true;
       });
@@ -182,4 +182,47 @@ test('Provider diagnostic changes preserve checkout rejection and ambiguous resp
       }
     }finally{global.fetch=originalFetch;console.error=originalError;}
   });
+});
+
+test('Seller creation uses Accounts v2 with Stripe collecting losses and fees', async () => {
+  await env({STRIPE_SECRET_KEY:'sk_test_v2_contract',APP_BASE_URL:'https://reusa.example',STRIPE_DEMO_MODE:'false'},async()=>{
+    const original=global.fetch;
+    try {
+      global.fetch=async(url,options)=>{
+        assert.equal(new URL(url).pathname,'/v2/core/accounts');assert.equal(options.method,'POST');
+        const headers=new Headers(options.headers);assert.match(headers.get('content-type'),/application\/json/);assert.equal(headers.get('idempotency-key'),'seller-v2-test');
+        const body=JSON.parse(options.body);assert.equal(body.type,undefined);assert.equal(body.contact_email,'seller@example.test');assert.equal(body.identity.country,'BR');
+        assert.equal(body.dashboard,'full');assert.deepEqual(body.defaults.responsibilities,{fees_collector:'stripe',losses_collector:'stripe'});assert.equal(body.configuration.merchant.capabilities.card_payments.requested,true);
+        return new Response(JSON.stringify({id:'acct_managed',object:'v2.core.account',livemode:false}),{headers:{'Content-Type':'application/json'}});
+      };
+      assert.equal((await stripe.createConnectedAccount('seller@example.test','seller-v2-test')).id,'acct_managed');
+    }finally{global.fetch=original;}
+  });
+});
+
+test('Accounts v2 onboarding has its own use_case and dashboard access requires no Express login link', async()=>{
+  await env({STRIPE_SECRET_KEY:'sk_test_v2_contract',APP_BASE_URL:'https://reusa.example',STRIPE_DEMO_MODE:'false'},async()=>{
+    const original=global.fetch;let calls=0;
+    try {
+      global.fetch=async(url,options)=>{
+        calls++;assert.equal(new URL(url).pathname,'/v2/core/account_links');
+        assert.deepEqual(JSON.parse(options.body),{account:'acct_managed',use_case:{type:'account_onboarding',account_onboarding:{refresh_url:'https://reusa.example/refresh',return_url:'https://reusa.example/configuracoes'}}});
+        return new Response(JSON.stringify({object:'v2.core.account_link',url:'https://connect.stripe.com/setup/example'}),{headers:{'Content-Type':'application/json'}});
+      };
+      assert.equal((await stripe.accountLink('acct_managed','https://reusa.example/refresh','https://reusa.example/configuracoes','v2')).url,'https://connect.stripe.com/setup/example');
+      assert.equal((await stripe.dashboardLink('acct_managed','v2')).url,'https://dashboard.stripe.com/');assert.equal(calls,1);
+    }finally{global.fetch=original;}
+  });
+});
+
+test('Accounts v2 must have active card and payout capabilities; missing data or closed accounts cannot charge', ()=>{
+  const account={id:'acct_managed',object:'v2.core.account',dashboard:'full',defaults:{responsibilities:{fees_collector:'stripe',losses_collector:'stripe'}},configuration:{merchant:{capabilities:{card_payments:{status:'active'},stripe_balance:{payouts:{status:'active'}}}}},requirements:{entries:[]}};
+  assert.equal(stripe.sellerView(account).chargesEnabled,true);assert.equal(stripe.sellerView(account).payoutsEnabled,true);
+  assert.equal(stripe.sellerView({...account,configuration:undefined}).chargesEnabled,false);
+  assert.equal(stripe.sellerView({...account,defaults:undefined}).chargesEnabled,false);
+  assert.equal(stripe.sellerView({...account,defaults:{responsibilities:{fees_collector:'stripe',losses_collector:'application'}}}).chargesEnabled,false);
+  assert.equal(stripe.sellerView({...account,closed:true}).chargesEnabled,false);
+  assert.equal(stripe.sellerView({...account,closed:true}).payoutsEnabled,false);
+  const pending=stripe.sellerView({...account,configuration:{merchant:{capabilities:{card_payments:{status:'pending'}}}},requirements:{entries:[{awaiting_action_from:'user',description:'Dados de teste',minimum_deadline:{status:'currently_due'}},{awaiting_action_from:'stripe',minimum_deadline:{status:'currently_due'}}]}});
+  assert.equal(pending.chargesEnabled,false);assert.equal(pending.payoutsEnabled,false);assert.equal(pending.pendingVerification,true);assert.deepEqual(pending.requirementsDue,['Dados de teste']);
 });

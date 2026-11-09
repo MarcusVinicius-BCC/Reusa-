@@ -4,6 +4,8 @@ const stripe = require('../services/stripe-payments');
 const fail = (status, message) => { throw Object.assign(new Error(message), {status}); };
 const parse = value => { try { return JSON.parse(value || '{}'); } catch { return {}; } };
 const accountColumn = () => stripe.liveMode() ? 'stripe_live_account_id' : 'stripe_test_account_id';
+const accountVersionColumn = () => stripe.liveMode() ? 'stripe_live_account_version' : 'stripe_test_account_version';
+const accountVersion = user => user[accountVersionColumn()]==='v2'?'v2':'v1';
 const objectId = value => typeof value === 'string' ? value : value?.id;
 const closedDispute = status => !status || ['won','warning_closed'].includes(status);
 function paymentView(p) {
@@ -54,15 +56,15 @@ function registerStripeRoutes(app, {postgres, sqlite, authenticate, jwt, jwtSecr
     if(!user)fail(404,'Usuário não encontrado.');
     const id=user[accountColumn()];
     if(!id)return {...stripe.sellerView(null),demoMode:stripe.demoEnabled(),testMode:stripe.isTestEnvironment(),liveMode:stripe.liveMode(),connectEnabled:process.env.STRIPE_CONNECT_ENABLED==='true'};
-    const account=await stripe.connectedAccount(id);
+    const account=await stripe.connectedAccount(id,accountVersion(user));
     const view=stripe.sellerView(account);
     await work(c=>c.query('UPDATE users SET stripe_status_json=$1,stripe_checked_at=$2 WHERE id=$3',[JSON.stringify(view),now(),userId]));
     return {...view,demoMode:stripe.demoEnabled(),testMode:stripe.isTestEnvironment(),liveMode:stripe.liveMode(),connectEnabled:process.env.STRIPE_CONNECT_ENABLED==='true'};
   }
-  const onboardingLink=async(userId,accountId)=>{
+  const onboardingLink=async(userId,accountId,version)=>{
     const state=jwt.sign({purpose:'stripe-onboarding',sub:userId,accountId,live:stripe.liveMode()},jwtSecret,{expiresIn:'15m'});
     const base=String(process.env.APP_BASE_URL).replace(/\/$/,'');
-    return stripe.accountLink(accountId,base+'/api/payments/stripe/refresh?state='+encodeURIComponent(state),base+'/configuracoes?stripe_onboarding=1');
+    return stripe.accountLink(accountId,base+'/api/payments/stripe/refresh?state='+encodeURIComponent(state),base+'/configuracoes?stripe_onboarding=1',version);
   };
   app.get('/api/payments/stripe/status',authenticate,route(async(req,res)=>{
     if(stripe.demoEnabled())return res.json({demoMode:true,connected:false,chargesEnabled:false,payoutsEnabled:false,liveMode:false,testMode:true,connectEnabled:false});
@@ -74,12 +76,14 @@ function registerStripeRoutes(app, {postgres, sqlite, authenticate, jwt, jwtSecr
     if(process.env.STRIPE_CONNECT_ENABLED!=='true')fail(503,'O cadastro de vendedores ainda não foi habilitado na plataforma.');
     const user=await queryOne('SELECT * FROM users WHERE id=$1',[req.user.id]);
     let accountId=user[accountColumn()];
+    let version=accountVersion(user);
     if(!accountId){
-      const created=await stripe.createConnectedAccount(user.email,'reusa-seller-'+(stripe.liveMode()?'live-':'test-')+user.id);
-      await work(c=>c.query('UPDATE users SET '+accountColumn()+'=$1,stripe_account_id=$2 WHERE id=$3 AND '+accountColumn()+' IS NULL',[created.id,created.id,user.id]));
-      accountId=(await queryOne('SELECT * FROM users WHERE id=$1',[user.id]))[accountColumn()];
+      const created=await stripe.createConnectedAccount(user.email,'reusa-seller-v2-'+(stripe.liveMode()?'live-':'test-')+user.id);
+      if(!/^acct_[A-Za-z0-9]+$/.test(created?.id||'')||created.object!=='v2.core.account')fail(502,'A Stripe não retornou uma conta de vendedor válida. Retome o cadastro.');
+      await work(c=>c.query('UPDATE users SET '+accountColumn()+'=$1,stripe_account_id=$2,'+accountVersionColumn()+"='v2' WHERE id=$3 AND "+accountColumn()+' IS NULL',[created.id,created.id,user.id]));
+      const stored=await queryOne('SELECT * FROM users WHERE id=$1',[user.id]);accountId=stored[accountColumn()];version=accountVersion(stored);
     }
-    const link=await onboardingLink(user.id,accountId);res.json({authorizationUrl:link.url});
+    const link=await onboardingLink(user.id,accountId,version);res.json({authorizationUrl:link.url});
   }));
   app.get('/api/payments/stripe/refresh',route(async(req,res)=>{
     let state;
@@ -87,12 +91,12 @@ function registerStripeRoutes(app, {postgres, sqlite, authenticate, jwt, jwtSecr
     if(state.purpose!=='stripe-onboarding'||state.live!==stripe.liveMode())fail(403,'Retome o cadastro pelas configurações.');
     const user=await queryOne('SELECT * FROM users WHERE id=$1',[state.sub]);
     if(!user||user[accountColumn()]!==state.accountId)fail(403,'Cadastro inválido.');
-    res.redirect((await onboardingLink(user.id,state.accountId)).url);
+    res.redirect((await onboardingLink(user.id,state.accountId,accountVersion(user))).url);
   }));
   app.post('/api/payments/stripe/dashboard',authenticate,route(async(req,res)=>{
     const user=await queryOne('SELECT * FROM users WHERE id=$1',[req.user.id]);
     if(!user?.[accountColumn()])fail(409,'Conecte sua conta Stripe primeiro.');
-    res.json({url:(await stripe.dashboardLink(user[accountColumn()])).url});
+    res.json({url:(await stripe.dashboardLink(user[accountColumn()],accountVersion(user))).url});
   }));
   // Check the provider again before allowing the seller to reserve a sale.
   const sellerGate=route(async(req,res,next)=>{
@@ -241,7 +245,7 @@ function registerStripeRoutes(app, {postgres, sqlite, authenticate, jwt, jwtSecr
       const account=configured&&!stripe.demoEnabled()?seller[accountColumn()]:null;
       if(configured&&!stripe.demoEnabled()&&!account)fail(409,'O vendedor precisa concluir o cadastro Stripe.');
       const id='payment-'+crypto.createHash('sha256').update(n.id+':'+key).digest('hex').slice(0,40);
-      const request={paymentId:id,postId:post.id,title:post.title,amountCents:amount,payerEmail:payer.email,method,sellerAccountId:account,returnBaseUrl:process.env.APP_BASE_URL,expiresAt:Math.floor(clock().getTime()/1000)+3600};
+      const request={paymentId:id,postId:post.id,title:post.title,amountCents:amount,payerEmail:payer.email,method,sellerAccountId:account,sellerAccountVersion:accountVersion(seller),returnBaseUrl:process.env.APP_BASE_URL,expiresAt:Math.floor(clock().getTime()/1000)+3600};
       await c.query('INSERT INTO payments(id,negotiation_id,payer_id,payee_id,amount_cents,currency,method,status,idempotency_key,provider_reference,created_at,updated_at,provider_account_id,provider_request_json,provider_livemode) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)',[id,n.id,n.interested_id,n.owner_id,amount,currency,method,configured?'processing':'succeeded',key,configured?'pending_'+id:'test_'+id,now(),now(),account,configured?JSON.stringify(request):null,configured?Number(stripe.liveMode()):null]);
       const payment=await one(c,'SELECT * FROM payments WHERE id=$1',[id]);await audit(c,{...payment,status:null},payment.status,'payment_attempt_recorded',req.correlationId);
       if(!configured)await c.query('UPDATE payments SET paid_at=$1 WHERE id=$2',[now(),id]);
@@ -293,6 +297,7 @@ function registerStripeRoutes(app, {postgres, sqlite, authenticate, jwt, jwtSecr
 
   const checkoutTypes=['checkout.session.completed','checkout.session.async_payment_succeeded','checkout.session.async_payment_failed','checkout.session.expired'];
   const financialTypes=['charge.refunded','refund.created','refund.updated','refund.failed','charge.dispute.created','charge.dispute.updated','charge.dispute.closed'];
+  const accountTypes=['v2.core.account.created','v2.core.account.updated','v2.core.account.closed','v2.core.account[configuration.merchant].capability_status_updated','v2.core.account[configuration.merchant].updated','v2.core.account[requirements].updated','v2.core.account[defaults].updated'];
   async function processEvent(id) {
     const event=await work(async c=>{
       const e=await one(c,'SELECT * FROM stripe_webhook_events WHERE id=$1'+lock,[id]);
@@ -305,7 +310,12 @@ function registerStripeRoutes(app, {postgres, sqlite, authenticate, jwt, jwtSecr
       if(event.account){
         const user=await queryOne('SELECT * FROM users WHERE '+accountColumn()+'=$1',[event.account]);
         if(!user){await work(c=>c.query("UPDATE stripe_webhook_events SET status='processed',processed_at=$1 WHERE id=$2",[now(),id]));return;}
-        if(event.type==='account.updated')await sellerStatus(user.id);
+        if(event.type==='account.updated'||accountTypes.includes(event.type)&&event.type!=='v2.core.account.closed')await sellerStatus(user.id);
+        if(event.type==='v2.core.account.closed')await work(async c=>{
+          const state={...stripe.sellerView(null),connected:true,accountVersion:'v2',disabledReason:'account_closed'};
+          await c.query('UPDATE users SET stripe_status_json=$1,stripe_checked_at=$2 WHERE id=$3',[JSON.stringify(state),now(),user.id]);
+          await notice(c,user.id,'Conta Stripe encerrada','Sua conta de vendedor foi encerrada na Stripe. Novas vendas ficam bloqueadas.','/configuracoes');
+        });
         if(event.type==='account.application.deauthorized')await work(async c=>{
           const state={...stripe.sellerView(null),connected:true,disabledReason:'platform_access_revoked'};
           await c.query('UPDATE users SET stripe_status_json=$1,stripe_checked_at=$2 WHERE id=$3',[JSON.stringify(state),now(),user.id]);
@@ -341,6 +351,17 @@ function registerStripeRoutes(app, {postgres, sqlite, authenticate, jwt, jwtSecr
     await work(c=>c.query('INSERT INTO stripe_webhook_events(id,account_id,livemode,type,payload_json,next_attempt_at,received_at) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING',[event.id,event.account||'',Number(event.livemode),event.type,JSON.stringify(snapshot),now(),now()]));
     await processEvent(event.id);res.sendStatus(200);
   }));
+  app.post('/api/payments/stripe/accounts-webhook',route(async(req,res)=>{
+    const event=stripe.accountWebhookEvent(req.rawBody,req.get('stripe-signature'));
+    if(!event||typeof event.livemode!=='boolean'||event.livemode!==stripe.liveMode()||!/^evt_[A-Za-z0-9_]+$/.test(event.id||''))return res.sendStatus(401);
+    if(!accountTypes.includes(event.type))return res.sendStatus(200);
+    const accountId=event.related_object?.id;
+    if(!/^acct_[A-Za-z0-9]+$/.test(accountId||''))return res.sendStatus(400);
+    // The notification is only a trigger; current account capabilities are fetched with the platform key.
+    const snapshot={id:event.id,type:event.type,account:accountId,livemode:event.livemode,data:{object:{id:accountId}}};
+    await work(c=>c.query('INSERT INTO stripe_webhook_events(id,account_id,livemode,type,payload_json,next_attempt_at,received_at) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING',[event.id,accountId,Number(event.livemode),event.type,JSON.stringify(snapshot),now(),now()]));
+    await processEvent(event.id);res.sendStatus(200);
+  }));
   // Preserve financial records while they can still receive provider updates.
   app.delete('/api/profile',authenticate,route(async(req,res,next)=>{
     if(await queryOne('SELECT id FROM payments WHERE payer_id=$1 OR payee_id=$2 LIMIT 1',[req.user.id,req.user.id]))fail(409,'Sua conta possui registros financeiros. Solicite a exclusão ao suporte para preservar as obrigações de pagamentos e reembolsos.');
@@ -359,7 +380,7 @@ function registerStripeRoutes(app, {postgres, sqlite, authenticate, jwt, jwtSecr
     const last=await queryOne("SELECT processed_at FROM stripe_webhook_events WHERE status='processed' AND livemode=$1 ORDER BY processed_at DESC LIMIT 1",[Number(stripe.liveMode())]);
     const unresolved=await queryOne("SELECT COUNT(*) AS count FROM payments WHERE provider_livemode=$1 AND failure_code IS NOT NULL AND status='processing'",[Number(stripe.liveMode())]);
     res.json({configured:stripe.configured(),liveMode:stripe.liveMode(),demoMode:stripe.demoEnabled(),configurationError,
-      platformWebhookConfigured:!!process.env.STRIPE_WEBHOOK_SECRET,connectWebhookConfigured:!!process.env.STRIPE_CONNECT_WEBHOOK_SECRET,
+      platformWebhookConfigured:!!process.env.STRIPE_WEBHOOK_SECRET,connectWebhookConfigured:!!process.env.STRIPE_CONNECT_WEBHOOK_SECRET,accountWebhookConfigured:!!process.env.STRIPE_ACCOUNT_WEBHOOK_SECRET,
       pendingWebhooks:Number(pending.count),paymentsAwaitingReconciliation:Number(unresolved.count),lastProcessedWebhookAt:last?.processed_at||null});
   }));
   let running=false;

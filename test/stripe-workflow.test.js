@@ -10,7 +10,7 @@ const {Client}=require('pg');
 // Real HTTP handlers, transactions and HMAC signatures; only the external Stripe HTTP responses are simulated.
 async function workflow(provider){
  const previousFetch=global.fetch, savedEnv={...process.env};
- let db,repo,server,admin,schema,currentTime=new Date(),accountReady=false,creates=0,refundCreates=0,failCreate=false,failRead=false,failRefund=false,rejectOnboarding=true;
+ let db,repo,server,admin,schema,currentTime=new Date(),accountReady=false,creates=0,refundCreates=0,failCreate=false,failRead=false,failRefund=false,rejectOnboarding=true,accountClosed=false;
  const sessions=new Map(),intents=new Map(),refunds=new Map(),disputes=new Map(),createBodies=new Map();
  const baseSchema=`
  CREATE TABLE users(id TEXT PRIMARY KEY,name TEXT,email TEXT,role TEXT, stripe_account_id TEXT);
@@ -32,9 +32,11 @@ async function workflow(provider){
    const typedSchema=baseSchema.replace(/\b(created_at|updated_at|paid_at|refunded_at|confirmation_token_expires_at) TEXT/g,'$1 TIMESTAMPTZ');
    await repo.query(typedSchema);
    await repo.query(fs.readFileSync(path.join(__dirname,'../migrations/20261109_stripe_production.sql'),'utf8'));
+   await repo.query(fs.readFileSync(path.join(__dirname,'../migrations/20261109_stripe_v2_accounts.sql'),'utf8'));
   }else{
    const SQL=await require('sql.js')();db=new SQL.Database();db.exec(baseSchema);
    const migration=fs.readFileSync(path.join(__dirname,'../migrations/20261109_stripe_production.sql'),'utf8').replaceAll('ADD COLUMN IF NOT EXISTS','ADD COLUMN');db.exec(migration);
+   db.exec(fs.readFileSync(path.join(__dirname,'../migrations/20261109_stripe_v2_accounts.sql'),'utf8').replaceAll('ADD COLUMN IF NOT EXISTS','ADD COLUMN'));
   }
   const all=(q,p=[])=>{const r=db.exec(q,p)[0];return r?r.values.map(row=>Object.fromEntries(r.columns.map((k,i)=>[k,row[i]]))):[]};
   const sql=async(q,p=[])=>repo?(await repo.query(q,p)).rows:all(q.replace(/\$\d+/g,'?'),p);
@@ -46,18 +48,24 @@ async function workflow(provider){
    return 'n_'+id;
   };
   await sql("INSERT INTO users(id,name,email,role) VALUES('seller','Seller','seller@example.test','user'),('buyer','Buyer','buyer@example.test','user'),('admin','Admin','admin@example.test','admin')");
-  Object.assign(process.env,{NODE_ENV:'test',STRIPE_SECRET_KEY:'sk_test_workflow',APP_BASE_URL:'https://reusa.example',STRIPE_WEBHOOK_SECRET:'whsec_platform',STRIPE_CONNECT_WEBHOOK_SECRET:'whsec_connected',STRIPE_DEMO_MODE:'false',STRIPE_CONNECT_ENABLED:'true',STRIPE_ENABLE_LIVE:'false',STRIPE_PIX_ENABLED:'false'});
+  Object.assign(process.env,{NODE_ENV:'test',STRIPE_SECRET_KEY:'sk_test_workflow',APP_BASE_URL:'https://reusa.example',STRIPE_WEBHOOK_SECRET:'whsec_platform',STRIPE_CONNECT_WEBHOOK_SECRET:'whsec_connected',STRIPE_ACCOUNT_WEBHOOK_SECRET:'whsec_accounts',STRIPE_DEMO_MODE:'false',STRIPE_CONNECT_ENABLED:'true',STRIPE_ENABLE_LIVE:'false',STRIPE_PIX_ENABLED:'false'});
   const response=value=>({ok:true,json:async()=>value});
   global.fetch=async(url,options={})=>{
-   if(!String(url).startsWith('https://api.stripe.com/'))return previousFetch(url,options);
+   if(new URL(String(url)).hostname!=='api.stripe.com')return previousFetch(url,options);
    const u=new URL(url),p=new URLSearchParams(options.body||'');
-   if(u.pathname==='/v1/accounts'&&options.method==='POST'){
-    if(rejectOnboarding){rejectOnboarding=false;return {ok:false,status:400,headers:new Headers({'request-id':'req_connect_setup'}),json:async()=>({error:{type:'invalid_request_error',message:'You must complete your platform profile to use Connect.'}})};}
-    return response({id:'acct_seller'});
+   const v2Response=(data,status=200,headers={})=>new Response(JSON.stringify(data),{status,headers:{'Content-Type':'application/json',...headers}});
+   if(u.pathname==='/v2/core/accounts'&&options.method==='POST'){
+    const sent=JSON.parse(options.body);assert.equal(sent.type,undefined);assert.equal(sent.dashboard,'full');assert.equal(sent.identity.country,'BR');assert.equal(sent.defaults.responsibilities.losses_collector,'stripe');assert.equal(sent.defaults.responsibilities.fees_collector,'stripe');assert.equal(sent.configuration.merchant.capabilities.card_payments.requested,true);
+    if(rejectOnboarding){rejectOnboarding=false;return v2Response({error:{type:'invalid_request_error',message:'You must complete your platform profile to use Connect.'}},400,{'request-id':'req_connect_setup'});}
+    return v2Response({id:'acct_seller',object:'v2.core.account',livemode:false});
    }
-   if(u.pathname==='/v1/accounts/acct_seller')return response({id:'acct_seller',charges_enabled:accountReady,payouts_enabled:accountReady,details_submitted:accountReady,requirements:{currently_due:accountReady?[]:['individual.verification.document']}});
-   if(u.pathname==='/v1/account_links')return response({url:'https://connect.stripe.com/setup/test'});
-   if(u.pathname==='/v1/accounts/acct_seller/login_links')return response({url:'https://connect.stripe.com/express/test'});
+   if(u.pathname==='/v2/core/accounts/acct_seller')return v2Response({id:'acct_seller',object:'v2.core.account',livemode:false,closed:accountClosed,dashboard:'full',defaults:{responsibilities:{fees_collector:'stripe',losses_collector:'stripe'}},configuration:{merchant:{capabilities:{card_payments:{status:accountReady?'active':'pending'},stripe_balance:{payouts:{status:accountReady?'active':'pending'}}}}},requirements:{entries:accountReady?[]:[{description:'Documento de teste',awaiting_action_from:'user',minimum_deadline:{status:'currently_due'}}]}});
+   if(u.pathname==='/v1/accounts/acct_existing')return response({id:'acct_existing',charges_enabled:true,payouts_enabled:true,details_submitted:true});
+   if(u.pathname==='/v1/account_links'){assert.equal(p.get('account'),'acct_existing');return response({url:'https://connect.stripe.com/setup/existing'});}
+   if(u.pathname==='/v2/core/account_links'){
+    const sent=JSON.parse(options.body);assert.equal(sent.account,'acct_seller');assert.equal(sent.use_case.type,'account_onboarding');assert.match(sent.use_case.account_onboarding.refresh_url,/stripe\/refresh/);assert.match(sent.use_case.account_onboarding.return_url,/configuracoes/);
+    return v2Response({object:'v2.core.account_link',url:'https://connect.stripe.com/setup/test'});
+   }
    if(u.pathname==='/v1/checkout/sessions'&&options.method==='POST'){
     assert.equal(options.headers['Stripe-Account'],'acct_seller');
     const key=options.headers['Idempotency-Key'];
@@ -111,16 +119,27 @@ async function workflow(provider){
   assert.equal((await one("SELECT stripe_test_account_id FROM users WHERE id='seller'")).stripe_test_account_id,null);
   assert.equal((await call('/api/payments/stripe/connect','seller')).status,200);
   assert.equal((await one("SELECT stripe_test_account_id FROM users WHERE id='seller'")).stripe_test_account_id,'acct_seller');
+  assert.equal((await one("SELECT stripe_test_account_version FROM users WHERE id='seller'")).stripe_test_account_version,'v2');
   assert.equal((await call('/api/payments/stripe/status','seller')).data.chargesEnabled,false);
   assert.equal((await call('/api/payments/stripe/status','seller')).data.testMode,true);
+  const accountEvent={id:'evt_account_v2',object:'v2.core.event',type:'v2.core.account[configuration.merchant].capability_status_updated',livemode:false,related_object:{id:'acct_seller',type:'v2.core.account',url:'/v2/core/accounts/acct_seller'}};
+  const accountRaw=JSON.stringify(accountEvent),accountTs=Math.floor(Date.now()/1000),accountSignature='t='+accountTs+',v1='+crypto.createHmac('sha256','whsec_accounts').update(accountTs+'.'+accountRaw).digest('hex');
+  assert.equal((await call('/api/payments/stripe/accounts-webhook','buyer',accountEvent)).status,401);
+  assert.equal((await call('/api/payments/stripe/accounts-webhook','buyer',accountEvent,'POST',{'stripe-signature':accountSignature})).status,200);
+  assert.equal((await one("SELECT status FROM stripe_webhook_events WHERE id='evt_account_v2'")).status,'processed');
+  assert.equal((await call('/api/payments/stripe/accounts-webhook','buyer',accountEvent,'POST',{'stripe-signature':accountSignature})).status,200);
   const n=await addSale('p1');
   const agreement=await one('SELECT * FROM collection_deliveries WHERE negotiation_id=$1',[n]);await sql('DELETE FROM collection_deliveries WHERE negotiation_id=$1',[n]);
   assert.equal((await call('/api/negotiations/'+n+'/proposal','seller',{decision:'accepted'},'PATCH')).status,409);
   accountReady=true;
+  await sql("INSERT INTO users(id,name,email,role,stripe_test_account_id) VALUES('existing','Existing','existing@example.test','user','acct_existing')");
+  assert.equal((await call('/api/payments/stripe/status','existing')).data.chargesEnabled,true);
+  assert.equal((await call('/api/payments/stripe/connect','existing')).data.authorizationUrl,'https://connect.stripe.com/setup/existing');
+  assert.equal((await one("SELECT stripe_test_account_id FROM users WHERE id='existing'")).stripe_test_account_id,'acct_existing');
   assert.equal((await call('/api/payments/stripe/status','seller')).data.chargesEnabled,true);
   assert.equal((await call('/api/negotiations/'+n+'/proposal','seller',{decision:'accepted'},'PATCH')).status,200);
   await sql('INSERT INTO collection_deliveries(id,negotiation_id,status,proposed_by,accepted_by,confirmation_token_expires_at,payment_locked,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[agreement.id,n,agreement.status,agreement.proposed_by,agreement.accepted_by,agreement.confirmation_token_expires_at,agreement.payment_locked,agreement.updated_at]);
-  assert.equal((await call('/api/payments/stripe/dashboard','seller',{})).status,200);
+  const dashboard=await call('/api/payments/stripe/dashboard','seller',{});assert.equal(dashboard.status,200);assert.equal(dashboard.data.url,'https://dashboard.stripe.com/');
   const [a,b]=await Promise.all([pay(n,'same_attempt_123456789'),pay(n,'same_attempt_123456789')]);
   assert.ok([200,201].includes(a.status),JSON.stringify(a));assert.ok([200,201].includes(b.status),JSON.stringify(b));assert.equal(creates,1);
   let payment=await one('SELECT * FROM payments WHERE negotiation_id=$1',[n]);
@@ -200,6 +219,11 @@ async function workflow(provider){
   currentTime=new Date(currentTime.getTime()+24*3600000);await flow.runReconciliation();assert.equal(creates,beforeOldRetry);assert.match((await get(uncertain.id)).provider_reference,/^pending_/);
   assert.equal((await call('/api/admin/payments/stripe','buyer')).status,403);
   const diagnostics=await call('/api/admin/payments/stripe','admin');assert.equal(diagnostics.status,200);assert.ok(diagnostics.data.lastProcessedWebhookAt);assert.ok(!JSON.stringify(diagnostics.data).includes('sk_test_workflow'));
+  accountClosed=true;
+  const closedEvent={...accountEvent,id:'evt_account_closed',type:'v2.core.account.closed'},closedRaw=JSON.stringify(closedEvent),closedTs=Math.floor(Date.now()/1000),closedSig='t='+closedTs+',v1='+crypto.createHmac('sha256','whsec_accounts').update(closedTs+'.'+closedRaw).digest('hex');
+  assert.equal((await call('/api/payments/stripe/accounts-webhook','buyer',closedEvent,'POST',{'stripe-signature':closedSig})).status,200);
+  assert.equal((await call('/api/payments/stripe/status','seller')).data.chargesEnabled,false);
+  assert.equal((await call('/api/payments/stripe/status','seller')).data.payoutsEnabled,false);
   // Switching to live must never reuse a seller's sandbox account.
   Object.assign(process.env,{STRIPE_SECRET_KEY:'sk_live_fixture',STRIPE_ENABLE_LIVE:'true'});
   assert.equal((await call('/api/payments/stripe/status','seller')).data.connected,false);
