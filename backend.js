@@ -562,7 +562,8 @@ function userFromRow(row) {
     suspended: Boolean(row.suspended),
     notificationPreferences: jsonArray(row.notification_preferences_json)
     , stripeConnected: Boolean(row.stripe_account_id),
-    stripeDemoMode: stripe.demoEnabled()
+    stripeDemoMode: stripe.demoEnabled(),
+    stripePixEnabled: stripe.configured() && process.env.STRIPE_PIX_ENABLED === 'true'
   };
 }
 
