@@ -76,7 +76,8 @@ function userView(row) {
     achievements: json(row.achievements_json), role: row.role || 'user',
     suspended: Boolean(row.suspended), notificationPreferences: json(row.notification_preferences_json),
     stripeConnected: Boolean(row.stripe_account_id),
-    stripeDemoMode: stripe.demoEnabled()
+    stripeDemoMode: stripe.demoEnabled(),
+    stripePixEnabled: stripe.configured() && process.env.STRIPE_PIX_ENABLED === 'true'
   };
 }
 
