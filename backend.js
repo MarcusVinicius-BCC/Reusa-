@@ -2207,6 +2207,7 @@ async function start() {
     if (negotiation.proposal_status && negotiation.proposal_status !== 'none') return res.status(409).json({ error: 'Você já enviou uma oferta para este anúncio.' });
     if (!Number.isSafeInteger(amountCents) || amountCents < 100 || amountCents > 100000000) return res.status(400).json({ error: 'Amount must be between R$ 1,00 and R$ 1.000.000,00' });
     if (!['pix', 'card'].includes(method)) return res.status(400).json({ error: 'Use pix ou cartão' });
+    if (method === 'pix' && process.env.STRIPE_PIX_ENABLED !== 'true') return res.status(409).json({ error: 'Pix ainda não está habilitado nesta integração Stripe. Escolha cartão.' });
     const now = new Date().toISOString();
     run("UPDATE negotiations SET proposal_status = 'pending', proposal_amount_cents = ?, proposal_method = ?, proposal_created_at = ?, updated_at = ? WHERE id = ?", [amountCents, method, now, now, negotiation.id]);
     if (!eventPublisher.enabled()) notification(negotiation.owner_id, 'negotiation', 'Nova proposta recebida', `Uma proposta de ${formatMoney(amountCents)} foi enviada.`, `/anuncios/${negotiation.post_id}`);
