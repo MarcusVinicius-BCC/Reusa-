@@ -30,3 +30,5 @@
 .delivery-steps li{position:relative;z-index:1;min-width:0;padding:0 3px;text-align:center}
 .delivery-steps li>span{position:relative;margin:0 auto 7px;box-shadow:0 0 0 4px var(--app-card,#fff);transition:background .3s ease,color .3s ease}
 @media(prefers-reduced-motion:reduce){.delivery-steps::after,.delivery-steps li>span{transition:none}}
+
+.delivery-refund{margin:16px 0;padding:16px;border:1px solid var(--outline);border-radius:14px}.delivery-refund p{font-size:12px;line-height:1.6}.seller-payment-actions{display:flex;gap:10px;flex-wrap:wrap;margin:12px 0 20px}.seller-payment-actions .secondary-btn{padding:10px 14px;border:1px solid var(--outline);border-radius:12px;background:white;color:var(--on-primary-container);cursor:pointer}.seller-payment-actions button:disabled{opacity:.6;cursor:wait}

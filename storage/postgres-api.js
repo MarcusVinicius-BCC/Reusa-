@@ -4,7 +4,7 @@ const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const { isLikelyResidentialAddress } = require('./location-validation');
 const { buildCollectionPointAddress, geocodeCollectionPoint } = require('./collection-point-geocoding');
-const mercadoPago = require('../services/mercado-pago');
+const stripe = require('../services/stripe-payments');
 
 const DONATION_GOAL = 'Doa\u00e7\u00e3o';
 const SALE_GOAL = 'Venda';
@@ -75,8 +75,9 @@ function userView(row) {
     received: Number(row.received || 0), carbonSavedPercent: Number(row.carbon_saved_percent || 0),
     achievements: json(row.achievements_json), role: row.role || 'user',
     suspended: Boolean(row.suspended), notificationPreferences: json(row.notification_preferences_json),
-    mercadoPagoConnected: Boolean(row.mercado_pago_user_id),
-    mercadoPagoDemoMode: mercadoPago.testMode() && mercadoPago.isConfigured()
+    stripeConnected: Boolean(row.stripe_account_id),
+    stripeDemoMode: stripe.demoEnabled(),
+    stripePixEnabled: stripe.configured() && process.env.STRIPE_PIX_ENABLED === 'true'
   };
 }
 
@@ -364,6 +365,7 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       if (!post || post.goal !== SALE_GOAL) return res.status(400).json({ error: 'Money offers are only available for items marked for sale' });
       if (!Number.isSafeInteger(amountCents) || amountCents < 100 || amountCents > 100000000) return res.status(400).json({ error: 'Amount must be between R$ 1,00 and R$ 1.000.000,00' });
       if (!['pix', 'card'].includes(method)) return res.status(400).json({ error: 'Use pix ou cartão' });
+    if (method === 'pix' && process.env.STRIPE_PIX_ENABLED !== 'true') return res.status(409).json({ error: 'Pix ainda não está habilitado nesta integração Stripe. Escolha cartão.' });
       const createdAt = new Date().toISOString();
       const updated = await db.transaction(async (client) => {
         const result = await client.query('UPDATE negotiations SET proposal_status=$1,proposal_amount_cents=$2,proposal_method=$3,proposal_created_at=$4,updated_at=$4 WHERE id=$5 RETURNING *', ['pending', amountCents, method, createdAt, negotiation.id]);
@@ -394,11 +396,9 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
               !['interested', 'reserved'].includes(negotiation.status)) {
             throw Object.assign(new Error('Este anúncio já está reservado para outra pessoa ou não está disponível.'), { status: 409 });
           }
-          if (mercadoPago.isConfigured()) {
-            const seller = (await client.query('SELECT mercado_pago_access_token FROM users WHERE id=$1', [req.user.id])).rows[0];
-            if (!mercadoPago.checkoutSellerToken(seller?.mercado_pago_access_token)) {
-              throw Object.assign(new Error('Conecte sua conta Mercado Pago para receber pagamentos.'), { status: 409 });
-            }
+          if (stripe.configured() && !stripe.demoEnabled()) {
+            const seller = (await client.query('SELECT stripe_account_id FROM users WHERE id=$1', [req.user.id])).rows[0];
+            if (!seller?.stripe_account_id) throw Object.assign(new Error('Conecte sua conta Stripe para receber pagamentos.'), { status: 409 });
           }
           await client.query("UPDATE negotiations SET status='interested',proposal_status=CASE WHEN proposal_status='pending' THEN 'rejected' ELSE proposal_status END,updated_at=now() WHERE post_id=$1 AND id<>$2 AND status='reserved'", [post.id, negotiation.id]);
           await client.query("UPDATE negotiations SET proposal_status='accepted',status='reserved',updated_at=now() WHERE id=$1", [negotiation.id]);
@@ -416,25 +416,6 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       return next(error);
     }
   });
-  app.get('/api/negotiations/:id/payment', authenticate, async (req, res, next) => {
-    try {
-      const negotiation = await db.one('SELECT * FROM negotiations WHERE id=$1', [req.params.id]);
-      if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
-      if (![negotiation.owner_id, negotiation.interested_id].includes(req.user.id)) return res.status(403).json({ error: 'Payment access denied' });
-      const payment = await db.one('SELECT * FROM payments WHERE negotiation_id=$1 ORDER BY created_at DESC LIMIT 1', [negotiation.id]);
-      let pix = null;
-      if (payment && payment.method === 'pix' && payment.status === 'processing' && payment.payer_id === req.user.id && !payment.checkout_url && mercadoPago.pixEnabled()) {
-        try {
-          const seller = await db.one('SELECT mercado_pago_access_token FROM users WHERE id=$1', [payment.payee_id]);
-          const token = mercadoPago.checkoutSellerToken(seller?.mercado_pago_access_token);
-          if (token) pix = await mercadoPago.pixDisplay(await mercadoPago.order(payment.provider_reference, token));
-        } catch (error) {
-          console.warn('[mercadopago-pix] Pix instructions temporarily unavailable', { status: error.status || 502 });
-        }
-      }
-      return res.json({ payment: payment ? { ...paymentView(payment), ...(pix ? { pix } : {}) } : null });
-    } catch (error) { return next(error); }
-  });
   app.get('/api/profile/payment-items', authenticate, async (req, res, next) => {
     try {
       const rows = await db.many(`SELECT n.id AS negotiation_id,n.status,n.proposal_status,n.proposal_amount_cents,n.proposal_method,n.proposal_created_at,p.id AS post_id,p.title,p.image_url,p.location
@@ -446,128 +427,15 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       return res.json({ items: rows.map((row) => ({ negotiationId: row.negotiation_id, postId: row.post_id, title: row.title, imageUrl: row.image_url, location: row.location, negotiationStatus: row.status, proposalStatus: row.proposal_status, amountCents: row.proposal_amount_cents, method: row.proposal_method, createdAt: row.proposal_created_at, payment: paymentByNegotiation.get(row.negotiation_id) || null })) });
     } catch (error) { return next(error); }
   });
-  app.post('/api/negotiations/:id/payment', authenticate, async (req, res, next) => {
-    try {
-      const negotiation = await db.one('SELECT * FROM negotiations WHERE id=$1', [req.params.id]);
-      const amountCents = Number(req.body?.amountCents);
-      const currency = String(req.body?.currency || 'BRL').trim().toUpperCase();
-      const method = String(req.body?.method || '').trim().toLowerCase();
-      const idempotencyKey = String(req.body?.idempotencyKey || '').trim();
-      if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
-      if (negotiation.interested_id !== req.user.id) return res.status(403).json({ error: 'Only the interested user can make this payment' });
-      if (negotiation.status !== 'reserved') return res.status(400).json({ error: 'The negotiation must be reserved before payment' });
-      const post = await db.one('SELECT title,goal FROM posts WHERE id=$1', [negotiation.post_id]);
-      if (!post || post.goal !== SALE_GOAL) return res.status(400).json({ error: 'Payments are only available for items marked for sale' });
-      if (!Number.isSafeInteger(amountCents) || amountCents < 100 || amountCents > 100000000 || currency !== 'BRL' || !['pix', 'card'].includes(method)) return res.status(400).json({ error: 'Use a valid BRL amount and pix ou cartão' });
-      if (!/^[A-Za-z0-9._:-]{16,128}$/.test(idempotencyKey)) return res.status(400).json({ error: 'A valid idempotency key is required' });
-      // Validate the accepted proposal before contacting Mercado Pago.
-      // Keep the locked validation below to guard concurrent updates.
-      if (negotiation.proposal_status !== 'accepted' ||
-          Number(negotiation.proposal_amount_cents) !== amountCents ||
-          negotiation.proposal_method !== method) {
-        return res.status(400).json({ error: 'O pagamento deve usar exatamente o valor e a forma de pagamento da proposta aceita. Confira a proposta e tente novamente.' });
-      }
-      const previousPayment = await db.one('SELECT * FROM payments WHERE negotiation_id=$1 AND idempotency_key=$2', [negotiation.id, idempotencyKey]);
-      if (previousPayment) {
-        if (Number(previousPayment.amount_cents) !== amountCents || previousPayment.currency !== currency || previousPayment.method !== method) {
-          return res.status(409).json({ error: 'Esta chave de pagamento já foi utilizada com outros dados.' });
-        }
-        return res.status(200).json({ payment: paymentView(previousPayment), idempotentReplay: true });
-      }
-      const successfulPayment = await db.one("SELECT id FROM payments WHERE negotiation_id=$1 AND status='succeeded'", [negotiation.id]);
-      if (successfulPayment) return res.status(409).json({ error: 'Esta negociação já possui um pagamento concluído.' });
-      const paymentId = 'payment-' + crypto.createHash('sha256').update(`${negotiation.id}:${idempotencyKey}`).digest('hex').slice(0, 40);
-      let provider;
-      if (mercadoPago.isConfigured()) {
-        const payer = await db.one('SELECT email FROM users WHERE id=$1', [negotiation.interested_id]);
-        const seller = await db.one('SELECT mercado_pago_access_token FROM users WHERE id=$1', [negotiation.owner_id]);
-        provider = await (method === 'pix' && mercadoPago.pixEnabled() ? mercadoPago.createPixOrder : mercadoPago.createOrder)({ paymentId, postId: negotiation.post_id, title: post.title, amountCents, payerEmail: payer?.email, method, sellerAccessToken: mercadoPago.checkoutSellerToken(seller?.mercado_pago_access_token) });
-      } else if (process.env.NODE_ENV === 'test') {
-        provider = { id: `test_${crypto.randomUUID()}`, checkoutUrl: null };
-      } else {
-        return res.status(503).json({ error: 'Mercado Pago is not configured. Set MERCADOPAGO_ACCESS_TOKEN and APP_BASE_URL.' });
-      }
-      const result = await db.transaction(async (client) => {
-        const lockedNegotiation = (await client.query('SELECT * FROM negotiations WHERE id=$1 FOR UPDATE', [negotiation.id])).rows[0];
-        const existing = (await client.query('SELECT * FROM payments WHERE negotiation_id=$1 AND idempotency_key=$2', [lockedNegotiation.id, idempotencyKey])).rows[0];
-        if (existing) {
-          if (Number(existing.amount_cents) !== amountCents || existing.currency !== currency || existing.method !== method) {
-            throw Object.assign(new Error('The idempotency key was already used with different payment data'), { status: 409 });
-          }
-          return { payment: existing, idempotentReplay: true };
-        }
-        if (lockedNegotiation.proposal_status !== 'accepted' ||
-            Number(lockedNegotiation.proposal_amount_cents) !== amountCents || lockedNegotiation.proposal_method !== method) {
-          throw Object.assign(new Error('Payment must use the accepted proposal amount and method'), { status: 400 });
-        }
-        if ((await client.query("SELECT id FROM payments WHERE negotiation_id=$1 AND status='succeeded'", [lockedNegotiation.id])).rowCount) {
-          throw Object.assign(new Error('This negotiation already has a successful payment'), { status: 409 });
-        }
-        const now = new Date().toISOString();
-        const payment = { id: paymentId, negotiation_id: lockedNegotiation.id, payer_id: lockedNegotiation.interested_id, payee_id: lockedNegotiation.owner_id, amount_cents: amountCents, currency, method, status: mercadoPago.isConfigured() ? 'processing' : 'succeeded', idempotency_key: idempotencyKey, provider_reference: provider.id, checkout_url: provider.checkoutUrl, failure_code: null, created_at: now, updated_at: now, paid_at: mercadoPago.isConfigured() ? null : now, refunded_at: null };
-        await client.query('INSERT INTO payments (id,negotiation_id,payer_id,payee_id,amount_cents,currency,method,status,idempotency_key,provider_reference,checkout_url,failure_code,created_at,updated_at,paid_at,refunded_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16)', Object.values(payment));
-        await client.query('INSERT INTO payment_audit_events (id,payment_id,from_status,to_status,reason,correlation_id,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7)', [id('payment-audit'), payment.id, null, payment.status, mercadoPago.isConfigured() ? 'mercado_pago_checkout_created' : 'test_payment_approved', req.correlationId, now]);
-        return { payment, idempotentReplay: false };
-      });
-      return res.status(result.idempotentReplay ? 200 : 201).json({ payment: { ...paymentView(result.payment), ...(result.idempotentReplay ? {} : provider.pix ? { pix: provider.pix } : {}) }, idempotentReplay: result.idempotentReplay });
-    } catch (error) { return next(error); }
-  });
-  app.post('/api/payments/mercadopago/webhook', async (req, res) => {
-    const orderId = String(req.query?.['data.id'] || req.body?.data?.id || '').trim();
-    const topic = String(req.query?.type || req.body?.type || '').toLowerCase();
-    if (topic !== 'order' || !orderId) return res.sendStatus(200);
-    if (!mercadoPago.webhookIsValid({ dataId: orderId, requestId: req.get('x-request-id'), signature: req.get('x-signature') })) return res.sendStatus(401);
-    try {
-      const current = await db.one('SELECT * FROM payments WHERE provider_reference=$1', [orderId]);
-      if (!current) return res.sendStatus(503); // Retry: the order may not yet be persisted locally.
-      const seller = await db.one('SELECT mercado_pago_access_token FROM users WHERE id=$1', [current.payee_id]);
-      const sellerToken = mercadoPago.checkoutSellerToken(seller?.mercado_pago_access_token);
-      if (!sellerToken) return res.sendStatus(503);
-      const providerOrder = await mercadoPago.order(orderId, sellerToken);
-      const status = mercadoPago.verifiedOrderStatus(providerOrder, current);
-      if (!status || current.status === status) return res.sendStatus(200);
-      if (['succeeded', 'refunded'].includes(current.status) && status !== 'refunded') return res.sendStatus(200);
-      const now = new Date().toISOString();
-      const failureCode = status === 'failed' ? String(providerOrder.status_detail || providerOrder.status) : null;
-      await db.transaction(async (client) => {
-        const locked = (await client.query('SELECT * FROM payments WHERE id=$1 FOR UPDATE', [current.id])).rows[0];
-        if (!locked || locked.status === status || (['succeeded', 'refunded'].includes(locked.status) && status !== 'refunded')) return;
-        await client.query('UPDATE payments SET status=$1,failure_code=$2,updated_at=$3,paid_at=$4,refunded_at=$5 WHERE id=$6', [status, failureCode, now, status === 'succeeded' ? now : locked.paid_at, status === 'refunded' ? now : locked.refunded_at, locked.id]);
-        if (['failed', 'refunded'].includes(status)) await client.query('UPDATE collection_deliveries SET payment_locked=0 WHERE negotiation_id=$1', [locked.negotiation_id]);
-        await client.query('INSERT INTO payment_audit_events(id,payment_id,from_status,to_status,reason,correlation_id,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)', [id('payment-audit'), locked.id, locked.status, status, `mercado_pago_order_${providerOrder.status}`, id('webhook'), now]);
-      });
-      return res.sendStatus(200);
-    } catch (error) {
-      console.error('Mercado Pago order webhook failed', error);
-      return res.sendStatus(error.status === 409 ? 200 : 500);
-    }
-  });
-  app.patch('/api/posts/:id/status', authenticate, async (req, res, next) => {
-    try {
-      const status = String(req.body?.status || '').trim();
-      const post = await db.one('SELECT * FROM posts WHERE id=$1', [req.params.id]);
-      if (!post) return res.status(404).json({ error: 'Post not found' });
-      if (post.author_id !== req.user.id) return res.status(403).json({ error: 'Only the owner can change this status' });
-      if (!['Disponível', 'Encerrado'].includes(status)) return res.status(400).json({ error: 'Use the reservation or completion flow for this status' });
-      const updated = await db.transaction(async (client) => {
-        const row = await client.query('UPDATE posts SET status=$1,reserved_by=CASE WHEN $1=$2 THEN NULL ELSE reserved_by END,updated_at=now() WHERE id=$3 RETURNING *', [status, 'Disponível', post.id]);
-        if (status === 'Disponível') await client.query("UPDATE negotiations SET status='interested',updated_at=now() WHERE post_id=$1 AND status='reserved'", [post.id]);
-        return row.rows[0];
-      });
-      return res.json({ post: await postView(db, updated, req.user.id) });
-    } catch (error) { return next(error); }
-  });
   app.post('/api/posts/:id/reserve', authenticate, async (req, res, next) => {
     try {
       const result = await db.transaction(async (client) => {
         const postResult = await client.query('SELECT * FROM posts WHERE id=$1 FOR UPDATE', [req.params.id]);
         const post = postResult.rows[0]; if (!post) throw Object.assign(new Error('Post not found'), { status: 404 });
         if (post.author_id !== req.user.id) throw Object.assign(new Error('Only the owner can reserve this post'), { status: 403 });
-        if (post.goal === SALE_GOAL && mercadoPago.isConfigured()) {
-          const seller = (await client.query('SELECT mercado_pago_access_token FROM users WHERE id=$1', [req.user.id])).rows[0];
-          if (!mercadoPago.checkoutSellerToken(seller?.mercado_pago_access_token)) {
-            throw Object.assign(new Error('Conecte sua conta Mercado Pago antes de reservar este item para receber o pagamento.'), { status: 409 });
-          }
+        if (post.goal === SALE_GOAL && stripe.configured() && !stripe.demoEnabled()) {
+          const seller = (await client.query('SELECT stripe_account_id FROM users WHERE id=$1', [req.user.id])).rows[0];
+          if (!seller?.stripe_account_id) throw Object.assign(new Error('Conecte sua conta Stripe antes de reservar o anúncio.'), { status: 409 });
         }
         if (!['Disponível', 'Reservado'].includes(post.status)) throw Object.assign(new Error('This post is no longer available'), { status: 400 });
         const negotiation = (await client.query("SELECT * FROM negotiations WHERE post_id=$1 AND interested_id=$2 AND status <> 'cancelled'", [post.id, req.body?.interestedId])).rows[0];

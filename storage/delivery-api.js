@@ -28,7 +28,7 @@ function registerDeliveryRoutes(app, { postgres, sqlite, authenticate, flush, re
     return n;
   };
   const sale = async (c, n) => (await one(c, 'SELECT goal FROM posts WHERE id=$1', [n.post_id]))?.goal === 'Venda';
-  const payment = (c, id) => one(c, "SELECT id,status FROM payments WHERE negotiation_id=$1 AND status IN ('processing','succeeded') ORDER BY created_at DESC LIMIT 1", [id]);
+  const payment = (c, id) => one(c, "SELECT id,status,dispute_status,refund_status FROM payments WHERE negotiation_id=$1 AND status IN ('processing','succeeded') ORDER BY created_at DESC LIMIT 1", [id]);
   const delivery = (c, id) => one(c, 'SELECT * FROM collection_deliveries WHERE negotiation_id=$1', [id]);
   const notice = async (c, userId, title, text, n) => c.query('INSERT INTO notifications(id,user_id,type,title,text,link,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)', [crypto.randomUUID(), userId, 'negotiation', title, text, `/anuncios/${n.post_id}`, new Date().toISOString()]);
   const emit = async (c, type, data, req) => c.query('INSERT INTO event_outbox(id,type,payload_json,correlation_id,created_at) VALUES($1,$2,$3,$4,$5)', [crypto.randomUUID(), type, JSON.stringify(data), req.correlationId || 'system', new Date().toISOString()]);
@@ -37,6 +37,7 @@ function registerDeliveryRoutes(app, { postgres, sqlite, authenticate, flush, re
     if (!d) return null;
     const paid = await payment(c, n.id);
     const isSale = await sale(c, n);
+    const settled = paid?.status === 'succeeded' && (!paid.dispute_status || ['won','warning_closed'].includes(paid.dispute_status)) && !['requested','pending','requires_action'].includes(paid.refund_status);
     const point = d.collection_point_id ? await one(c, 'SELECT id,name,location FROM collection_points WHERE id=$1', [d.collection_point_id]) : null;
     const expired = new Date(d.confirmation_token_expires_at).getTime() < Date.now();
     const locked = Boolean(d.payment_locked || paid);
@@ -45,8 +46,8 @@ function registerDeliveryRoutes(app, { postgres, sqlite, authenticate, flush, re
       acceptedAt: d.accepted_at, receivedAt: d.received_at, paymentLocked: locked, expired,
       canAccept: n.status === 'reserved' && d.status === 'scheduled' && Boolean(d.proposed_by) && d.proposed_by !== userId && !expired,
       canCancel: ['scheduled','confirmed'].includes(d.status) && (!locked || (d.status === 'scheduled' && !d.accepted_by)),
-      canDispatch: n.status === 'reserved' && userId === n.owner_id && validAgreement(d) && d.status === 'confirmed' && !expired && (!isSale || paid?.status === 'succeeded'),
-      canReceive: n.status === 'reserved' && userId === n.interested_id && validAgreement(d) && (!isSale || paid?.status === 'succeeded'),
+      canDispatch: n.status === 'reserved' && userId === n.owner_id && validAgreement(d) && d.status === 'confirmed' && !expired && (!isSale || settled),
+      canReceive: n.status === 'reserved' && userId === n.interested_id && validAgreement(d) && (!isSale || settled),
       paymentReady: validAgreement(d) && !expired && n.status === 'reserved',
       incidents: await rows(c, 'SELECT i.id,i.kind,i.detail,i.created_at AS created_at,u.name AS reporter_name FROM delivery_incidents i JOIN users u ON u.id=i.reporter_id WHERE delivery_id=$1 ORDER BY i.created_at DESC LIMIT 20', [d.id]),
       paymentStatus: paid?.status || null, paymentAttemptKey: userId === n.interested_id && !paid && d.payment_locked ? d.payment_attempt_key : null };

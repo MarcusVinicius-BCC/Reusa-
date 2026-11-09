@@ -30,7 +30,7 @@ inspirações de reaproveitamento, notificações, indicadores de impacto e uma
 - [Serviços distribuídos](#serviços-distribuídos)
 - [APIs externas](#apis-externas)
 - [API própria](#api-própria)
-- [Pagamentos com Mercado Pago](#pagamentos-com-mercado-pago)
+- [Pagamentos com Stripe](#pagamentos-com-stripe-checkout-e-stripe-connect)
 - [Testes e validação](#testes-e-validação)
 - [Docker](#docker)
 - [Deploy na Railway](#deploy-na-railway)
@@ -84,7 +84,7 @@ RabbitMQ, o serviço de notificações e o serviço de impacto.
 - Propostas de negociação;
 - Reserva de itens;
 - Conclusão como doação, troca ou venda;
-- Checkout de pagamento via Mercado Pago;
+- Checkout de pagamento via Stripe;
 - Avaliações entre participantes.
 
 ### Mapa e impacto
@@ -426,100 +426,15 @@ GET|POST|PATCH|DELETE /api/admin/*
 Rotas protegidas exigem `Authorization: Bearer <token>`. Rotas administrativas
 exigem, além do token, um usuário com `role=admin`.
 
-## Pagamentos com Mercado Pago (Checkout Pro via Orders API)
+## Pagamentos com Stripe Checkout e Stripe Connect
 
-O ReUsa+ usa **Checkout Pro via Orders API** (`POST /v1/orders`), que devolve
-`checkout_url`. O frontend já redireciona o comprador ao Mercado Pago, sem receber
-ou armazenar dados de cartão. O sistema só confirma um pagamento após o webhook
-assinado e uma consulta à order na API do Mercado Pago, conferindo referência,
-moeda, valor esperado e valor efetivamente pago.
+Os novos pagamentos utilizam Stripe Checkout hospedado e contas Connect Express brasileiras. O vendedor cadastra dados e conta bancária pela Stripe; o ReUsa+ consulta a habilitação de cobranças e repasses antes de liberar vendas. Cada cobrança é criada diretamente na conta do vendedor, após o aceite da oferta e do acordo de entrega.
 
-**Modelo existente:** o anunciante conecta sua própria conta Mercado Pago
-em **Configurações > Ofertas e pagamentos > Conectar conta**. O backend usa
-o token autorizado desse vendedor para criar as orders. Esta integração
-**não** implementa divisão automática de comissões nem custódia dos valores
-pela plataforma; valide a elegibilidade da aplicação para OAuth/marketplace
-no painel antes de habilitar vendas reais.
+A integração inclui verificação de assinatura pelo SDK oficial, registro persistente de tentativas e eventos, idempotência, conciliação periódica, recuperação de respostas perdidas, reembolso integral pelo vendedor e acompanhamento de reembolsos parciais/contestações. O webhook Mercado Pago permanece para cobranças históricas. Pix inicia desabilitado e depende da habilitação efetiva pela Stripe.
 
-### Apresentação acadêmica: pagamentos em modo de demonstração
+Veja **[configuração completa de produção, vendedores e webhooks](docs/stripe-production.md)**. O documento contém as variáveis exatas do Railway, os dois destinos de eventos e os procedimentos de validação e suporte.
 
-Para apresentar o fluxo completo sem CNPJ, conta de vendedor real ou OAuth,
-utilize **exclusivamente** o Access Token de **TESTE** da aplicação e configure
-`MERCADOPAGO_TEST_MODE=true` no serviço backend do Railway.
-
-- O modo de teste usa a conta sandbox da aplicação em todas as orders; não faz
-  repasses a contas individuais de vendedores e não requer OAuth.
-- O perfil mostra **Modo de demonstração — pagamentos de teste**, em vez de
-  induzir vendedores a conectar contas reais.
-- O Checkout Pro pode ser demonstrado com cartões de **teste**; a aprovação
-  vem do provedor sandbox e o ReUsa+ atualiza o estado via webhook.
-- O Pix de teste pode mostrar QR Code, mas **não deve ser pago por aplicativo
-  bancário real**. Não prometa conclusão da transação Pix no sandbox.
-- Em nenhuma hipótese use credenciais de produção para esta apresentação.
-  `MERCADOPAGO_TEST_MODE` não transforma um token de produção em sandbox.
-- Ao encerrar a apresentação, desligue o serviço público no Railway ou
-  desabilite os fluxos de pagamento. Não basta mudar a variável para false:
-  isso ativaria o caminho de produção que ainda depende de OAuth de vendedores.
-
-A interface usa a indicação de modo teste enviada pelo backend autenticado,
-e a indicação é exibida somente quando as credenciais estão configuradas e
-`MERCADOPAGO_TEST_MODE=true`. A remoção da demonstração não afeta anúncios,
-negociações e o restante da plataforma.
-
-### Configuração no Railway / backend
-
-Configure as variáveis (nunca envie tokens ao GitHub):
-
-```text
-MERCADOPAGO_ACCESS_TOKEN=seu-access-token-da-aplicacao
-MERCADOPAGO_CLIENT_ID=seu-client-id
-MERCADOPAGO_CLIENT_SECRET=seu-client-secret
-MERCADOPAGO_WEBHOOK_SECRET=assinatura-secreta-do-webhook
-APP_BASE_URL=https://seu-dominio-publico.example
-MERCADOPAGO_REDIRECT_URI=https://seu-dominio-publico.example/api/payments/mercadopago/callback
-```
-
-O painel Mercado Pago deve autorizar a URL exata de redirecionamento OAuth:
-`https://seu-dominio-publico.example/api/payments/mercadopago/callback`.
-
-Em **Configuração de Webhooks**, selecione o ambiente correto (Teste ou
-Produção), a URL pública HTTPS
-`https://seu-dominio-publico.example/api/payments/mercadopago/webhook`
-e o evento **Order (Mercado Pago)**, não somente o evento Payment.
-Use a assinatura secreta daquele ambiente na variável
-`MERCADOPAGO_WEBHOOK_SECRET`. A verificação da assinatura inclui
-o parâmetro `data.id` e o header `x-request-id`.
-
-### Fluxo existente
-
-1. Comprador propõe um valor em centavos, e o vendedor aceita e reserva o item.
-2. Backend verifica a proposta aceita e cria uma order no token do vendedor,
-   com `external_reference` apontando para o pagamento no ReUsa+.
-3. Backend salva `provider_reference` (ID da order) e `checkout_url`.
-4. Comprador abre o Checkout Pro. Retorno no navegador **não é confirmação**.
-5. Webhook `order` assinado aciona `GET /v1/orders/{id}`, e o backend
-   só registra sucesso quando a order e o valor pago são validados.
-
-Rotas:
-
-```text
-GET  /api/negotiations/:id/payment
-POST /api/negotiations/:id/payment
-POST /api/payments/mercadopago/webhook
-GET  /api/payments/mercadopago/connect
-GET  /api/payments/mercadopago/callback
-```
-
-**Antes de produção:** executar `npm test` e `npm run build`,
-realizar testes reais no ambiente de teste do Mercado Pago, revisar
-concorrência e recuperação de webhooks que chegam antes de a order
-ser persistida, rotação/renovação de tokens OAuth e tratamento de
-estornos parciais. Não faça merge nem deploy antes dessa validação.
-
-Documentação oficial:
-- https://www.mercadopago.com.br/developers/pt/docs/checkout-pro-orders/create-order
-- https://www.mercadopago.com.br/developers/pt/docs/checkout-pro-orders/notifications
-- https://www.mercadopago.com.br/developers/pt/docs/checkout-pro-orders/web-integration/configure-back-urls
+Para demonstração sem dinheiro real, use `sk_test_`, `STRIPE_DEMO_MODE=true`, `STRIPE_ENABLE_LIVE=false`, `STRIPE_CONNECT_ENABLED=false` e o webhook do ambiente de teste. Para testar vendedores em sandbox, mantenha a chave `sk_test_`, desligue demonstração e habilite Connect no ambiente de teste. Nenhuma chave secreta deve ir ao frontend, Git ou chat.
 
 ## Testes e validação
 
@@ -632,36 +547,6 @@ https://seu-dominio/api/auth/google/callback
 Depois configure `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`,
 `GOOGLE_REDIRECT_URI` e `APP_BASE_URL`.
 
-## Pix integrado — testes controlados
-
-O desenvolvimento do Pix por QR Code está isolado na branch `feat/pix-in-site`,
-que preserva o Checkout Pro para cartão. **Não ative para clientes reais** até
-validar a configuração da aplicação Mercado Pago e a reconciliação financeira.
-
-No Railway, utilizando exclusivamente o Access Token de teste da aplicação:
-
-```env
-MERCADOPAGO_TEST_MODE=true
-MERCADOPAGO_PIX_ENABLED=true
-```
-
-O fluxo de teste envia `payer.first_name=APRO` apenas no modo de teste,
-conforme a documentação de testes do Mercado Pago para Pix via Orders API:
-https://www.mercadopago.com.br/developers/pt/docs/checkout-api-orders/integration-test/pix
-
-A ordem Pix automática usa `POST /v1/orders`, com `payment_method.id=pix`.
-A resposta fornece `qr_code` e possivelmente `qr_code_base64`; quando a
-imagem Base64 vem vazia, o servidor gera uma imagem QR **a partir do próprio
-código retornado pela API**, sem inventar uma cobrança. O comprador consulta
-o estado por sua sessão; a confirmação definitiva depende da order consultada
-no webhook autenticado.
-
-**Limitações:** a simulação do Mercado Pago não equivale a uma transferência
-Pix real. A disponibilidade da funcionalidade na mesma aplicação cadastrada
-para Checkout Pro precisa ser validada com credenciais de teste. A reconciliação
-contra falhas externas, duplicidade concorrente e expiração ainda requer testes
-de integração com PostgreSQL e cenários de produção.
-
 ## Segurança
 
 O projeto inclui:
@@ -768,7 +653,7 @@ Pagamentos antigos já aprovados não são cobrados outra vez: podem receber um
 acordo de entrega para regularizar o recebimento. Links de checkout já emitidos
 externamente antes dessa mudança não são revogados pela migração.
 
-**Limite financeiro:** o pagamento pelo Mercado Pago não é uma reserva de valor
+**Limite financeiro:** o pagamento pela Stripe não é uma reserva de valor
 administrada pelo ReUsa+. Esta implementação não cria escrow nem reembolso
 automático por não recebimento. Não confirme recebimento sem estar com o item;
 resolva imprevistos pelo chat e, quando necessário, pelo suporte do provedor.

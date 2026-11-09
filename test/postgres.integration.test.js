@@ -68,7 +68,7 @@ test('PostgreSQL provider persists a post, thread, reservation and outbox event'
     const negotiation = await request(baseUrl, `/api/posts/${postId}/negotiation`, { headers: auth(interested.payload.token) });
     assert.equal(negotiation.response.status, 200);
     const proposal = await request(baseUrl, `/api/negotiations/${negotiation.payload.negotiation.id}/proposal`, {
-      method: 'POST', headers: auth(interested.payload.token), body: JSON.stringify({ amountCents: 2500, method: 'pix' })
+      method: 'POST', headers: auth(interested.payload.token), body: JSON.stringify({ amountCents: 2500, method: 'card' })
     });
     assert.equal(proposal.response.status, 201);
     const firstMessage = await request(baseUrl, `/api/messages/threads/${threadId}/messages`, { method: 'POST', headers: auth(owner.payload.token), body: JSON.stringify({ text: 'Mensagem antes da limpeza.' }) });
@@ -95,7 +95,7 @@ test('PostgreSQL provider persists a post, thread, reservation and outbox event'
     assert.equal(reserved.payload.post.status, 'Reservado');
     const delivery = await request(baseUrl, `/api/negotiations/${negotiation.payload.negotiation.id}/collection`, { method:'POST', headers:auth(owner.payload.token), body:JSON.stringify({ mode:'pickup', scheduledFor:new Date(Date.now()+86400000).toISOString(), address:'Rua da Escola, 100, Belém, PA' }) });
     assert.equal(delivery.response.status,201);
-    const prematurePayment = await request(baseUrl, `/api/negotiations/${negotiation.payload.negotiation.id}/payment`, { method:'POST', headers:auth(interested.payload.token), body:JSON.stringify({ amountCents:2500, currency:'BRL', method:'pix', idempotencyKey:`premature-${suffix}-payment` }) });
+    const prematurePayment = await request(baseUrl, `/api/negotiations/${negotiation.payload.negotiation.id}/payment`, { method:'POST', headers:auth(interested.payload.token), body:JSON.stringify({ amountCents:2500, currency:'BRL', method:'card', idempotencyKey:`premature-${suffix}-payment` }) });
     assert.equal(prematurePayment.response.status,409);
     assert.equal((await request(baseUrl, `/api/collection-deliveries/${delivery.payload.collection.id}/accept`, { method:'POST', headers:auth(owner.payload.token) })).response.status,409);
     const acceptedDelivery = await request(baseUrl, `/api/collection-deliveries/${delivery.payload.collection.id}/accept`, { method:'POST', headers:auth(interested.payload.token) });
@@ -116,7 +116,7 @@ test('PostgreSQL provider persists a post, thread, reservation and outbox event'
     } finally {await reminderDb.close();}
 
     const payment = await request(baseUrl, `/api/negotiations/${negotiation.payload.negotiation.id}/payment`, {
-      method: 'POST', headers: auth(interested.payload.token), body: JSON.stringify({ amountCents: 2500, currency: 'BRL', method: 'pix', idempotencyKey: `postgres-${suffix}-payment` })
+      method: 'POST', headers: auth(interested.payload.token), body: JSON.stringify({ amountCents: 2500, currency: 'BRL', method: 'card', idempotencyKey: `postgres-${suffix}-payment` })
     });
     assert.equal(payment.response.status, 201);
     assert.equal((await request(baseUrl, `/api/collection-deliveries/${delivery.payload.collection.id}/status`, { method:'PATCH', headers:auth(owner.payload.token), body:JSON.stringify({ status:'cancelled' }) })).response.status,409);

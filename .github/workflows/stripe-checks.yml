@@ -1,0 +1,65 @@
+name: ReUsa+ Stripe Integration Checks
+
+on:
+  pull_request:
+    paths:
+      - 'backend.js'
+      - 'storage/postgres-api.js'
+      - 'services/stripe-payments.js'
+      - 'storage/stripe-api.js'
+      - 'storage/delivery-api.js'
+      - 'src/routes.jsx'
+      - 'src/services/api.js'
+      - 'migrations/**'
+      - 'test/**'
+      - 'package*.json'
+      - '.github/workflows/stripe-checks.yml'
+  push:
+    branches:
+      - main
+      - feat/stripe-checkout-connect
+
+jobs:
+  test-and-build:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: reusa_test
+          POSTGRES_PASSWORD: stripe_ci_test
+          POSTGRES_DB: reusa_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+      - name: Install dependencies
+        run: npm ci
+      - name: Audit production dependencies
+        run: npm audit --omit=dev
+      - name: Backend tests
+        run: npm test
+        env:
+          NODE_ENV: test
+          STRIPE_TEST_POSTGRES_URL: postgres://reusa_test:stripe_ci_test@127.0.0.1:5432/reusa_test
+      - name: PostgreSQL migrations and backend integration
+        run: node --test test/postgres.integration.test.js
+        env:
+          NODE_ENV: test
+          DATABASE_PROVIDER: postgres
+          POSTGRES_URL: postgres://reusa_test:stripe_ci_test@127.0.0.1:5432/reusa_test
+      - name: Frontend build
+        run: npm run build

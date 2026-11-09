@@ -785,6 +785,7 @@ function CategoryBar({ selected, onChange, showSaved = false, savedCount = 0 }) 
 }
 
 function FeedCard({ post, onNavigate, onOpenChat, onOpenPayment }) {
+  const stripePixEnabled = useAppStore((state) => Boolean(state.profile?.user?.stripePixEnabled));
   const toggleLike = useAppStore((state) => state.toggleLike);
   const toggleFavorite = useAppStore((state) => state.toggleFavorite);
   const deletePost = useAppStore((state) => state.deletePost);
@@ -802,7 +803,7 @@ function FeedCard({ post, onNavigate, onOpenChat, onOpenPayment }) {
   const [interestOptionsOpen, setInterestOptionsOpen] = useState(false);
   const [proposalOpen, setProposalOpen] = useState(false);
   const [proposalNegotiation, setProposalNegotiation] = useState(null);
-  const [proposalForm, setProposalForm] = useState({ amount: '', method: 'pix' });
+  const [proposalForm, setProposalForm] = useState({ amount: '', method: 'card' });
   const [proposalBusy, setProposalBusy] = useState(false);
   const [proposalSent, setProposalSent] = useState(false);
   const [offerStatus, setOfferStatus] = useState(post.offerStatus || 'none');
@@ -937,7 +938,7 @@ function FeedCard({ post, onNavigate, onOpenChat, onOpenPayment }) {
       </div>
       {commentsOpen ? <section className="comments-panel"><div className="comments-list">{comments.length ? comments.map((comment) => <div className="comment" key={comment.id}>{comment.avatar ? <img src={comment.avatar} alt="" /> : <span className="avatar-placeholder material-symbols-outlined" aria-hidden="true">person</span>}<div><strong>{comment.name}</strong><p>{comment.text}</p></div></div>) : commentCount === 0 ? <p className="comments-empty">Ainda não há comentários. Seja o primeiro.</p> : null}</div><form className="comment-form" onSubmit={addComment}><input value={commentText} maxLength="500" onChange={(event) => setCommentText(event.target.value)} placeholder="Escreva um comentário..." /><button className="send-btn" disabled={commentBusy} aria-label="Publicar comentário"><span className="material-symbols-outlined">send</span></button></form></section> : null}
       {interestOptionsOpen ? <ModalPortal><div className="interest-modal-backdrop" role="presentation" onClick={() => setInterestOptionsOpen(false)}><section className="interest-modal" role="dialog" aria-modal="true" aria-labelledby={`interest-title-${post.id}`} onClick={(event) => event.stopPropagation()}><button type="button" className="interest-modal-close" onClick={() => setInterestOptionsOpen(false)} aria-label="Fechar opções"><span className="material-symbols-outlined">close</span></button><div className="interest-modal-heading"><span className="interest-modal-badge"><span className="material-symbols-outlined">handshake</span></span><span className="eyebrow">Tenho interesse</span></div><h2 id={`interest-title-${post.id}`}>Como você quer continuar?</h2><p>Escolha uma forma de iniciar sua negociação com o anunciante.</p><div className="interest-modal-actions"><button type="button" className="interest-choice interest-choice-message" onClick={() => { setInterestOptionsOpen(false); onOpenChat(); }}><span className="interest-choice-icon"><span className="material-symbols-outlined">chat_bubble</span></span><span className="interest-choice-copy"><strong>Conversar por mensagem</strong><small>Combine os detalhes pelo chat</small></span><span className="material-symbols-outlined interest-choice-arrow">arrow_forward</span></button><button type="button" className="interest-choice interest-choice-payment" onClick={openProposal}><span className="interest-choice-icon"><span className="material-symbols-outlined">payments</span></span><span className="interest-choice-copy"><strong>Fazer oferta em dinheiro</strong><small>Pagamento após reserva e acordo de entrega</small></span><span className="material-symbols-outlined interest-choice-arrow">arrow_forward</span></button></div><small className="interest-modal-note"><span className="material-symbols-outlined">info</span>O pagamento só será liberado após a reserva e o aceite do local e horário de entrega pelas duas pessoas.</small></section></div></ModalPortal> : null}
-      {proposalOpen ? <ModalPortal><div className="interest-modal-backdrop" role="presentation" onClick={() => setProposalOpen(false)}><section className="interest-modal proposal-modal" role="dialog" aria-modal="true" aria-labelledby={`proposal-title-${post.id}`} onClick={(event) => event.stopPropagation()}><button type="button" className="interest-modal-close" onClick={() => setProposalOpen(false)} aria-label="Fechar proposta"><span className="material-symbols-outlined">close</span></button><div className="interest-modal-heading"><span className="interest-modal-badge proposal-modal-badge"><span className="material-symbols-outlined">payments</span></span><span className="eyebrow">Oferta de pagamento</span></div>{proposalSent ? <><h2 id={`proposal-title-${post.id}`}>Proposta enviada!</h2><p>Sua oferta foi enviada e aguarda a resposta do vendedor.</p><div className="proposal-success"><span className="material-symbols-outlined">schedule</span><strong>Você poderá pagar depois que o vendedor aceitar e reservar o anúncio.</strong></div><button type="button" className="primary-btn proposal-close-action" onClick={() => setProposalOpen(false)}>Voltar ao feed</button></> : <><h2 id={`proposal-title-${post.id}`}>Envie sua proposta</h2><p>Informe o valor e a forma de pagamento para o vendedor analisar.</p>{proposalNegotiation ? <form className="proposal-modal-form" onSubmit={submitProposal}><label>Valor da oferta (R$)<input inputMode="decimal" value={proposalForm.amount} onChange={(event) => setProposalForm((current) => ({ ...current, amount: formatMoneyInput(event.target.value) }))} placeholder="10,00" required /></label><label>Forma de pagamento<select value={proposalForm.method} onChange={(event) => setProposalForm((current) => ({ ...current, method: event.target.value }))}><option value="pix">PIX</option><option value="card">Cartão</option></select></label><button className="primary-btn" disabled={proposalBusy}>{proposalBusy ? 'Enviando...' : 'Enviar proposta'}<span className="material-symbols-outlined">send</span></button></form> : <div className="proposal-loading"><span className="material-symbols-outlined">progress_activity</span>Preparando sua proposta...</div>}</>}</section></div></ModalPortal> : null}
+      {proposalOpen ? <ModalPortal><div className="interest-modal-backdrop" role="presentation" onClick={() => setProposalOpen(false)}><section className="interest-modal proposal-modal" role="dialog" aria-modal="true" aria-labelledby={`proposal-title-${post.id}`} onClick={(event) => event.stopPropagation()}><button type="button" className="interest-modal-close" onClick={() => setProposalOpen(false)} aria-label="Fechar proposta"><span className="material-symbols-outlined">close</span></button><div className="interest-modal-heading"><span className="interest-modal-badge proposal-modal-badge"><span className="material-symbols-outlined">payments</span></span><span className="eyebrow">Oferta de pagamento</span></div>{proposalSent ? <><h2 id={`proposal-title-${post.id}`}>Proposta enviada!</h2><p>Sua oferta foi enviada e aguarda a resposta do vendedor.</p><div className="proposal-success"><span className="material-symbols-outlined">schedule</span><strong>Você poderá pagar depois que o vendedor aceitar e reservar o anúncio.</strong></div><button type="button" className="primary-btn proposal-close-action" onClick={() => setProposalOpen(false)}>Voltar ao feed</button></> : <><h2 id={`proposal-title-${post.id}`}>Envie sua proposta</h2><p>Informe o valor e a forma de pagamento para o vendedor analisar.</p>{proposalNegotiation ? <form className="proposal-modal-form" onSubmit={submitProposal}><label>Valor da oferta (R$)<input inputMode="decimal" value={proposalForm.amount} onChange={(event) => setProposalForm((current) => ({ ...current, amount: formatMoneyInput(event.target.value) }))} placeholder="10,00" required /></label><label>Forma de pagamento<select value={proposalForm.method} onChange={(event) => setProposalForm((current) => ({ ...current, method: event.target.value }))}><option value="card">Cartão</option><option value="pix" disabled={!stripePixEnabled}>PIX{stripePixEnabled ? "" : " (indisponível)"}</option></select></label><button className="primary-btn" disabled={proposalBusy}>{proposalBusy ? 'Enviando...' : 'Enviar proposta'}<span className="material-symbols-outlined">send</span></button></form> : <div className="proposal-loading"><span className="material-symbols-outlined">progress_activity</span>Preparando sua proposta...</div>}</>}</section></div></ModalPortal> : null}
     </article>
   );
 }
@@ -1239,8 +1240,9 @@ function PostStatusControls({ post, deliveryLocked, statusUpdating, statusMessag
 }
 
 function PostDetailScreen({ postId, onBack, onNavigate }) {
+  const stripePixEnabled = useAppStore((state) => Boolean(state.profile?.user?.stripePixEnabled));
   const session = useAppStore((state) => state.session);
-  const paymentDemoMode = useAppStore((state) => Boolean(state.profile?.user?.mercadoPagoDemoMode));
+  const paymentDemoMode = useAppStore((state) => Boolean(state.profile?.user?.stripeDemoMode));
   const toggleFavorite = useAppStore((state) => state.toggleFavorite);
   const [post, setPost] = useState(null);
   const [comments, setComments] = useState([]);
@@ -1248,10 +1250,10 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
   const [interested, setInterested] = useState([]);
   const [negotiation, setNegotiation] = useState(null);
   const [payment, setPayment] = useState(null);
-  const [paymentForm, setPaymentForm] = useState({ amount: '', method: 'pix' });
+  const [paymentForm, setPaymentForm] = useState({ amount: '', method: 'card' });
   const [paymentBusy, setPaymentBusy] = useState(false);
   const [collection, setCollection] = useState(null);
-  const [proposalForm, setProposalForm] = useState({ amount: '', method: 'pix' });
+  const [proposalForm, setProposalForm] = useState({ amount: '', method: 'card' });
   const [proposalBusy, setProposalBusy] = useState(false);
   const [cancellingAcceptance, setCancellingAcceptance] = useState('');
   const [editing, setEditing] = useState(false);
@@ -1311,7 +1313,7 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
             amount: currentNegotiation.proposalAmountCents
               ? formatMoneyInput(String(currentNegotiation.proposalAmountCents))
               : '',
-            method: currentNegotiation.proposalMethod || 'pix'
+            method: currentNegotiation.proposalMethod || 'card'
           });
         }
         const paymentResult = await api.payment(currentNegotiation.id);
@@ -1628,43 +1630,14 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
     ) : null}
     <TransportPanel key={post.id} post={post} own={ownPost} onSaved={refreshPost}/>
     <Questions post={post} session={session}/>
-    {!ownPost && isSale && negotiation?.status === 'interested' && negotiation.proposalStatus === 'none' ? <section className="review-form-card proposal-card"><span className="eyebrow">Oferta com pagamento</span><h2>Envie sua proposta</h2><p>Informe o valor e a forma de pagamento. O vendedor receberá sua proposta para análise.</p><form onSubmit={submitProposal}><label>Valor da oferta (R$)<input inputMode="decimal" value={proposalForm.amount} onChange={(event) => setProposalForm((current) => ({ ...current, amount: formatMoneyInput(event.target.value) }))} placeholder="10,00" required /></label>    <label>Forma de pagamento<select value={proposalForm.method} onChange={(event) => setProposalForm((current) => ({ ...current, method: event.target.value }))}><option value="pix">PIX</option><option value="card">Cartão</option></select></label><button className="primary-btn" disabled={proposalBusy}>{proposalBusy ? 'Enviando...' : 'Enviar proposta'}<span className="material-symbols-outlined">send</span></button></form></section> : null}
+    {!ownPost && isSale && negotiation?.status === 'interested' && negotiation.proposalStatus === 'none' ? <section className="review-form-card proposal-card"><span className="eyebrow">Oferta com pagamento</span><h2>Envie sua proposta</h2><p>Informe o valor e a forma de pagamento. O vendedor receberá sua proposta para análise.</p><form onSubmit={submitProposal}><label>Valor da oferta (R$)<input inputMode="decimal" value={proposalForm.amount} onChange={(event) => setProposalForm((current) => ({ ...current, amount: formatMoneyInput(event.target.value) }))} placeholder="10,00" required /></label>    <label>Forma de pagamento<select value={proposalForm.method} onChange={(event) => setProposalForm((current) => ({ ...current, method: event.target.value }))}><option value="card">Cartão</option><option value="pix" disabled={!stripePixEnabled}>PIX{stripePixEnabled ? "" : " (indisponível)"}</option></select></label><button className="primary-btn" disabled={proposalBusy}>{proposalBusy ? 'Enviando...' : 'Enviar proposta'}<span className="material-symbols-outlined">send</span></button></form></section> : null}
     {!ownPost && isSale && negotiation?.status === 'interested' && negotiation.proposalStatus === 'pending' ? <section className="payment-waiting-card"><div className="payment-waiting-icon"><span className="material-symbols-outlined">hourglass_top</span></div><div><span className="eyebrow">Proposta enviada</span><h2>Aguardando resposta do vendedor</h2><p>Sua oferta de R$ {((negotiation.proposalAmountCents || 0) / 100).toFixed(2).replace('.', ',')} foi enviada. O pagamento ficará disponível após o vendedor aceitar a oferta e as duas pessoas combinarem e aceitarem a entrega.</p></div><button className="secondary-btn" onClick={startConversation}><span className="material-symbols-outlined">chat_bubble</span>Conversar com o anunciante</button></section> : null}
-    {negotiation && (['reserved','completed'].includes(negotiation.status) || payment) ? <DeliveryCard negotiation={negotiation} collection={collection} onChange={setCollection} isSale={isSale} payment={payment} isOwner={ownPost} onRefreshStatus={async () => { const [p, d] = await Promise.all([api.payment(negotiation.id), api.collection(negotiation.id)]); setPayment(p.payment); setCollection(d.collection); }} onReceived={refreshPost} onChat={() => onNavigate(`/mensagens/ana?thread=${negotiation.threadId || negotiation.thread_id}`)}>
-    {!ownPost && isSale && negotiation?.status === 'reserved' && negotiation?.proposalStatus === 'accepted' && (!payment || payment.status === 'failed') ? <section className="delivery-payment"><h3>{collection?.paymentReady ? 'Finalize seu pagamento' : 'Pagamento ainda bloqueado'}</h3><p>{collection?.paymentReady ? 'Local e horário foram aceitos pelas duas pessoas. Confira o item antes de pagar; o recebimento será confirmado separadamente.' : 'O aceite da oferta reserva o item. Para pagar, as duas pessoas também precisam aceitar o local e o horário acima.'}</p>{paymentDemoMode ? <p role="status"><strong>Demonstração:</strong> o pagamento é de teste e não transfere dinheiro ao vendedor. Para cartão, use somente dados de teste do Mercado Pago; não pague o QR Pix com um banco real.</p> : null}<form onSubmit={submitPayment}><button className="primary-btn" disabled={paymentBusy || !collection?.paymentReady}>{paymentBusy ? 'Abrindo checkout...' : 'Continuar para pagamento'}<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 10h18m-13 5h3"/></svg></button></form></section> : null}
+    {negotiation && (['reserved','completed'].includes(negotiation.status) || payment) ? <DeliveryCard negotiation={negotiation} collection={collection} onChange={setCollection} isSale={isSale} payment={payment} isOwner={ownPost} onRefreshStatus={refreshPost} onReceived={refreshPost} onChat={() => onNavigate(`/mensagens/ana?thread=${negotiation.threadId || negotiation.thread_id}`)}>
+    {!ownPost && isSale && negotiation?.status === 'reserved' && negotiation.proposalMethod === 'pix' && !stripePixEnabled && (!payment || payment.status === 'failed') && <section className="delivery-payment"><h3>Atualize a forma de pagamento</h3><p>Pix não está disponível. Você pode reenviar o mesmo valor por cartão. A reserva e o acordo anteriores serão cancelados; o vendedor precisará aceitar novamente.</p><button className="primary-btn" disabled={paymentBusy} onClick={async()=>{if(!window.confirm('Reenviar a oferta por cartão e aguardar um novo aceite?'))return;setPaymentBusy(true);try{await api.switchOfferToCard(negotiation.id);await refreshPost();}catch(error){alert(error.message);}finally{setPaymentBusy(false);}}}>Reenviar oferta por cartão</button></section>}
+    {!ownPost && isSale && negotiation?.status === 'reserved' && negotiation?.proposalStatus === 'accepted' && (!payment || payment.status === 'failed') && (negotiation.proposalMethod !== 'pix' || stripePixEnabled) ? <section className="delivery-payment"><h3>{collection?.paymentReady ? 'Finalize seu pagamento' : 'Pagamento ainda bloqueado'}</h3><p>{collection?.paymentReady ? 'Local e horário foram aceitos pelas duas pessoas. Confira o item antes de pagar; o recebimento será confirmado separadamente.' : 'O aceite da oferta reserva o item. Para pagar, as duas pessoas também precisam aceitar o local e o horário acima.'}</p>{paymentDemoMode ? <p role="status"><strong>Demonstração:</strong> o pagamento é de teste e não transfere dinheiro ao vendedor. Para cartão, use somente dados de teste do Stripe; o Pix só estará disponível se a Stripe habilitar essa forma de pagamento.</p> : null}<form onSubmit={submitPayment}><button className="primary-btn" disabled={paymentBusy || !collection?.paymentReady}>{paymentBusy ? 'Abrindo checkout...' : 'Continuar para pagamento'}<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 10h18m-13 5h3"/></svg></button></form></section> : null}
     {!ownPost && isSale && payment && (paymentDemoMode || (payment.status === 'processing' && collection?.paymentReady && (payment.checkoutUrl || payment.method === 'pix'))) ? <section className="delivery-payment delivery-payment-status">
       {paymentDemoMode ? <p>Simulação: nenhum valor é transferido ao vendedor.</p> : null}
       {payment.status === 'processing' && payment.checkoutUrl && collection?.paymentReady ? <a className="secondary-btn" href={payment.checkoutUrl}>Abrir checkout</a> : null}
-      {payment.method === 'pix' && payment.status === 'processing' && collection?.paymentReady ? <div className="pix-instructions">
-        <div className="pix-instructions-heading">
-          <span className="pix-instructions-symbol material-symbols-outlined" aria-hidden="true">qr_code_2</span>
-          <div>
-            <h3>Pague com Pix</h3>
-            <p>Escaneie o QR Code com o aplicativo do seu banco ou utilize o Pix Copia e Cola.</p>
-          </div>
-        </div>
-        <div className="pix-instructions-grid">
-          <div className="pix-qr-panel">
-            {payment.pix?.qrCodeBase64 ? <div className="pix-qr-frame"><img src={`data:image/png;base64,${payment.pix.qrCodeBase64}`} alt="QR Code de pagamento Pix" /></div> : <span className="material-symbols-outlined pix-qr-placeholder" aria-hidden="true">qr_code_2</span>}
-            <strong>QR Code Pix</strong>
-            <span>Abra a opção Pix no seu aplicativo bancário e escolha pagar com QR Code.</span>
-          </div>
-          <div className="pix-copy-panel">
-            <div className="pix-copy-panel-title"><span className="material-symbols-outlined" aria-hidden="true">content_copy</span><h4>Pix Copia e Cola</h4></div>
-            {payment.pix?.qrCode ? <>
-              <label htmlFor="pix-copy-code">Código do pagamento</label>
-              <textarea id="pix-copy-code" readOnly value={payment.pix.qrCode} rows={4} onFocus={(event) => event.target.select()} />
-              <button className="primary-btn pix-copy-button" type="button" onClick={() => navigator.clipboard.writeText(payment.pix.qrCode).then(() => alert('Código Pix copiado!')).catch(() => alert('Selecione e copie o código manualmente.'))}><span className="material-symbols-outlined" aria-hidden="true">content_copy</span>Copiar código Pix</button>
-            </> : <p className="pix-copy-empty">O Mercado Pago ainda não disponibilizou o código Pix.</p>}
-            {payment.pix?.ticketUrl ? <a className="pix-instructions-link" href={payment.pix.ticketUrl} target="_blank" rel="noopener noreferrer"><span className="material-symbols-outlined" aria-hidden="true">open_in_new</span>Ver instruções no Mercado Pago</a> : null}
-            <p className="pix-copy-help">O pagamento é confirmado automaticamente após o processamento pelo Mercado Pago.</p>
-          </div>
-        </div>
-        <div className="pix-instructions-footer">
-          <div><span className="material-symbols-outlined" aria-hidden="true">verified_user</span><small>Pagamento protegido. Não é necessário enviar comprovante para confirmar.</small></div>
-          <button className="secondary-btn pix-refresh-button" type="button" onClick={async () => { try { const updated = await api.payment(negotiation.id); setPayment(updated.payment); } catch (error) { alert(error.message); } }}><span className="material-symbols-outlined" aria-hidden="true">refresh</span>Atualizar pagamento</button>
-        </div>
-      </div> : null}
     </section> : null}
     </DeliveryCard> : null}
     {negotiation?.status === 'completed' && !reviewed ? <section className="review-form-card"><span className="eyebrow">Negociação concluída</span><h2>Como foi a experiência?</h2><form onSubmit={submitReview}><label>Nota<select value={reviewForm.rating} onChange={(event) => setReviewForm((current) => ({ ...current, rating: Number(event.target.value) }))}>{[5, 4, 3, 2, 1].map((rating) => <option key={rating} value={rating}>{'⭐'.repeat(rating)} ({rating})</option>)}</select></label><textarea value={reviewForm.comment} onChange={(event) => setReviewForm((current) => ({ ...current, comment: event.target.value }))} maxLength="500" placeholder="Comentário opcional" /><button className="primary-btn">Enviar avaliação</button></form></section> : null}
@@ -2177,10 +2150,14 @@ function SettingsScreen({ onBack, onLogout }) {
   const profile = useAppStore((state) => state.profile);
   const updateProfile = useAppStore((state) => state.updateProfile);
   const logout = useAppStore((state) => state.logout);
-  const [activeSection, setActiveSection] = useState('perfil');
+  const [activeSection, setActiveSection] = useState(() => new URLSearchParams(window.location.search).has('stripe_onboarding') ? 'pagamentos' : 'perfil');
   const [paymentItems, setPaymentItems] = useState([]);
-  const [paymentConnected, setPaymentConnected] = useState(Boolean(profile?.user?.mercadoPagoConnected));
-  const paymentDemoMode = Boolean(profile?.user?.mercadoPagoDemoMode);
+  const [stripeStatus, setStripeStatus] = useState(null);
+  const [stripeBusy, setStripeBusy] = useState(false);
+  const [stripeError, setStripeError] = useState('');
+  const paymentConnected = Boolean(stripeStatus?.chargesEnabled && stripeStatus?.payoutsEnabled);
+  const paymentLinked = Boolean(stripeStatus?.connected);
+  const paymentDemoMode = Boolean(profile?.user?.stripeDemoMode);
   const [form, setForm] = useState({ name: profile?.user?.name || '', city: profile?.user?.city || '', neighborhood: profile?.user?.neighborhood || '', cep: profile?.user?.cep || '', address: profile?.user?.address || '', businessName: profile?.user?.businessName || '' });
   const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '' });
   const [preferences, setPreferences] = useState(profile?.user?.notificationPreferences || ['Curtidas', 'Comentários', 'Interesse', 'Mensagens', 'Negociações', 'Avaliações', 'Sistema']);
@@ -2189,8 +2166,8 @@ function SettingsScreen({ onBack, onLogout }) {
     api.paymentItems().then((result) => setPaymentItems(result.items || [])).catch(() => {});
   }, []);
   useEffect(() => {
-    if (profile?.user) setPaymentConnected(Boolean(profile.user.mercadoPagoConnected));
-  }, [profile]);
+    api.stripeStatus().then(setStripeStatus).catch(error => setStripeError(error.message));
+  }, []);
 
   useEffect(() => {
     if (profile?.user) setForm({ name: profile.user.name || '', city: profile.user.city || '', neighborhood: profile.user.neighborhood || '', cep: profile.user.cep || '', address: profile.user.address || '', businessName: profile.user.businessName || '' });
@@ -2216,13 +2193,24 @@ function SettingsScreen({ onBack, onLogout }) {
     try { await api.updatePreferences(preferences); alert('Preferências de notificações atualizadas.'); } catch (error) { alert(error.message); }
   }
 
-  async function connectMercadoPago() {
+  async function connectStripe() {
+    setStripeBusy(true); setStripeError('');
     try {
-      const { authorizationUrl } = await api.mercadoPagoConnect();
+      const { authorizationUrl } = await api.stripeConnect();
       window.location.assign(authorizationUrl);
     } catch (error) {
-      alert(error.message);
-    }
+      setStripeError(error.message);
+    } finally { setStripeBusy(false); }
+  }
+
+  async function openStripeDashboard() {
+    setStripeBusy(true); setStripeError('');
+    try { window.location.assign((await api.stripeDashboard()).url); } catch(error) { setStripeError(error.message); } finally { setStripeBusy(false); }
+  }
+
+  async function refreshStripeStatus() {
+    setStripeBusy(true); setStripeError('');
+    try { setStripeStatus(await api.stripeStatus()); } catch(error) { setStripeError(error.message); } finally { setStripeBusy(false); }
   }
 
   async function removeAccount() {
@@ -2292,15 +2280,20 @@ function SettingsScreen({ onBack, onLogout }) {
                 ) : (
                   <>
                     <div>
-                      <strong>{paymentConnected ? 'Conta Mercado Pago conectada' : 'Receba suas vendas pelo Mercado Pago'}</strong>
-                      <small>{paymentConnected ? 'Sua conta está pronta para receber pagamentos.' : 'Conecte sua conta para receber os valores das suas vendas com segurança.'}</small>
+                      <strong>{paymentConnected ? 'Conta Stripe pronta para receber' : paymentLinked ? 'Conclua seu cadastro na Stripe' : 'Receba suas vendas pela Stripe'}</strong>
+                      <small>{paymentConnected ? 'Receba diretamente na sua conta. A Stripe administra o saldo, as taxas e os repasses.' : stripeStatus?.pendingVerification ? 'A Stripe está analisando seu cadastro. Aguarde a verificação para receber pagamentos.' : paymentLinked ? 'Há dados ou documentos pendentes. Continue o cadastro seguro na Stripe para liberar cobranças e repasses.' : 'Cadastre seus dados e sua conta bancária na página segura da Stripe para receber pelas vendas.'}</small>
                     </div>
                     {paymentConnected
-                      ? <span className="connection-status"><span className="material-symbols-outlined">check_circle</span>Conectada</span>
-                      : <button className="primary-btn" onClick={connectMercadoPago}><span className="material-symbols-outlined">account_balance_wallet</span>Conectar conta</button>}
+                      ? <span className="connection-status"><span className="material-symbols-outlined">check_circle</span>Habilitada</span>
+                      : <button className="primary-btn" disabled={stripeBusy} onClick={connectStripe}><span className="material-symbols-outlined">account_balance_wallet</span>{paymentLinked ? 'Continuar cadastro' : 'Conectar Stripe'}</button>}
                   </>
                 )}
               </div>
+              {stripeError && <p className="delivery-error" role="alert">{stripeError}</p>}
+              {!paymentDemoMode && <div className="seller-payment-actions">
+                {paymentLinked && <button className="secondary-btn" disabled={stripeBusy} onClick={openStripeDashboard}>Abrir painel de recebimentos</button>}
+                <button className="secondary-btn" disabled={stripeBusy} onClick={refreshStripeStatus}>{stripeBusy ? 'Consultando…' : 'Atualizar situação da conta'}</button>
+              </div>}
               <div className="payment-items-list">{paymentItems.length ? paymentItems.map((item) => <article className="payment-item" key={item.negotiationId}><span className="payment-item-icon material-symbols-outlined">shopping_bag</span><div><strong>{item.title}</strong><small>R$ {((item.amountCents || 0) / 100).toFixed(2).replace('.', ',')} · {item.method === 'pix' ? 'PIX' : item.method === 'card' ? 'Cartão' : 'Boleto'}</small><small>{item.negotiationStatus === 'reserved' ? 'Reserva confirmada: combine a entrega antes de pagar' : 'Oferta enviada: aguardando resposta'}</small></div><button className="payment-item-action" onClick={() => window.location.assign(`/anuncios/${item.postId}`)}><span className="material-symbols-outlined">{item.negotiationStatus === 'reserved' ? 'payments' : 'open_in_new'}</span><span>{item.negotiationStatus === 'reserved' ? 'Entrega e pagamento' : 'Acompanhar oferta'}</span></button></article>) : <EmptyState icon="payments" title="Nenhum pagamento pendente" text="Quando você enviar uma oferta, ela aparecerá aqui para acompanhamento." />}</div>
             </section> : null}
           </div>

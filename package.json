@@ -31,10 +31,14 @@
     "react-router-dom": "^7.18.2",
     "redis": "^6.2.1",
     "sql.js": "^1.11.0",
+    "stripe": "23.1.0",
     "zustand": "^5.0.8"
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.4",
     "vite": "^5.4.10"
+  },
+  "overrides": {
+    "qs": "6.17.1"
   }
 }

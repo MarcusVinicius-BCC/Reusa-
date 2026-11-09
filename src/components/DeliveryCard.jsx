@@ -38,7 +38,9 @@ export default function DeliveryCard({ negotiation, collection, onChange, onRece
     act(() => api.scheduleCollection(negotiation.id, { ...form, scheduledFor: date.toISOString() }), 'Proposta enviada. Aguarde o aceite da outra pessoa.');
   }
   const newProposal = !collection || collection.status === 'cancelled';
-  const paymentLabel = ({ succeeded:'Pagamento confirmado', processing:'Aguardando pagamento', failed:'Pagamento não aprovado', refunded:'Pagamento estornado' })[payment?.status] || 'Pagamento não iniciado';
+  const disputed = payment?.disputeStatus && !['won','warning_closed'].includes(payment.disputeStatus);
+  const refundPending = ['requested','pending','requires_action'].includes(payment?.refundStatus);
+  const paymentLabel = disputed ? 'Pagamento em contestação' : refundPending ? 'Reembolso em andamento' : ({ succeeded:'Pagamento confirmado', processing:'Aguardando pagamento', failed:'Pagamento não aprovado', refunded:'Pagamento estornado' })[payment?.status] || 'Pagamento não iniciado';
   const step = !collection || collection.status === 'cancelled' ? 0 : collection.status === 'scheduled' ? 1 : collection.status === 'completed' ? 3 : 2;
   return <section className="review-form-card collection-card delivery-card" aria-labelledby="delivery-title">
     <header className="delivery-heading"><span className="delivery-symbol" aria-hidden="true"><svg width="25" height="25" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h11v12H3zM14 10h4l3 4v4h-7"/><circle cx="7" cy="18" r="2"/><circle cx="18" cy="18" r="2"/></svg></span><h2 id="delivery-title">{isSale ? 'Entrega e pagamento' : 'Detalhes da entrega'}</h2></header>
@@ -76,9 +78,16 @@ export default function DeliveryCard({ negotiation, collection, onChange, onRece
       <span role="status" aria-live="polite" className={`delivery-current-status is-${isSale ? payment?.status || 'waiting' : collection?.status || 'waiting'}`}>{isSale ? paymentLabel : labels[collection?.status] || 'Entrega a combinar'}</span>
       <button type="button" className="delivery-chat-button" onClick={onChat}>Conversar sobre a entrega</button>
     </div>
+    {payment?.refundedAmountCents > 0 && payment.status !== 'refunded' && <p className="delivery-help">Reembolso parcial registrado: {new Intl.NumberFormat('pt-BR',{style:'currency',currency:'BRL'}).format(payment.refundedAmountCents/100)}.</p>}
+    {disputed && <p className="delivery-help">Há uma contestação deste pagamento. O vendedor deve acompanhar o prazo e responder pelo painel Stripe. A confirmação do recebimento fica bloqueada enquanto a contestação estiver aberta.</p>}
+    {payment?.refundStatus === 'failed' && <p className="delivery-error" role="alert">A Stripe não concluiu o reembolso. O vendedor deve conferir o motivo e resolver pelo painel de recebimentos.</p>}
+    {isOwner && payment?.provider === 'stripe' && payment.status === 'succeeded' && !disputed && !refundPending && !payment.refundStatus && <div className="delivery-refund">
+      <p>Se a venda não puder ser concluída, você pode solicitar a devolução integral do valor ainda não reembolsado. O prazo e eventuais taxas seguem as regras da Stripe.</p>
+      <button className="secondary-btn" disabled={busy} onClick={async()=>{if(!window.confirm('Solicitar à Stripe o reembolso integral do saldo desta compra? Após a confirmação, uma entrega ainda não realizada será cancelada.'))return;setBusy(true);setError('');try{await api.refundPayment(negotiation.id);await onRefreshStatus();setMessage('Solicitação registrada. Acompanhe o status do reembolso.');}catch(e){setError(e.message);}finally{setBusy(false);}}}>Solicitar reembolso integral</button>
+    </div>}
     {children}
       {collection?.canReceive && <div className="delivery-receipt"><label><input type="checkbox" checked={receiptChecked} onChange={e => setReceiptChecked(e.target.checked)} />Já recebi e conferi o item pessoalmente.</label><button className="primary-btn" disabled={busy || !receiptChecked} onClick={() => { if (window.confirm('Confirmar que o item está com você? Isso conclui a negociação e não pode ser desfeito por esta tela.')) act(() => api.confirmCollection(collection.id), 'Recebimento confirmado. Negociação concluída!', true); }}>Confirmar recebimento do item</button></div>}
     <NegotiationProblem negotiation={negotiation}/>
-    <footer className="delivery-footer"><details><summary>Sobre entrega e pagamento</summary><p>O ReUsa+ não oferece transporte, guarda do valor ou reembolso automático. Em caso de não recebimento, não confirme a entrega: fale com o anunciante e use o suporte do Mercado Pago, conforme as regras do pagamento.</p></details></footer>
+    <footer className="delivery-footer"><details><summary>Sobre entrega e pagamento</summary><p>O ReUsa+ não oferece transporte, guarda do valor ou reembolso automático. Se não receber o item, não confirme a entrega: converse com o vendedor e registre um problema neste acordo. O vendedor pode solicitar o reembolso pela negociação. Para contestar uma compra no cartão, procure o banco emissor; o vendedor acompanha a contestação no painel Stripe.</p></details></footer>
   </section>;
 }

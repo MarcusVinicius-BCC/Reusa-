@@ -1,0 +1,119 @@
+# Stripe em produção — ReUsa+
+
+O backend usa Stripe Checkout hospedado, cobrança direta em contas Connect Express brasileiras e BRL. Cada vendedor cadastra seus dados na Stripe e recebe na própria conta conectada. A plataforma não cobra comissão nem mantém custódia dos valores. Taxas, repasses, saldos negativos e contestações seguem o contrato Connect da plataforma com a Stripe.
+
+## Configuração da conta Stripe
+
+1. Ative a conta **de produção** e conclua os dados da plataforma solicitados pela Stripe.
+2. Habilite **Connect**, com onboarding hospedado e contas Express no Brasil, compatíveis com **direct charges**. A implementação usa Accounts v1 Express; não configure somente um fluxo Accounts v2 diferente deste contrato.
+3. Habilite cartão. Pix é opcional e só deve ser exposto quando estiver liberado para as contas conectadas e para este fluxo de cobrança.
+4. Crie os destinos de eventos em produção abaixo, em formato **snapshot**. Cada destino recebe seu próprio segredo de assinatura. Não use eventos thin nesta integração.
+
+Ambos os destinos usam:
+
+```text
+https://reusa.up.railway.app/api/payments/stripe/webhook
+```
+
+Destino **Sua conta**: salve o signing secret em `STRIPE_WEBHOOK_SECRET` e selecione:
+
+```text
+checkout.session.completed
+checkout.session.async_payment_succeeded
+checkout.session.async_payment_failed
+checkout.session.expired
+charge.refunded
+refund.created
+refund.updated
+refund.failed
+charge.dispute.created
+charge.dispute.updated
+charge.dispute.closed
+```
+
+Destino **Contas conectadas**: salve o segredo diferente em `STRIPE_CONNECT_WEBHOOK_SECRET`. Selecione os mesmos eventos e acrescente:
+
+```text
+account.updated
+account.application.deauthorized
+```
+
+Eventos da conta da plataforma e de contas conectadas são validados com segredos separados. O backend compara conta conectada e ambiente com o pagamento registrado. O SDK oficial Stripe valida a assinatura do corpo original, com tolerância de cinco minutos. O servidor consulta o objeto atualizado na API antes de alterar estados financeiros.
+
+## Railway
+
+Mantenha o serviço apontando para `main`, com Node 22, PostgreSQL configurado e `JWT_SECRET` estável. As migrações são aplicadas ao iniciar. Não exclua banco, volume, negociações ou pagamentos na troca de provedor.
+
+Preencha **somente na aba Variables do backend**, nunca no frontend, Git ou chat:
+
+```env
+APP_BASE_URL=https://reusa.up.railway.app
+STRIPE_SECRET_KEY=sk_live_SEU_SEGREDO
+STRIPE_WEBHOOK_SECRET=whsec_SEGREDO_DA_SUA_CONTA
+STRIPE_CONNECT_WEBHOOK_SECRET=whsec_SEGREDO_DAS_CONTAS_CONECTADAS
+STRIPE_DEMO_MODE=false
+STRIPE_CONNECT_ENABLED=true
+STRIPE_PIX_ENABLED=false
+STRIPE_ENABLE_LIVE=false
+```
+
+Os valores acima são exemplos, não credenciais. Use os dois segredos dos destinos de **produção**, não os do Stripe CLI ou do ambiente de teste. Esta integração não usa chave publicável `pk_`, cadastro manual de produtos ou redirect URI de OAuth.
+
+Após configurar destinos e credenciais, habilite novas operações reais com:
+
+```env
+STRIPE_ENABLE_LIVE=true
+```
+
+Reimplante o serviço após alterar variáveis. Não basta inserir `sk_live_`: demonstração deve estar desligada, Connect habilitado e ambos os segredos de assinatura configurados. Para interromper novas vendas, volte `STRIPE_ENABLE_LIVE=false`; consultas financeiras, webhooks de pagamentos já registrados e reembolsos continuam funcionando com as credenciais de produção preservadas.
+
+## Vendedores
+
+Em **Configurações → Ofertas e pagamentos**, cada vendedor:
+
+1. Seleciona **Conectar Stripe** e conclui o cadastro hospedado com seus dados e conta bancária.
+2. Retorna ao ReUsa+ e consulta a situação da conta. Contas de teste e de produção têm identificadores separados no banco.
+3. Aguarda a Stripe habilitar `charges_enabled` e `payouts_enabled`.
+4. Usa **Abrir painel de recebimentos** para acessar saldo, repasses, dados pendentes e contestações. Links temporários são criados no backend apenas para o proprietário autenticado.
+
+Uma conta apenas criada não é considerada pronta. A API consulta a Stripe antes de permitir a aceitação de vendas e novamente antes de abrir o checkout. Revogação do acesso e restrições impedem novas cobranças.
+
+## Compra, entrega e devolução
+
+- O comprador envia uma oferta; o vendedor aceita. Local e horário precisam ser propostos e aceitos por pessoas diferentes antes do pagamento.
+- A tentativa é persistida **antes** da chamada externa. Apenas uma cobrança pode ficar ativa por negociação. A chave Stripe e os parâmetros originais são preservados para recuperar uma resposta perdida sem criar outra cobrança.
+- O retorno do navegador não confirma pagamento. Webhooks assinados e conciliação pela API verificam sessão, referência, conta, ambiente, valor, moeda e confirmação efetiva.
+- Uma rotina a cada minuto reprocessa eventos pendentes e seleciona pagamentos para conciliação. Pagamentos consultados com sucesso são normalmente revistos após cinco minutos; falhas têm nova tentativa após um minuto. Lotes de até 25 eventos e 25 pagamentos usam travas e leases no PostgreSQL.
+- Eventos duplicados não duplicam a transição, os avisos ou o registro financeiro. A inbox persiste apenas os campos necessários para processamento, sem dados de cartão ou documentos dos vendedores.
+- Se uma criação de checkout permanecer incerta por 23 horas, o backend não repete a criação: o pagamento permanece bloqueado para conciliação pelo suporte/painel Stripe, pois a retenção de idempotência do provedor não é ilimitada.
+- O vendedor pode selecionar **Solicitar reembolso integral** no acordo. A solicitação é persistida antes da API; uma resposta perdida é recuperada pelo ID/metadados na Stripe. Reembolsos parciais feitos no painel também são acompanhados.
+- Uma devolução integral confirmada antes da entrega cancela a negociação e libera o anúncio reservado. Se o item já teve recebimento confirmado, o sistema não declara automaticamente que ele foi devolvido.
+- A confirmação de recebimento fica bloqueada durante contestação aberta ou reembolso em andamento. O vendedor responde à contestação pelo painel Stripe; o ReUsa+ acompanha a situação atualizada. Uma contestação perdida permanece visível para resolução, sem liberar nova cobrança na mesma negociação.
+- Uma oferta Pix antiga sem cobrança pode ser reenviada por cartão pelo comprador, mantendo o valor. Isso encerra o acordo/reserva anteriores e exige novo aceite do vendedor. Pagamentos em andamento impedem essa mudança.
+
+## Pagamentos antigos Mercado Pago
+
+Nenhuma nova cobrança é criada pelo Mercado Pago. O serviço legado e o endpoint `/api/payments/mercadopago/webhook` permanecem para conciliar pedidos anteriores, inclusive estornos informados pelo provedor. Preserve `MERCADOPAGO_WEBHOOK_SECRET`, `MERCADOPAGO_ACCESS_TOKEN`, o segredo usado na criptografia dos tokens e demais credenciais que os pedidos antigos ainda utilizem. Não remova o destino de eventos antigo enquanto existirem pedidos pendentes.
+
+## Operação e validação
+
+O endpoint autenticado **somente para administradores** `GET /api/admin/payments/stripe` mostra configuração incompleta, modo atual, quantidade de webhooks pendentes, pagamentos aguardando conciliação e data do último evento processado. Não revela chaves. Erros de conciliação são registrados nos logs com o identificador do pagamento/evento e código de falha.
+
+Execute:
+
+```sh
+npm ci
+npm test
+npm run build
+```
+
+Para testar o fluxo financeiro com PostgreSQL descartável:
+
+```sh
+STRIPE_TEST_POSTGRES_URL=postgres://usuario:senha@localhost:5432/banco_de_testes node --test test/stripe-workflow.test.js
+NODE_ENV=test DATABASE_PROVIDER=postgres POSTGRES_URL=postgres://usuario:senha@localhost:5432/banco_de_testes node --test test/postgres.integration.test.js
+```
+
+Os testes HTTP exercitam assinatura, concorrência, conta de vendedor, perda de respostas, replay, reembolso, contestação e recuperação com respostas Stripe simuladas. A integração real deve ser validada no Railway com conta e vendedores autorizados: onboarding, cobrança, entrega do evento, pagamento confirmado, consulta do vendedor e reembolso. Testes locais não comprovam habilitação da conta Stripe, repasse bancário ou entrega de eventos ao domínio público.
+
+Referências: [Connect Express](https://docs.stripe.com/connect/express-accounts), [Direct charges](https://docs.stripe.com/connect/direct-charges), [Webhooks](https://docs.stripe.com/webhooks), [Reembolsos](https://docs.stripe.com/refunds).
