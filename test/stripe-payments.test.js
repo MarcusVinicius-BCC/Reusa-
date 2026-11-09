@@ -77,3 +77,22 @@ test('Live charges cannot activate accidentally by installing live credentials',
     await assert.rejects(stripe.createCheckout({paymentId:'id',postId:'post',title:'Item',amountCents:100,payerEmail:'buyer@example.com',method:'card'}),{status:503});
   });
 });
+
+
+test('Connected seller Checkout uses Stripe-Account header only when verified for payouts', async () => {
+  await env({ STRIPE_SECRET_KEY:'sk_test_stub', APP_BASE_URL:'https://reusa.example', STRIPE_DEMO_MODE:'false' }, async () => {
+    const originalFetch = global.fetch;
+    const sent = [];
+    try {
+      global.fetch = async (url, options) => {
+        sent.push({url, headers:options.headers, body:options.body});
+        if (url.endsWith('/accounts/acct_123456')) return {ok:true,json:async()=>({id:'acct_123456',charges_enabled:true,payouts_enabled:true})};
+        return {ok:true,json:async()=>({id:'cs_test_seller',url:'https://checkout.stripe.com/c/pay/cs_test_seller'})};
+      };
+      const response = await stripe.createCheckout({paymentId:'payment-seller-1',postId:'post-2',title:'Mesa',amountCents:3500,payerEmail:'buyer@example.com',method:'card',sellerAccountId:'acct_123456'});
+      assert.equal(response.stripeAccountId,'acct_123456');
+      assert.equal(sent[1].headers['Stripe-Account'],'acct_123456');
+      assert.equal(new URLSearchParams(sent[1].body).get('line_items[0][price_data][unit_amount]'),'3500');
+    } finally {global.fetch=originalFetch;}
+  });
+});
