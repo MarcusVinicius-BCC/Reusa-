@@ -35,7 +35,13 @@ function registerStripeRoutes(app, {postgres, sqlite, authenticate, jwt, jwtSecr
   const later=ms=>new Date(clock().getTime()+ms).toISOString();
   const lock=postgres?' FOR UPDATE':'';
   const queryOne=(q,p=[])=>work(c=>one(c,q,p));
-  const route=fn=>async(req,res,next)=>{try {await fn(req,res,next);} catch(e) {if(e.status)return res.status(e.status).json({error:e.message});next(e);} };
+  const route=fn=>async(req,res,next)=>{
+    try {await fn(req,res,next);} catch(e) {
+      if(e.stripeCode)console.error('[stripe-api]', {requestId:req.correlationId||null,route:req.route?.path||null,stripeRequestId:e.stripeRequestId||null,code:e.stripeCode});
+      if(e.status)return res.status(e.status).json({error:e.message,requestId:req.correlationId||undefined,stripeRequestId:e.stripeRequestId||undefined});
+      next(e);
+    }
+  };
   const notice=(c,user,title,text,link)=>c.query('INSERT INTO notifications(id,user_id,type,title,text,link,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)',[crypto.randomUUID(),user,'payment',title,text,link,now()]);
   const negotiation=async(c,id,user)=>{
     const n=await one(c,'SELECT * FROM negotiations WHERE id=$1'+lock,[id]);

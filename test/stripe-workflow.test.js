@@ -10,7 +10,7 @@ const {Client}=require('pg');
 // Real HTTP handlers, transactions and HMAC signatures; only the external Stripe HTTP responses are simulated.
 async function workflow(provider){
  const previousFetch=global.fetch, savedEnv={...process.env};
- let db,repo,server,admin,schema,currentTime=new Date(),accountReady=false,creates=0,refundCreates=0,failCreate=false,failRead=false,failRefund=false;
+ let db,repo,server,admin,schema,currentTime=new Date(),accountReady=false,creates=0,refundCreates=0,failCreate=false,failRead=false,failRefund=false,rejectOnboarding=true;
  const sessions=new Map(),intents=new Map(),refunds=new Map(),disputes=new Map(),createBodies=new Map();
  const baseSchema=`
  CREATE TABLE users(id TEXT PRIMARY KEY,name TEXT,email TEXT,role TEXT, stripe_account_id TEXT);
@@ -51,7 +51,10 @@ async function workflow(provider){
   global.fetch=async(url,options={})=>{
    if(!String(url).startsWith('https://api.stripe.com/'))return previousFetch(url,options);
    const u=new URL(url),p=new URLSearchParams(options.body||'');
-   if(u.pathname==='/v1/accounts'&&options.method==='POST')return response({id:'acct_seller'});
+   if(u.pathname==='/v1/accounts'&&options.method==='POST'){
+    if(rejectOnboarding){rejectOnboarding=false;return {ok:false,status:400,headers:new Headers({'request-id':'req_connect_setup'}),json:async()=>({error:{type:'invalid_request_error',message:'You must complete your platform profile to use Connect.'}})};}
+    return response({id:'acct_seller'});
+   }
    if(u.pathname==='/v1/accounts/acct_seller')return response({id:'acct_seller',charges_enabled:accountReady,payouts_enabled:accountReady,details_submitted:accountReady,requirements:{currently_due:accountReady?[]:['individual.verification.document']}});
    if(u.pathname==='/v1/account_links')return response({url:'https://connect.stripe.com/setup/test'});
    if(u.pathname==='/v1/accounts/acct_seller/login_links')return response({url:'https://connect.stripe.com/express/test'});
@@ -78,6 +81,7 @@ async function workflow(provider){
    throw new Error('Unexpected Stripe request '+url);
   };
   const app=express();app.use(express.json({verify:(req,res,b)=>{req.rawBody=Buffer.from(b);}}));
+  app.use((req,res,next)=>{req.correlationId='request-test-connect';next();});
   const auth=(req,res,next)=>{try{req.user=jwt.verify(String(req.headers.authorization||'').replace('Bearer ',''),'test-secret');next();}catch{res.sendStatus(401);}};
   registerDeliveryRoutes(app,{postgres:repo,sqlite:{all,run:(q,p=[])=>db.run(q,p),persist(){}},authenticate:auth,flush:async()=>{},refreshMetrics(){},clock:()=>currentTime});
   const flow=registerStripeRoutes(app,{postgres:repo,sqlite:{all,run:(q,p=[])=>db.run(q,p),persist(){}},authenticate:auth,jwt,jwtSecret:'test-secret',clock:()=>currentTime});
@@ -102,6 +106,9 @@ async function workflow(provider){
   };
   const get=async id=>one('SELECT * FROM payments WHERE id=$1',[id]);
 
+  const connectError=await call('/api/payments/stripe/connect','seller');assert.equal(connectError.status,400);
+  assert.match(connectError.data.error,/perfil da plataforma Connect/);assert.equal(connectError.data.requestId,'request-test-connect');assert.equal(connectError.data.stripeRequestId,'req_connect_setup');
+  assert.equal((await one("SELECT stripe_test_account_id FROM users WHERE id='seller'")).stripe_test_account_id,null);
   assert.equal((await call('/api/payments/stripe/connect','seller')).status,200);
   assert.equal((await one("SELECT stripe_test_account_id FROM users WHERE id='seller'")).stripe_test_account_id,'acct_seller');
   assert.equal((await call('/api/payments/stripe/status','seller')).data.chargesEnabled,false);

@@ -123,3 +123,63 @@ test('Pausing live sales still allows reconciliation and refunds for existing pa
     }finally{global.fetch=original;}
   });
 });
+
+test('Connect errors without error.code retain the provider reason and Stripe request ID', async () => {
+  await env({STRIPE_SECRET_KEY:'sk_test_error_test',APP_BASE_URL:'https://reusa.example',STRIPE_DEMO_MODE:'false'},async()=>{
+    const originalFetch=global.fetch,originalError=console.error,logs=[];
+    try {
+      console.error=(...args)=>logs.push(args);
+      global.fetch=async()=>({ok:false,status:400,headers:new Headers({'request-id':'req_connect_error'}),json:async()=>({error:{type:'invalid_request_error',message:"You can only create new accounts if you've signed up for Connect, which you can learn how to do at https://stripe.com/docs/connect."}})});
+      await assert.rejects(stripe.createConnectedAccount('seller@example.test','test-onboarding-key'),error=>{
+        assert.equal(error.status,400);assert.equal(error.stripeCode,'invalid_request_error');
+        assert.equal(error.stripeRequestId,'req_connect_error');assert.match(error.stripeMessage,/signed up for Connect/);
+        assert.match(error.message,/perfil da plataforma Connect/);assert.equal(error.checkoutRejected,false);return true;
+      });
+      const diagnostic=logs[0][1];assert.equal(diagnostic.endpoint,'/accounts');assert.equal(diagnostic.stripeRequestId,'req_connect_error');assert.match(diagnostic.message,/signed up for Connect/);
+    }finally{global.fetch=originalFetch;console.error=originalError;}
+  });
+});
+
+test('Onboarding diagnostics redact API keys, webhook secrets, email, personal numbers and URL tokens', async () => {
+  await env({STRIPE_SECRET_KEY:'sk_test_do_not_log_me',STRIPE_WEBHOOK_SECRET:'whsec_do_not_log_me',APP_BASE_URL:'https://reusa.example',STRIPE_DEMO_MODE:'false'},async()=>{
+    const originalFetch=global.fetch,originalError=console.error,logs=[];
+    try {
+      console.error=(...args)=>logs.push(args);
+      global.fetch=async()=>({ok:false,status:400,headers:new Headers({'request-id':'req_redacted'}),json:async()=>({error:{type:'invalid_request_error',param:'return_url',message:'Invalid return_url https://user:private-password@reusa.example/configuracoes?state=private-state#private-fragment; sk_test_do_not_log_me whsec_do_not_log_me seller@example.test 123.456.789-00'}})});
+      await assert.rejects(stripe.accountLink('acct_example','https://reusa.example/refresh','https://reusa.example/configuracoes'),error=>{
+        assert.match(error.message,/Invalid return_url/);assert.equal(error.stripeParam,'return_url');
+        const captured=JSON.stringify(logs)+' '+error.message+' '+error.stripeMessage;
+        for(const value of ['sk_test_do_not_log_me','whsec_do_not_log_me','seller@example.test','123.456.789-00','private-password','private-state','private-fragment'])assert.equal(captured.includes(value),false,value);
+        return true;
+      });
+    }finally{global.fetch=originalFetch;console.error=originalError;}
+  });
+});
+
+test('Stripe authentication errors explain which configuration to update without returning the key', async () => {
+  await env({STRIPE_SECRET_KEY:'sk_test_rejected_key',APP_BASE_URL:'https://reusa.example',STRIPE_DEMO_MODE:'false'},async()=>{
+    const originalFetch=global.fetch,originalError=console.error;
+    try {
+      console.error=()=>{};
+      global.fetch=async()=>({ok:false,status:401,json:async()=>({error:{type:'authentication_error',message:'Invalid API Key provided: sk_test_rejected_key'}})});
+      await assert.rejects(stripe.createConnectedAccount('seller@example.test','test-onboarding-key'),error=>{
+        assert.equal(error.status,503);assert.match(error.message,/STRIPE_SECRET_KEY/);assert.equal(error.stripeMessage.includes('sk_test_rejected_key'),false);return true;
+      });
+    }finally{global.fetch=originalFetch;console.error=originalError;}
+  });
+});
+
+test('Provider diagnostic changes preserve checkout rejection and ambiguous response handling', async () => {
+  await env({STRIPE_SECRET_KEY:'sk_test_error_test',APP_BASE_URL:'https://reusa.example',STRIPE_DEMO_MODE:'true'},async()=>{
+    const originalFetch=global.fetch,originalError=console.error;
+    try {
+      console.error=()=>{};
+      for(const status of [400,409,429,500]){
+        global.fetch=async()=>({ok:false,status,json:async()=>({error:{type:'invalid_request_error',message:'Provider rejected request'}})});
+        await assert.rejects(stripe.createCheckout({paymentId:'payment-error-test',postId:'post',amountCents:2500,payerEmail:'buyer@example.test',method:'card'}),error=>{
+          assert.equal(error.checkoutRejected,status===400);assert.equal(error.uncertain,status!==400);return true;
+        });
+      }
+    }finally{global.fetch=originalFetch;console.error=originalError;}
+  });
+});

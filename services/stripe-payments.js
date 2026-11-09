@@ -27,6 +27,64 @@ function requireReady({operational=false}={}) {
 function demoEnabled() { return testMode() && secretKey().startsWith('sk_test_') && configured(); }
 function baseUrl() { return String(process.env.APP_BASE_URL || '').trim().replace(/\/$/, ''); }
 
+function safeProviderMessage(value) {
+  let message = typeof value === 'string' ? value : '';
+  for (const secret of [secretKey(), process.env.STRIPE_WEBHOOK_SECRET, process.env.STRIPE_CONNECT_WEBHOOK_SECRET]) {
+    if (secret && secret.length >= 8) message = message.split(secret).join('[segredo ocultado]');
+  }
+  return message
+    .replace(/\b(?:sk|rk|pk)_(?:test|live)_[A-Za-z0-9_.*-]+/gi, '[chave ocultada]')
+    .replace(/\bwhsec_[A-Za-z0-9_.*-]+/gi, '[segredo ocultado]')
+    .replace(/\b(?:pi|seti)_[A-Za-z0-9_]+_secret_[A-Za-z0-9_]+/g, '[segredo ocultado]')
+    .replace(/\bBearer\s+\S+/gi, 'Bearer [ocultado]')
+    .replace(/https?:\/\/[^\s<>"']+/gi, value => {
+      try {const url=new URL(value);url.username='';url.password='';url.search='';url.hash='';return url.toString();}
+      catch {return '[URL ocultada]';}
+    })
+    .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, '[token ocultado]')
+    .replace(/[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/gi, '[email ocultado]')
+    .replace(/\b(?:\d[ .\/-]?){8,18}\d\b/g, '[número ocultado]')
+    .replace(/[\u0000-\u001F\u007F]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 600);
+}
+
+function stripeFailure(method, path, response, data) {
+  const raw = data?.error || {};
+  const identifier = value => typeof value === 'string' && /^[a-zA-Z0-9_]{1,100}$/.test(value) ? value : null;
+  const type = identifier(raw.type) || 'api_error';
+  const code = identifier(raw.code) || type;
+  const message = safeProviderMessage(raw.message);
+  const providerRequest = response.headers?.get?.('request-id') || raw.request_id;
+  const stripeRequestId = typeof providerRequest === 'string' && /^req_[a-zA-Z0-9_]{1,120}$/.test(providerRequest) ? providerRequest : null;
+  const param = typeof raw.param === 'string' && /^[a-zA-Z0-9_\[\].-]{1,120}$/.test(raw.param) ? raw.param : null;
+  const endpoint = path.split('?')[0].replace(/\/(?:acct|cs|pi|re|dp)_[^/]+/g, '/:id');
+  let publicMessage;
+  if (/signed up for connect|sign up for connect|platform profile|responsibilities of managing losses/i.test(message)) {
+    publicMessage = 'A Stripe exige concluir a configuração do perfil da plataforma Connect no mesmo ambiente da chave utilizada. Em teste, conclua o perfil do Connect nesse ambiente; não é necessário habilitar cobranças reais.';
+  } else if (response.status === 401 || code === 'api_key_expired') {
+    publicMessage = 'A chave secreta Stripe foi recusada ou expirou. Atualize STRIPE_SECRET_KEY no Railway com a chave do ambiente correto.';
+  } else if (code === 'resource_missing') {
+    publicMessage = 'A conta ou o pagamento não foi encontrado neste ambiente Stripe. Confira se a chave pertence ao mesmo ambiente de teste ou produção utilizado no cadastro.';
+  } else if (code === 'idempotency_key_in_use' || response.status === 409 || response.status === 429) {
+    publicMessage = 'A Stripe ainda está processando a solicitação. Aguarde e consulte o status antes de tentar novamente.';
+  } else if (['/accounts','/account_links'].includes(path) && message) {
+    publicMessage = 'A Stripe não conseguiu iniciar o cadastro do vendedor. Motivo: ' + message;
+  } else {
+    publicMessage = 'A Stripe não conseguiu concluir a solicitação. Consulte o suporte com o ID deste erro.';
+  }
+  const error = new Error(publicMessage);
+  error.status = response.status === 401 || response.status === 403 ? 503 : Math.max(400, Math.min(502, response.status));
+  error.uncertain = response.status >= 500 || response.status === 429 || response.status === 409;
+  error.checkoutRejected = method === 'POST' && path === '/checkout/sessions' && response.status >= 400 && response.status < 500 && !error.uncertain;
+  error.refundRejected = method === 'POST' && path === '/refunds' && response.status >= 400 && response.status < 500 && !error.uncertain;
+  error.stripeCode = code;
+  error.stripeType = type;
+  error.stripeMessage = message;
+  error.stripeRequestId = stripeRequestId;
+  error.stripeParam = param;
+  console.error('[stripe] request failed', {method,endpoint,status:response.status,type,code,param,message:message || 'Stripe não retornou error.message.',stripeRequestId});
+  return error;
+}
+
 function flatten(form, key, value) {
   if (value === undefined || value === null) return;
   if (Array.isArray(value)) return value.forEach((item, i) => flatten(form, `${key}[${i}]`, item));
@@ -52,16 +110,7 @@ async function request(method, path, body, { accountId, idempotencyKey } = {}) {
   catch { throw Object.assign(new Error('A confirmação da Stripe demorou. Consulte o status antes de tentar novamente.'), {status:502, uncertain:true}); }
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const code = typeof data?.error?.code === 'string' ? data.error.code : 'stripe_api_error';
-    const type = typeof data?.error?.type === 'string' ? data.error.type : 'api_error';
-    console.error('[stripe] request failed', { status: response.status, type, code });
-    const error = new Error('Stripe recusou a solicitação: ' + code);
-    error.status = response.status === 401 || response.status === 403 ? 503 : Math.max(400, Math.min(502, response.status));
-    error.uncertain = response.status >= 500 || response.status === 429 || response.status === 409;
-    error.checkoutRejected = method === 'POST' && path === '/checkout/sessions' && response.status >= 400 && response.status < 500 && !error.uncertain;
-    error.refundRejected = method === 'POST' && path === '/refunds' && response.status >= 400 && response.status < 500 && !error.uncertain;
-    error.stripeCode = code;
-    throw error;
+    throw stripeFailure(method, path, response, data);
   }
   return data;
 }
