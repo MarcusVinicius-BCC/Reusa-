@@ -555,11 +555,9 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
         const postResult = await client.query('SELECT * FROM posts WHERE id=$1 FOR UPDATE', [req.params.id]);
         const post = postResult.rows[0]; if (!post) throw Object.assign(new Error('Post not found'), { status: 404 });
         if (post.author_id !== req.user.id) throw Object.assign(new Error('Only the owner can reserve this post'), { status: 403 });
-        if (post.goal === SALE_GOAL && stripe.configured()) {
-          const seller = (await client.query('SELECT mercado_pago_access_token FROM users WHERE id=$1', [req.user.id])).rows[0];
-          if (!mercadoPago.checkoutSellerToken(seller?.mercado_pago_access_token)) {
-            throw Object.assign(new Error('Conecte sua conta Stripe antes de reservar este item para receber o pagamento.'), { status: 409 });
-          }
+        if (post.goal === SALE_GOAL && stripe.configured() && !stripe.demoEnabled()) {
+          const seller = (await client.query('SELECT stripe_account_id FROM users WHERE id=$1', [req.user.id])).rows[0];
+          if (!seller?.stripe_account_id) throw Object.assign(new Error('Conecte sua conta Stripe antes de reservar o anúncio.'), { status: 409 });
         }
         if (!['Disponível', 'Reservado'].includes(post.status)) throw Object.assign(new Error('This post is no longer available'), { status: 400 });
         const negotiation = (await client.query("SELECT * FROM negotiations WHERE post_id=$1 AND interested_id=$2 AND status <> 'cancelled'", [post.id, req.body?.interestedId])).rows[0];
