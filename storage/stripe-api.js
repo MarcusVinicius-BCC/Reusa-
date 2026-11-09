@@ -1,7 +1,6 @@
 'use strict';
 const crypto = require('node:crypto');
 const stripe = require('../services/stripe-payments');
-const legacy = require('../services/mercado-pago');
 const fail = (status, message) => { throw Object.assign(new Error(message), {status}); };
 const parse = value => { try { return JSON.parse(value || '{}'); } catch { return {}; } };
 const accountColumn = () => stripe.liveMode() ? 'stripe_live_account_id' : 'stripe_test_account_id';
@@ -9,12 +8,13 @@ const objectId = value => typeof value === 'string' ? value : value?.id;
 const closedDispute = status => !status || ['won','warning_closed'].includes(status);
 function paymentView(p) {
   if (!p) return null;
+  const isStripe = Boolean(p.provider_reference?.startsWith('cs_') || p.provider_request_json);
   return {id:p.id, negotiationId:p.negotiation_id, payerId:p.payer_id, payeeId:p.payee_id,
     amountCents:Number(p.amount_cents), currency:p.currency, method:p.method, status:p.status,
-    providerReference:p.provider_reference, checkoutUrl:p.checkout_url, failureCode:p.failure_code,
+    providerReference:p.provider_reference, checkoutUrl:isStripe ? p.checkout_url : null, failureCode:p.failure_code,
     createdAt:p.created_at, updatedAt:p.updated_at, paidAt:p.paid_at, refundedAt:p.refunded_at,
     refundedAmountCents:Number(p.refunded_amount_cents || 0), disputeStatus:p.dispute_status,
-    refundStatus:p.refund_status, testMode:p.provider_livemode===0, provider:p.provider_reference?.startsWith('cs_') || p.provider_request_json ? 'stripe' : 'mercadopago'};
+    refundStatus:p.refund_status, testMode:p.provider_livemode===0, provider:isStripe ? 'stripe' : p.provider_reference?.startsWith('test_') ? 'test' : 'unavailable'};
 }
 
 function registerStripeRoutes(app, {postgres, sqlite, authenticate, jwt, jwtSecret, clock=()=>new Date()}) {
@@ -334,17 +334,6 @@ function registerStripeRoutes(app, {postgres, sqlite, authenticate, jwt, jwtSecr
     const snapshot={id:event.id,type:event.type,account:event.account,livemode:event.livemode,data:{object:{id:o.id,payment_intent:objectId(o.payment_intent),metadata:{payment_id:o.metadata?.payment_id}}}};
     await work(c=>c.query('INSERT INTO stripe_webhook_events(id,account_id,livemode,type,payload_json,next_attempt_at,received_at) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING',[event.id,event.account||'',Number(event.livemode),event.type,JSON.stringify(snapshot),now(),now()]));
     await processEvent(event.id);res.sendStatus(200);
-  }));
-  app.post('/api/payments/mercadopago/webhook',route(async(req,res)=>{
-    const id=String(req.query?.['data.id']||req.body?.data?.id||'');
-    if(String(req.query?.type||req.body?.type||'').toLowerCase()!=='order'||!id)return res.sendStatus(200);
-    if(!legacy.webhookIsValid({dataId:id,requestId:req.get('x-request-id'),signature:req.get('x-signature')}))return res.sendStatus(401);
-    const p=await queryOne('SELECT * FROM payments WHERE provider_reference=$1',[id]);
-    if(!p)return res.sendStatus(503);
-    const user=await queryOne('SELECT mercado_pago_access_token FROM users WHERE id=$1',[p.payee_id]);
-    const token=legacy.checkoutSellerToken(user?.mercado_pago_access_token);if(!token)return res.sendStatus(503);
-    const order=await legacy.order(id,token),status=legacy.verifiedOrderStatus(order,p);
-    if(status)await applyPayment(p.id,{status},'legacy_mercadopago_webhook');res.sendStatus(200);
   }));
   // Preserve financial records while they can still receive provider updates.
   app.delete('/api/profile',authenticate,route(async(req,res,next)=>{

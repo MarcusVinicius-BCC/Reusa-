@@ -430,7 +430,7 @@ exigem, além do token, um usuário com `role=admin`.
 
 Os novos pagamentos utilizam Stripe Checkout hospedado e contas Connect Express brasileiras. O vendedor cadastra dados e conta bancária pela Stripe; o ReUsa+ consulta a habilitação de cobranças e repasses antes de liberar vendas. Cada cobrança é criada diretamente na conta do vendedor, após o aceite da oferta e do acordo de entrega.
 
-A integração inclui verificação de assinatura pelo SDK oficial, registro persistente de tentativas e eventos, idempotência, conciliação periódica, recuperação de respostas perdidas, reembolso integral pelo vendedor e acompanhamento de reembolsos parciais/contestações. O webhook Mercado Pago permanece para cobranças históricas. Pix inicia desabilitado e depende da habilitação efetiva pela Stripe.
+A integração inclui verificação de assinatura pelo SDK oficial, registro persistente de tentativas e eventos, idempotência, conciliação periódica, recuperação de respostas perdidas, reembolso integral pelo vendedor e acompanhamento de reembolsos parciais/contestações. Pix inicia desabilitado e depende da habilitação efetiva pela Stripe.
 
 Veja **[configuração completa de produção, vendedores e webhooks](docs/stripe-production.md)**. O documento contém as variáveis exatas do Railway, os dois destinos de eventos e os procedimentos de validação e suporte.
 

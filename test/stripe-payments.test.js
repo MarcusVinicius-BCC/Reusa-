@@ -2,6 +2,16 @@ const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const crypto = require('node:crypto');
 const stripe = require('../services/stripe-payments');
+const {paymentView} = require('../storage/stripe-api');
+
+test('Archived payments keep their financial status without exposing a retired checkout link', () => {
+  const payment={id:'archive-1',status:'succeeded',amount_cents:2500,currency:'BRL',provider_reference:'retired-order-1',checkout_url:'https://retired-provider.example/checkout/1'};
+  const archived=paymentView(payment);
+  assert.equal(archived.status,'succeeded');assert.equal(archived.amountCents,2500);
+  assert.equal(archived.provider,'unavailable');assert.equal(archived.checkoutUrl,null);
+  const current=paymentView({...payment,provider_reference:'cs_test_current',checkout_url:'https://checkout.stripe.com/c/pay/current'});
+  assert.equal(current.provider,'stripe');assert.equal(current.checkoutUrl,'https://checkout.stripe.com/c/pay/current');
+});
 
 function env(next, run) {
   const names = ['STRIPE_SECRET_KEY','APP_BASE_URL','STRIPE_DEMO_MODE','STRIPE_ENABLE_LIVE','STRIPE_PIX_ENABLED','STRIPE_WEBHOOK_SECRET','STRIPE_CONNECT_WEBHOOK_SECRET'];

@@ -13,7 +13,7 @@ async function workflow(provider){
  let db,repo,server,admin,schema,currentTime=new Date(),accountReady=false,creates=0,refundCreates=0,failCreate=false,failRead=false,failRefund=false;
  const sessions=new Map(),intents=new Map(),refunds=new Map(),disputes=new Map(),createBodies=new Map();
  const baseSchema=`
- CREATE TABLE users(id TEXT PRIMARY KEY,name TEXT,email TEXT,role TEXT, stripe_account_id TEXT,mercado_pago_access_token TEXT);
+ CREATE TABLE users(id TEXT PRIMARY KEY,name TEXT,email TEXT,role TEXT, stripe_account_id TEXT);
  CREATE TABLE posts(id TEXT PRIMARY KEY,title TEXT,goal TEXT,status TEXT,reserved_by TEXT,author_id TEXT,updated_at TEXT);
  CREATE TABLE negotiations(id TEXT PRIMARY KEY,post_id TEXT,owner_id TEXT,interested_id TEXT,status TEXT,proposal_status TEXT,proposal_amount_cents INTEGER,proposal_method TEXT,updated_at TEXT);
  CREATE TABLE collection_deliveries(id TEXT PRIMARY KEY,negotiation_id TEXT,status TEXT,proposed_by TEXT,accepted_by TEXT,confirmation_token_expires_at TEXT,payment_locked INTEGER,updated_at TEXT,payment_attempt_key TEXT);

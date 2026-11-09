@@ -1165,10 +1165,6 @@ function seedDatabase() {
   ensureColumn('users', 'suspended', 'INTEGER NOT NULL DEFAULT 0');
   ensureColumn('users', 'notification_preferences_json', "TEXT NOT NULL DEFAULT '[]'");
   ensureColumn('users', 'stripe_account_id', 'TEXT');
-  ensureColumn('users', 'mercado_pago_user_id', 'TEXT'); // Legacy history only
-  ensureColumn('users', 'mercado_pago_access_token', 'TEXT');
-  ensureColumn('users', 'mercado_pago_refresh_token', 'TEXT');
-  ensureColumn('users', 'mercado_pago_token_expires_at', 'TEXT');
   ensureColumn('users', 'last_active_at', 'TEXT');
   ensureColumn('users', 'created_at', 'TEXT');
   ensureColumn('users', 'email_verified', 'INTEGER NOT NULL DEFAULT 1');

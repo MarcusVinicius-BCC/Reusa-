@@ -91,9 +91,9 @@ Uma conta apenas criada não é considerada pronta. A API consulta a Stripe ante
 - A confirmação de recebimento fica bloqueada durante contestação aberta ou reembolso em andamento. O vendedor responde à contestação pelo painel Stripe; o ReUsa+ acompanha a situação atualizada. Uma contestação perdida permanece visível para resolução, sem liberar nova cobrança na mesma negociação.
 - Uma oferta Pix antiga sem cobrança pode ser reenviada por cartão pelo comprador, mantendo o valor. Isso encerra o acordo/reserva anteriores e exige novo aceite do vendedor. Pagamentos em andamento impedem essa mudança.
 
-## Pagamentos antigos Mercado Pago
+## Histórico financeiro
 
-Nenhuma nova cobrança é criada pelo Mercado Pago. O serviço legado e o endpoint `/api/payments/mercadopago/webhook` permanecem para conciliar pedidos anteriores, inclusive estornos informados pelo provedor. Preserve `MERCADOPAGO_WEBHOOK_SECRET`, `MERCADOPAGO_ACCESS_TOKEN`, o segredo usado na criptografia dos tokens e demais credenciais que os pedidos antigos ainda utilizem. Não remova o destino de eventos antigo enquanto existirem pedidos pendentes.
+A integração ativa utiliza exclusivamente Stripe. A retirada da integração antiga preserva os registros de pagamentos e auditoria. Colunas antigas já presentes no banco permanecem inativas; o aplicativo não utiliza essas credenciais. Registros de outro provedor não são convertidos em cobranças Stripe nem expõem links de checkout desativados. A identificação do provedor desses registros fica como indisponível.
 
 ## Operação e validação
 
