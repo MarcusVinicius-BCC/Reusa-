@@ -75,7 +75,7 @@ async function createCheckout({ paymentId, postId, title, amountCents, payerEmai
   if (!demoEnabled()) {
     if (!sellerAccountId) throw Object.assign(new Error('O vendedor precisa conectar sua conta Stripe.'), { status: 409 });
     const account = await connectedAccount(sellerAccountId);
-    if (!account?.charges_enabled) throw Object.assign(new Error('A conta Stripe do vendedor ainda não está habilitada para cobranças.'), { status: 409 });
+    if (!account?.charges_enabled || !account?.payouts_enabled) throw Object.assign(new Error('A conta Stripe do vendedor ainda não está habilitada para cobranças e repasses.'), { status: 409 });
     accountId = sellerAccountId;
   }
   const returnUrl = baseUrl() + '/anuncios/' + encodeURIComponent(postId);
