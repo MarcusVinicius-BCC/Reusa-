@@ -426,100 +426,94 @@ GET|POST|PATCH|DELETE /api/admin/*
 Rotas protegidas exigem `Authorization: Bearer <token>`. Rotas administrativas
 exigem, além do token, um usuário com `role=admin`.
 
-## Pagamentos com Mercado Pago (Checkout Pro via Orders API)
+## Pagamentos com Stripe Checkout e Stripe Connect
 
-O ReUsa+ usa **Checkout Pro via Orders API** (`POST /v1/orders`), que devolve
-`checkout_url`. O frontend já redireciona o comprador ao Mercado Pago, sem receber
-ou armazenar dados de cartão. O sistema só confirma um pagamento após o webhook
-assinado e uma consulta à order na API do Mercado Pago, conferindo referência,
-moeda, valor esperado e valor efetivamente pago.
+A Stripe substitui o Mercado Pago nos **novos pagamentos**. O ReUsa+ usa a
+API Stripe Checkout Sessions (`POST /v1/checkout/sessions`) e redireciona o
+comprador ao checkout hospedado. Dados de cartão nunca passam pelo backend.
 
-**Modelo existente:** o anunciante conecta sua própria conta Mercado Pago
-em **Configurações > Ofertas e pagamentos > Conectar conta**. O backend usa
-o token autorizado desse vendedor para criar as orders. Esta integração
-**não** implementa divisão automática de comissões nem custódia dos valores
-pela plataforma; valide a elegibilidade da aplicação para OAuth/marketplace
-no painel antes de habilitar vendas reais.
+### Demonstração acadêmica (sem dinheiro real)
 
-### Apresentação acadêmica: pagamentos em modo de demonstração
-
-Para apresentar o fluxo completo sem CNPJ, conta de vendedor real ou OAuth,
-utilize **exclusivamente** o Access Token de **TESTE** da aplicação e configure
-`MERCADOPAGO_TEST_MODE=true` no serviço backend do Railway.
-
-- O modo de teste usa a conta sandbox da aplicação em todas as orders; não faz
-  repasses a contas individuais de vendedores e não requer OAuth.
-- O perfil mostra **Modo de demonstração — pagamentos de teste**, em vez de
-  induzir vendedores a conectar contas reais.
-- O Checkout Pro pode ser demonstrado com cartões de **teste**; a aprovação
-  vem do provedor sandbox e o ReUsa+ atualiza o estado via webhook.
-- O Pix de teste pode mostrar QR Code, mas **não deve ser pago por aplicativo
-  bancário real**. Não prometa conclusão da transação Pix no sandbox.
-- Em nenhuma hipótese use credenciais de produção para esta apresentação.
-  `MERCADOPAGO_TEST_MODE` não transforma um token de produção em sandbox.
-- Ao encerrar a apresentação, desligue o serviço público no Railway ou
-  desabilite os fluxos de pagamento. Não basta mudar a variável para false:
-  isso ativaria o caminho de produção que ainda depende de OAuth de vendedores.
-
-A interface usa a indicação de modo teste enviada pelo backend autenticado,
-e a indicação é exibida somente quando as credenciais estão configuradas e
-`MERCADOPAGO_TEST_MODE=true`. A remoção da demonstração não afeta anúncios,
-negociações e o restante da plataforma.
-
-### Configuração no Railway / backend
-
-Configure as variáveis (nunca envie tokens ao GitHub):
+Crie uma conta Stripe e use somente **chaves de teste** (`sk_test_`).
+Em Railway > Reusa > Variables, configure:
 
 ```text
-MERCADOPAGO_ACCESS_TOKEN=seu-access-token-da-aplicacao
-MERCADOPAGO_CLIENT_ID=seu-client-id
-MERCADOPAGO_CLIENT_SECRET=seu-client-secret
-MERCADOPAGO_WEBHOOK_SECRET=assinatura-secreta-do-webhook
-APP_BASE_URL=https://seu-dominio-publico.example
-MERCADOPAGO_REDIRECT_URI=https://seu-dominio-publico.example/api/payments/mercadopago/callback
+APP_BASE_URL=https://reusa.up.railway.app
+STRIPE_SECRET_KEY=sk_test_SEU_SEGREDO
+STRIPE_WEBHOOK_SECRET=whsec_SEGREDO_DA_CONTA
+STRIPE_DEMO_MODE=true
+STRIPE_PIX_ENABLED=false
+STRIPE_CONNECT_ENABLED=false
+STRIPE_ENABLE_LIVE=false
 ```
 
-O painel Mercado Pago deve autorizar a URL exata de redirecionamento OAuth:
-`https://seu-dominio-publico.example/api/payments/mercadopago/callback`.
+No Dashboard Stripe > Developers/Workbench > Webhooks/Event destinations,
+adicione um destino **da sua própria conta** apontando para:
+`https://reusa.up.railway.app/api/payments/stripe/webhook`.
 
-Em **Configuração de Webhooks**, selecione o ambiente correto (Teste ou
-Produção), a URL pública HTTPS
-`https://seu-dominio-publico.example/api/payments/mercadopago/webhook`
-e o evento **Order (Mercado Pago)**, não somente o evento Payment.
-Use a assinatura secreta daquele ambiente na variável
-`MERCADOPAGO_WEBHOOK_SECRET`. A verificação da assinatura inclui
-o parâmetro `data.id` e o header `x-request-id`.
+Inscreva-se em `checkout.session.completed`,
+`checkout.session.async_payment_succeeded`,
+`checkout.session.async_payment_failed` e `checkout.session.expired`.
+Copie o signing secret `whsec_...` para `STRIPE_WEBHOOK_SECRET`.
+Configure a URL pública HTTPS sem barra final e reinicie o serviço.
 
-### Fluxo existente
+No modo demonstração, o backend ignora contas de vendedores: não há repasses.
+Cartões de teste podem simular compras; nenhuma transação pode ser aprovada
+somente pelo retorno do navegador. Uma cobrança só é confirmada após webhook
+com assinatura válida e verificação do Checkout Session ID, referência,
+valor, moeda e `payment_status=paid` na API Stripe.
 
-1. Comprador propõe um valor em centavos, e o vendedor aceita e reserva o item.
-2. Backend verifica a proposta aceita e cria uma order no token do vendedor,
-   com `external_reference` apontando para o pagamento no ReUsa+.
-3. Backend salva `provider_reference` (ID da order) e `checkout_url`.
-4. Comprador abre o Checkout Pro. Retorno no navegador **não é confirmação**.
-5. Webhook `order` assinado aciona `GET /v1/orders/{id}`, e o backend
-   só registra sucesso quando a order e o valor pago são validados.
+### Pix
+
+O Pix da Stripe pode exigir convite e habilitação. Não assuma que estará
+disponível para uma conta nova. O ReUsa+ inicia com
+`STRIPE_PIX_ENABLED=false`. Ao habilitar na Stripe, configure a variável
+como `true`; o Checkout hospedado gerenciará QR Code e instruções.
+O ReUsa+ não gera Pix nem mostra QR próprio. Nunca tente pagar um QR Code
+com um banco real durante testes.
+
+### Stripe Connect para vendedores
+
+Em uma conta de plataforma habilitada para Connect, defina
+`STRIPE_DEMO_MODE=false` e `STRIPE_CONNECT_ENABLED=true` **somente após**
+revisar elegibilidade e onboarding. O botão **Conectar Stripe** abre o
+onboarding hospedado para contas Express brasileiras. O servidor consulta
+`charges_enabled` e `payouts_enabled` antes de indicar conta pronta.
+Checkout é criado na conta conectada (cobrança direta), sem guardar senhas
+ou tokens de vendedores no banco.
+
+Para pagamentos de contas conectadas, crie **outro destino webhook** no
+painel Stripe configurado para **contas conectadas**, na mesma URL
+`/api/payments/stripe/webhook`, e salve o segredo desse destino em
+`STRIPE_CONNECT_WEBHOOK_SECRET`. Não confunda os segredos.
+
+**A produção não está pronta apenas porque o código compila.** É preciso
+conta verificada, Connect habilitado, webhook configurado, política de
+estornos/reembolsos, teste real autorizado e requisitos de conformidade
+aplicáveis. O backend bloqueia `sk_live_` enquanto
+`STRIPE_ENABLE_LIVE` não for explicitamente `true`.
 
 Rotas:
 
 ```text
+GET  /api/payments/stripe/connect
+GET  /api/payments/stripe/refresh
+GET  /api/payments/stripe/status
+POST /api/payments/stripe/webhook
 GET  /api/negotiations/:id/payment
 POST /api/negotiations/:id/payment
-POST /api/payments/mercadopago/webhook
-GET  /api/payments/mercadopago/connect
-GET  /api/payments/mercadopago/callback
 ```
 
-**Antes de produção:** executar `npm test` e `npm run build`,
-realizar testes reais no ambiente de teste do Mercado Pago, revisar
-concorrência e recuperação de webhooks que chegam antes de a order
-ser persistida, rotação/renovação de tokens OAuth e tratamento de
-estornos parciais. Não faça merge nem deploy antes dessa validação.
+Os registros históricos de pagamentos Mercado Pago continuam no banco para
+consulta, mas **nenhum novo pagamento** utiliza o provedor antigo. A migração
+SQL acrescenta `users.stripe_account_id` sem apagar dados existentes.
 
-Documentação oficial:
-- https://www.mercadopago.com.br/developers/pt/docs/checkout-pro-orders/create-order
-- https://www.mercadopago.com.br/developers/pt/docs/checkout-pro-orders/notifications
-- https://www.mercadopago.com.br/developers/pt/docs/checkout-pro-orders/web-integration/configure-back-urls
+Documentação:
+- https://docs.stripe.com/payments/checkout
+- https://docs.stripe.com/connect/express-accounts
+- https://docs.stripe.com/webhooks
+- https://support.stripe.com/questions/how-to-enable-pix-as-a-payment-method-in-brazil
+
 
 ## Testes e validação
 
