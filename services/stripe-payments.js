@@ -68,6 +68,8 @@ function stripeFailure(method, path, response, data, {accessCheck=false}={}) {
     publicMessage = 'A chave Stripe atual não tem acesso à conta ou ao recurso solicitado. Confira a conta Stripe, o ambiente de teste e as permissões da integração.';
   } else if (code === 'idempotency_key_in_use' || response.status === 409 || response.status === 429) {
     publicMessage = 'A Stripe ainda está processando a solicitação. Aguarde e consulte o status antes de tentar novamente.';
+  } else if (path === '/checkout/sessions' && isTestEnvironment() && message) {
+    publicMessage = 'A Stripe recusou a criação do pagamento de teste. Motivo: ' + message;
   } else if (['/accounts','/account_links','/v2/core/accounts','/v2/core/account_links'].includes(path) && message) {
     publicMessage = 'A Stripe não conseguiu iniciar o cadastro do vendedor. Motivo: ' + message;
   } else {
@@ -141,7 +143,7 @@ async function accountRequest(path, method, operation, options) {
       {error:error.raw || {type:error.rawType,code:error.code,message:error.message,param:error.param}},options);
   }
 }
-const accountInclude = ['configuration.merchant','defaults','requirements'];
+const accountInclude = ['configuration.merchant','defaults','requirements','identity'];
 async function connectedAccount(accountId, version='v1', {accessCheck=false}={}) {
   if (!accountId) return null;
   if (version === 'v2') return accountRequest('/v2/core/accounts/' + accountId,'GET',client => client.v2.core.accounts.retrieve(accountId,{include:accountInclude}),{accessCheck});
@@ -172,8 +174,10 @@ async function createCheckout({ paymentId, postId, title, amountCents, payerEmai
   let accountId = null;
   if (!demoEnabled()) {
     if (!sellerAccountId) throw Object.assign(new Error('O vendedor precisa conectar sua conta Stripe.'), { status: 409 });
-    const account = sellerView(await connectedAccount(sellerAccountId,sellerAccountVersion));
-    if (!account.chargesEnabled || !account.payoutsEnabled) throw Object.assign(new Error('A conta Stripe do vendedor ainda não está habilitada para cobranças e repasses.'), { status: 409 });
+    const providerAccount = await connectedAccount(sellerAccountId,sellerAccountVersion);
+    const account = sellerView(providerAccount);
+    const sandboxAttempt = method === 'card' && canAttemptTestCardCharge(providerAccount);
+    if ((!account.chargesEnabled || !account.payoutsEnabled) && !sandboxAttempt) throw Object.assign(new Error('A conta Stripe do vendedor ainda não está habilitada para cobranças e repasses.'), { status: 409 });
     accountId = sellerAccountId;
   }
   const returnUrl = (returnBaseUrl || baseUrl()) + '/anuncios/' + encodeURIComponent(postId);
@@ -238,9 +242,10 @@ function sellerView(account) {
   if(account?.object==='v2.core.account'){
     const merchant=account.configuration?.merchant,capabilities=merchant?.capabilities||{},entries=account.requirements?.entries||[];
     const managed=account.dashboard==='full'&&account.defaults?.responsibilities?.losses_collector==='stripe'&&account.defaults?.responsibilities?.fees_collector==='stripe';
+    const enabled=managed&&!account.closed&&merchant?.applied!==false&&merchant?.active!==false;
     const charges=capabilities.card_payments?.status==='active'||process.env.STRIPE_PIX_ENABLED==='true'&&capabilities.pix_payments?.status==='active';
     const due=entries.filter(e=>e.awaiting_action_from==='user'&&['currently_due','past_due'].includes(e.minimum_deadline?.status));
-    return {connected:true,chargesEnabled:managed&&!account.closed&&merchant?.active!==false&&charges,payoutsEnabled:managed&&!account.closed&&merchant?.active!==false&&capabilities.stripe_balance?.payouts?.status==='active',
+    return {connected:true,chargesEnabled:enabled&&charges,payoutsEnabled:enabled&&capabilities.stripe_balance?.payouts?.status==='active',
       detailsSubmitted:due.length===0,requirementsDue:due.map(e=>e.description||'Dados pendentes'),pendingVerification:entries.some(e=>e.awaiting_action_from==='stripe'),
       disabledReason:account.closed?'account_closed':!managed?'unsupported_account_configuration':(!charges?capabilities.card_payments?.status_details?.[0]?.code||'requirements_pending':null),dashboard:'full',accountVersion:'v2'};
   }
@@ -248,4 +253,17 @@ function sellerView(account) {
     detailsSubmitted:!!account?.details_submitted, requirementsDue:(account?.requirements?.currently_due || []).map(String),
     pendingVerification:!!account?.requirements?.pending_verification?.length, disabledReason:account?.requirements?.disabled_reason || null,accountVersion:'v1'};
 }
-module.exports = { configured, requireReady, liveMode, isTestEnvironment, demoEnabled, testMode, createConnectedAccount, accountLink, connectedAccount, createCheckout, checkoutSession, verifiedSessionStatus, webhookEvent, accountWebhookEvent, dashboardLink, paymentIntent, dispute, disputes, refund, refundStatus, refunds, sellerView };
+function canAttemptTestCardCharge(account) {
+  if(!isTestEnvironment() || demoEnabled() || process.env.STRIPE_ALLOW_PENDING_TEST_SELLERS!=='true')return false;
+  if(account?.object!=='v2.core.account' || account.livemode!==false || account.closed || account.identity?.country!=='BR')return false;
+  const merchant=account.configuration?.merchant;
+  if(account.dashboard!=='full' || account.defaults?.responsibilities?.losses_collector!=='stripe' || account.defaults?.responsibilities?.fees_collector!=='stripe' || !merchant || merchant.applied===false || merchant.active===false)return false;
+  const card=merchant.capabilities?.card_payments,payouts=merchant.capabilities?.stripe_balance?.payouts;
+  const statuses=['active','pending','restricted'];
+  if(!statuses.includes(card?.status) || payouts&&!statuses.includes(payouts.status))return false;
+  const allowedCodes=['determining_status','requirements_past_due','requirements_pending_verification'];
+  if([...(card.status_details || []),...(payouts?.status_details || [])].some(detail=>!allowedCodes.includes(detail.code)))return false;
+  const ready=sellerView(account);
+  return !ready.chargesEnabled || !ready.payoutsEnabled;
+}
+module.exports = { configured, requireReady, liveMode, isTestEnvironment, demoEnabled, testMode, createConnectedAccount, accountLink, connectedAccount, createCheckout, checkoutSession, verifiedSessionStatus, webhookEvent, accountWebhookEvent, dashboardLink, paymentIntent, dispute, disputes, refund, refundStatus, refunds, sellerView, canAttemptTestCardCharge };

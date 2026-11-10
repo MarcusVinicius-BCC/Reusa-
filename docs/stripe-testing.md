@@ -42,6 +42,24 @@ A conexão criada não equivale à aprovação de identidade. Complete o cadastr
 
 As contas de vendedores de teste e de produção são armazenadas separadamente. Não é necessário cadastrar produtos manualmente no Stripe nem habilitar `STRIPE_ENABLE_LIVE` para esta demonstração.
 
+## Tentar uma compra na conta brasileira do vendedor com cadastro pendente
+
+Algumas restrições de capacidades não são aplicadas pela Stripe em todos os cenários de sandbox. Para verificar se a própria Stripe permite uma compra de teste na conta conectada brasileira, é possível habilitar explicitamente:
+
+```env
+STRIPE_CONNECT_ENABLED=true
+STRIPE_DEMO_MODE=false
+STRIPE_ALLOW_PENDING_TEST_SELLERS=true
+STRIPE_ENABLE_LIVE=false
+STRIPE_PIX_ENABLED=false
+```
+
+Mantenha a chave `sk_test_` e os segredos de webhook do mesmo ambiente. O vendedor deve ter uma conta Accounts v2 brasileira vinculada ao usuário no ReUsa+, com painel completo e responsabilidades administradas pela Stripe. A tela indicará a possibilidade de tentar uma compra de teste sem alterar as pendências reais de verificação.
+
+Use um segundo usuário para enviar uma oferta por cartão. O vendedor aceita a oferta; as duas pessoas combinam e aceitam a entrega. O comprador abre o Checkout e usa um cartão de teste da Stripe, por exemplo `4242 4242 4242 4242`, validade futura e CVC de três dígitos. A requisição usa `Stripe-Account` com o ID do vendedor, e o pagamento preserva esse ID em `provider_account_id`. Confirme a conta de destino, o evento conectado e o pagamento de teste no Dashboard para comprovar o fluxo completo.
+
+Esta opção permite a **tentativa**: a Stripe pode recusar a criação ou o pagamento e continua sendo a fonte do resultado. Uma sessão aberta permanece em processamento até confirmação pela API; o formulário, as capacidades e os repasses não são marcados como aprovados pelo ReUsa+. Ela não resolve CPF ou prova de vida nem comprova prontidão de produção. A exceção exige simultaneamente chave de teste, `livemode=false` na conta, país BR, configuração compatível e ausência de rejeição/desativação. Ela se aplica somente a cartão, fica desligada por padrão e é ignorada com chave de produção. Ao concluir a demonstração, volte `STRIPE_ALLOW_PENDING_TEST_SELLERS=false`.
+
 ## Troca de conta Stripe ou sandbox
 
 Uma chave de outra conta Stripe ou sandbox não dá acesso aos vendedores criados no ambiente anterior. Se a conta antiga foi excluída ou o ambiente foi substituído, o ReUsa+ mostra “Sem acesso”, mantém o ID do vínculo anterior e pausa as consultas automáticas. Isso não é uma verificação de identidade em andamento.

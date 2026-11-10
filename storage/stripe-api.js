@@ -71,7 +71,7 @@ function registerStripeRoutes(app, {postgres, sqlite, authenticate, jwt, jwtSecr
     }
     const view=stripe.sellerView(account);
     await work(c=>c.query('UPDATE users SET stripe_status_json=$1,stripe_checked_at=$2 WHERE id=$3',[JSON.stringify(view),now(),userId]));
-    return {...view,accountId:id,demoMode:stripe.demoEnabled(),testMode:stripe.isTestEnvironment(),liveMode:stripe.liveMode(),connectEnabled:process.env.STRIPE_CONNECT_ENABLED==='true'};
+    return {...view,accountId:id,canAttemptTestCardCharge:stripe.canAttemptTestCardCharge(account),demoMode:stripe.demoEnabled(),testMode:stripe.isTestEnvironment(),liveMode:stripe.liveMode(),connectEnabled:process.env.STRIPE_CONNECT_ENABLED==='true'};
   }
   const onboardingLink=async(userId,accountId,version)=>{
     const state=jwt.sign({purpose:'stripe-onboarding',sub:userId,accountId,live:stripe.liveMode()},jwtSecret,{expiresIn:'15m'});
@@ -153,7 +153,7 @@ function registerStripeRoutes(app, {postgres, sqlite, authenticate, jwt, jwtSecr
     if(!stripe.configured()&&process.env.NODE_ENV==='test')return next();
     stripe.requireReady();
     const status=await sellerStatus(req.user.id);
-    if(!status.chargesEnabled||!status.payoutsEnabled)fail(409,'Conclua o cadastro Stripe e aguarde a liberação de cobranças e repasses antes de aceitar vendas.');
+    if((!status.chargesEnabled||!status.payoutsEnabled)&&!status.canAttemptTestCardCharge)fail(409,'Conclua o cadastro Stripe e aguarde a liberação de cobranças e repasses antes de aceitar vendas.');
     next();
   });
   app.patch('/api/negotiations/:id/proposal',authenticate,sellerGate);

@@ -52,9 +52,9 @@ async function workflow(provider){
    return 'n_'+id;
   };
   await sql("INSERT INTO users(id,name,email,role) VALUES('seller','Seller','seller@example.test','user'),('buyer','Buyer','buyer@example.test','user'),('admin','Admin','admin@example.test','admin')");
-  Object.assign(process.env,{NODE_ENV:'test',STRIPE_SECRET_KEY:'sk_test_workflow',APP_BASE_URL:'https://reusa.example',STRIPE_WEBHOOK_SECRET:'whsec_platform',STRIPE_CONNECT_WEBHOOK_SECRET:'whsec_connected',STRIPE_ACCOUNT_WEBHOOK_SECRET:'whsec_accounts',STRIPE_DEMO_MODE:'false',STRIPE_CONNECT_ENABLED:'true',STRIPE_ENABLE_LIVE:'false',STRIPE_PIX_ENABLED:'false'});
+  Object.assign(process.env,{NODE_ENV:'test',STRIPE_SECRET_KEY:'sk_test_workflow',APP_BASE_URL:'https://reusa.example',STRIPE_WEBHOOK_SECRET:'whsec_platform',STRIPE_CONNECT_WEBHOOK_SECRET:'whsec_connected',STRIPE_ACCOUNT_WEBHOOK_SECRET:'whsec_accounts',STRIPE_DEMO_MODE:'false',STRIPE_CONNECT_ENABLED:'true',STRIPE_ENABLE_LIVE:'false',STRIPE_PIX_ENABLED:'false',STRIPE_ALLOW_PENDING_TEST_SELLERS:'false'});
   const response=value=>({ok:true,json:async()=>value});
-  const accountFixture=id=>({id,object:'v2.core.account',livemode:false,closed:accountClosed,dashboard:'full',defaults:{responsibilities:{fees_collector:'stripe',losses_collector:'stripe'}},configuration:{merchant:{capabilities:{card_payments:{status:accountReady?'active':'pending'},stripe_balance:{payouts:{status:accountReady?'active':'pending'}}}}},requirements:{entries:accountReady?[]:[{description:'Documento de teste',awaiting_action_from:'user',minimum_deadline:{status:'currently_due'}}]}});
+  const accountFixture=id=>({id,object:'v2.core.account',livemode:false,identity:{country:'BR'},closed:accountClosed,dashboard:'full',defaults:{responsibilities:{fees_collector:'stripe',losses_collector:'stripe'}},configuration:{merchant:{applied:true,capabilities:{card_payments:{status:accountReady?'active':'pending'},stripe_balance:{payouts:{status:accountReady?'active':'pending'}}}}},requirements:{entries:accountReady?[]:[{description:'Documento de teste',awaiting_action_from:'user',minimum_deadline:{status:'currently_due'}}]}});
   global.fetch=async(url,options={})=>{
    if(new URL(String(url)).hostname!=='api.stripe.com')return previousFetch(url,options);
    const u=new URL(url),p=new URLSearchParams(options.body||'');
@@ -261,6 +261,32 @@ async function workflow(provider){
   currentTime=new Date(currentTime.getTime()+24*3600000);await flow.runReconciliation();assert.equal(creates,beforeOldRetry);assert.match((await get(uncertain.id)).provider_reference,/^pending_/);
   assert.equal((await call('/api/admin/payments/stripe','buyer')).status,403);
   const diagnostics=await call('/api/admin/payments/stripe','admin');assert.equal(diagnostics.status,200);assert.ok(diagnostics.data.lastProcessedWebhookAt);assert.ok(!JSON.stringify(diagnostics.data).includes('sk_test_workflow'));
+
+  // Sandbox opt-in attempts a real connected Checkout without pretending KYC is approved.
+  accountReady=false;process.env.STRIPE_ALLOW_PENDING_TEST_SELLERS='true';
+  const pendingSellerStatus=await call('/api/payments/stripe/status','seller');
+  assert.equal(pendingSellerStatus.data.canAttemptTestCardCharge,true);
+  assert.equal(pendingSellerStatus.data.chargesEnabled,false);assert.equal(pendingSellerStatus.data.payoutsEnabled,false);
+  const pendingSellerNegotiation=await addSale('p_pending_connected');
+  const pendingAgreement=await one('SELECT * FROM collection_deliveries WHERE negotiation_id=$1',[pendingSellerNegotiation]);
+  await sql('DELETE FROM collection_deliveries WHERE negotiation_id=$1',[pendingSellerNegotiation]);
+  assert.equal((await call('/api/negotiations/'+pendingSellerNegotiation+'/proposal','seller',{decision:'accepted'},'PATCH')).status,200);
+  const beforePendingAttempt=creates;assert.equal((await pay(pendingSellerNegotiation)).status,409);assert.equal(creates,beforePendingAttempt);
+  await sql('INSERT INTO collection_deliveries(id,negotiation_id,status,proposed_by,accepted_by,confirmation_token_expires_at,payment_locked,updated_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',[pendingAgreement.id,pendingSellerNegotiation,pendingAgreement.status,pendingAgreement.proposed_by,pendingAgreement.accepted_by,pendingAgreement.confirmation_token_expires_at,pendingAgreement.payment_locked,pendingAgreement.updated_at]);
+  const attempted=await pay(pendingSellerNegotiation);assert.equal(attempted.status,201);
+  const attemptedPayment=await get(attempted.data.payment.id);
+  assert.equal(attemptedPayment.status,'processing');assert.equal(attemptedPayment.provider_account_id,'acct_seller');
+  assert.equal(attemptedPayment.provider_livemode,0);
+  markPaid(attemptedPayment);
+  assert.equal((await webhook('checkout.session.completed',attemptedPayment,'evt_pending_seller_paid')).status,200);
+  assert.equal((await get(attemptedPayment.id)).status,'succeeded');
+  assert.equal((await call('/api/payments/stripe/status','seller')).data.chargesEnabled,false,'a successful sandbox payment must not forge a capability approval');
+  const refusedNegotiation=await addSale('p_pending_refused');rejectCreate=true;
+  assert.equal((await pay(refusedNegotiation)).status,400);
+  assert.equal((await one('SELECT status FROM payments WHERE negotiation_id=$1',[refusedNegotiation])).status,'failed');
+  process.env.STRIPE_ALLOW_PENDING_TEST_SELLERS='false';
+  await sql('DELETE FROM collection_deliveries WHERE negotiation_id=$1',[refusedNegotiation]);
+  assert.equal((await call('/api/negotiations/'+refusedNegotiation+'/proposal','seller',{decision:'accepted'},'PATCH')).status,409);
 
   // Demo checkout routing must not hide or block the seller's real sandbox onboarding.
   process.env.STRIPE_DEMO_MODE='true';accountReady=false;

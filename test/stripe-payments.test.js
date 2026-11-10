@@ -14,7 +14,7 @@ test('Archived payments keep their financial status without exposing a retired c
 });
 
 function env(next, run) {
-  const names = ['STRIPE_SECRET_KEY','APP_BASE_URL','STRIPE_DEMO_MODE','STRIPE_ENABLE_LIVE','STRIPE_PIX_ENABLED','STRIPE_WEBHOOK_SECRET','STRIPE_CONNECT_WEBHOOK_SECRET'];
+  const names = ['STRIPE_SECRET_KEY','APP_BASE_URL','STRIPE_DEMO_MODE','STRIPE_ENABLE_LIVE','STRIPE_PIX_ENABLED','STRIPE_WEBHOOK_SECRET','STRIPE_CONNECT_WEBHOOK_SECRET','STRIPE_ALLOW_PENDING_TEST_SELLERS'];
   const previous = Object.fromEntries(names.map(name => [name, process.env[name]]));
   for (const [name, value] of Object.entries(next)) { if (value === undefined) delete process.env[name]; else process.env[name] = value; }
   return Promise.resolve().then(run).finally(() => { for (const name of names) { if (previous[name] === undefined) delete process.env[name]; else process.env[name] = previous[name]; } });
@@ -121,6 +121,49 @@ test('Connected seller Checkout uses Stripe-Account header only when verified fo
       assert.equal(sent[1].headers['Stripe-Account'],'acct_123456');
       assert.equal(new URLSearchParams(sent[1].body).get('line_items[0][price_data][unit_amount]'),'3500');
     } finally {global.fetch=originalFetch;}
+  });
+});
+
+const pendingBrazilianSeller=()=>({id:'acct_brsandbox',object:'v2.core.account',livemode:false,identity:{country:'BR'},dashboard:'full',defaults:{responsibilities:{fees_collector:'stripe',losses_collector:'stripe'}},configuration:{merchant:{applied:true,capabilities:{card_payments:{status:'restricted',status_details:[{code:'requirements_past_due'}]},stripe_balance:{payouts:{status:'pending'}}}}},requirements:{entries:[{description:'identity.individual.id_numbers.br_cpf',awaiting_action_from:'user',minimum_deadline:{status:'past_due'}}]}});
+
+test('Pending seller attempts require explicit sandbox opt-in and never change actual verification flags',async()=>{
+  await env({STRIPE_SECRET_KEY:'sk_test_pending',APP_BASE_URL:'https://reusa.example',STRIPE_DEMO_MODE:'false',STRIPE_ALLOW_PENDING_TEST_SELLERS:'false'},async()=>{
+    const account=pendingBrazilianSeller();assert.equal(stripe.canAttemptTestCardCharge(account),false);
+    process.env.STRIPE_ALLOW_PENDING_TEST_SELLERS='true';assert.equal(stripe.canAttemptTestCardCharge(account),true);
+    assert.equal(stripe.sellerView(account).chargesEnabled,false);assert.equal(stripe.sellerView(account).payoutsEnabled,false);
+    assert.deepEqual(stripe.sellerView(account).requirementsDue,['identity.individual.id_numbers.br_cpf']);
+    const mutations=[
+      a=>{a.livemode=true;},a=>{delete a.livemode;},a=>{a.closed=true;},a=>{a.identity.country='US';},a=>{a.dashboard='express';},
+      a=>{a.defaults.responsibilities.losses_collector='application';},a=>{a.configuration.merchant.applied=false;},
+      a=>{a.configuration.merchant.capabilities.card_payments.status='rejected';},a=>{a.configuration.merchant.capabilities.card_payments.status='unsupported';},
+      a=>{a.configuration.merchant.capabilities.card_payments.status_details=[{code:'rejected_fraud'}];},
+      a=>{a.configuration.merchant.capabilities.stripe_balance.payouts.status='rejected';}
+    ];
+    for(const mutate of mutations){const candidate=pendingBrazilianSeller();mutate(candidate);assert.equal(stripe.canAttemptTestCardCharge(candidate),false);}
+    process.env.STRIPE_DEMO_MODE='true';assert.equal(stripe.canAttemptTestCardCharge(account),false);
+    process.env.STRIPE_DEMO_MODE='false';process.env.STRIPE_SECRET_KEY='sk_live_pending';assert.equal(stripe.canAttemptTestCardCharge(account),false);
+  });
+});
+
+test('An opted-in Brazilian sandbox Checkout is created on the seller and still honors provider rejection',async()=>{
+  await env({STRIPE_SECRET_KEY:'sk_test_pending',APP_BASE_URL:'https://reusa.example',STRIPE_DEMO_MODE:'false',STRIPE_ALLOW_PENDING_TEST_SELLERS:'true',STRIPE_PIX_ENABLED:'true'},async()=>{
+    const original=global.fetch,originalError=console.error,sent=[];let reject=false;
+    try{
+      console.error=()=>{};
+      global.fetch=async(url,options)=>{
+        if(new URL(url).pathname==='/v2/core/accounts/acct_brsandbox')return new Response(JSON.stringify(pendingBrazilianSeller()),{headers:{'Content-Type':'application/json'}});
+        sent.push(options);assert.equal(options.headers['Stripe-Account'],'acct_brsandbox');
+        return reject?new Response(JSON.stringify({error:{type:'invalid_request_error',code:'account_invalid',message:'This seller cannot currently make charges.'}}),{status:400,headers:{'Content-Type':'application/json'}}):new Response(JSON.stringify({id:'cs_test_connected',url:'https://checkout.stripe.com/c/pay/connected',livemode:false}),{headers:{'Content-Type':'application/json'}});
+      };
+      const details={paymentId:'connected-test',postId:'post',amountCents:2500,payerEmail:'buyer@example.test',method:'card',sellerAccountId:'acct_brsandbox',sellerAccountVersion:'v2'};
+      const result=await stripe.createCheckout(details);assert.equal(result.stripeAccountId,'acct_brsandbox');
+      assert.equal(sent[0].headers['Idempotency-Key'],'connected-test');assert.equal(new URLSearchParams(sent[0].body).get('allowed_payment_method_types[0]'),'card');
+      assert.equal(new URLSearchParams(sent[0].body).get('line_items[0][price_data][currency]'),'brl');
+      await assert.rejects(stripe.createCheckout({...details,method:'pix'}),{status:409});assert.equal(sent.length,1,'the sandbox exception only permits card attempts');
+      reject=true;await assert.rejects(stripe.createCheckout(details),error=>{
+        assert.equal(error.checkoutRejected,true);assert.match(error.message,/seller cannot currently make charges/);return true;
+      });
+    }finally{global.fetch=original;console.error=originalError;}
   });
 });
 
@@ -287,6 +330,8 @@ test('Accounts v2 must have active card and payout capabilities; missing data or
   assert.equal(stripe.sellerView({...account,defaults:{responsibilities:{fees_collector:'stripe',losses_collector:'application'}}}).chargesEnabled,false);
   assert.equal(stripe.sellerView({...account,closed:true}).chargesEnabled,false);
   assert.equal(stripe.sellerView({...account,closed:true}).payoutsEnabled,false);
+  const deactivated={...account,configuration:{merchant:{...account.configuration.merchant,applied:false}}};
+  assert.equal(stripe.sellerView(deactivated).chargesEnabled,false);assert.equal(stripe.sellerView(deactivated).payoutsEnabled,false);
   const pending=stripe.sellerView({...account,configuration:{merchant:{capabilities:{card_payments:{status:'pending'}}}},requirements:{entries:[{awaiting_action_from:'user',description:'Dados de teste',minimum_deadline:{status:'currently_due'}},{awaiting_action_from:'stripe',minimum_deadline:{status:'currently_due'}}]}});
   assert.equal(pending.chargesEnabled,false);assert.equal(pending.payoutsEnabled,false);assert.equal(pending.pendingVerification,true);assert.deepEqual(pending.requirementsDue,['Dados de teste']);
 });

@@ -18,6 +18,7 @@ export default function StripeConnectionCard({status,testMode,demoMode,error,bus
       <div><dt>Cobranças</dt><dd>{denied?'Não consultadas':view.ready||status?.chargesEnabled?'Liberadas':'Aguardando liberação'}</dd></div>
       <div><dt>Repasses</dt><dd>{denied?'Não consultados':view.ready||status?.payoutsEnabled?'Liberados':'Aguardando liberação'}</dd></div>
     </dl>}
+    {testMode&&!demoMode&&!denied&&status?.canAttemptTestCardCharge&&<p className="delivery-feedback" role="status"><strong>Teste de compra com vendedor conectado.</strong> O ReUsa+ permite tentar um pagamento por cartão na conta de teste deste vendedor. A Stripe confirma a disponibilidade ao abrir o checkout. O cadastro permanece com as pendências indicadas abaixo.</p>}
     {error&&<p className="delivery-error" role="alert">{error}</p>}
     <div className="seller-payment-actions">
       {view.canResume&&canOnboard&&<button type="button" className="primary-btn" disabled={busy} onClick={onConnect}>{view.connected?'Continuar cadastro':'Conectar Stripe'}</button>}
