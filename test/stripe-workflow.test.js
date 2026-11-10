@@ -9,7 +9,8 @@ const {Client}=require('pg');
 
 // Real HTTP handlers, transactions and HMAC signatures; only the external Stripe HTTP responses are simulated.
 async function workflow(provider){
- const previousFetch=global.fetch, savedEnv={...process.env};
+ const previousFetch=global.fetch, previousInfo=console.info, savedEnv={...process.env},connectionLogs=[];
+ console.info=(...args)=>connectionLogs.push(args);
  let db,repo,server,admin,schema,currentTime=new Date(),accountReady=false,creates=0,refundCreates=0,failCreate=false,failRead=false,failRefund=false,rejectOnboarding=true,accountClosed=false,rejectCreate=false,recoveryAccess='forbidden',rejectRecoveryCreation=false,failRecoveryLink=false;
  const accountCreateKeys=new Map();
  const sessions=new Map(),intents=new Map(),refunds=new Map(),disputes=new Map(),createBodies=new Map();
@@ -326,6 +327,11 @@ async function workflow(provider){
   assert.equal((await call('/api/payments/stripe/status','recovery')).data.accountId,'acct_recovered');
   assert.equal((await call('/api/payments/stripe/connect','recovery')).status,200,'a lost link response must resume the saved account');
   assert.equal(accountCreateKeys.size,beforeRecovery+1);
+  const savedConnection=connectionLogs.find(([message])=>message==='[stripe-connect] test account replacement saved');
+  assert.ok(savedConnection);assert.equal(savedConnection[1].previousAccountId,'acct_previous');assert.equal(savedConnection[1].accountId,'acct_recovered');
+  assert.equal(connectionLogs.some(([message])=>message==='[stripe-connect] test onboarding ready'),restarted.some(result=>result.status===200),'only a completed link response should be logged as ready');
+  assert.equal(JSON.stringify(connectionLogs).includes('sk_test_workflow'),false);
+  assert.equal(JSON.stringify(connectionLogs).includes('state='),false);
 
   accountClosed=true;
   const closedEvent={...accountEvent,id:'evt_account_closed',type:'v2.core.account.closed'},closedRaw=JSON.stringify(closedEvent),closedTs=Math.floor(Date.now()/1000),closedSig='t='+closedTs+',v1='+crypto.createHmac('sha256','whsec_accounts').update(closedTs+'.'+closedRaw).digest('hex');
@@ -336,7 +342,7 @@ async function workflow(provider){
   Object.assign(process.env,{STRIPE_SECRET_KEY:'sk_live_fixture',STRIPE_ENABLE_LIVE:'true'});
   assert.equal((await call('/api/payments/stripe/status','seller')).data.connected,false);
  }finally{
-  global.fetch=previousFetch;for(const key of Object.keys(process.env))if(!(key in savedEnv))delete process.env[key];Object.assign(process.env,savedEnv);
+  global.fetch=previousFetch;console.info=previousInfo;for(const key of Object.keys(process.env))if(!(key in savedEnv))delete process.env[key];Object.assign(process.env,savedEnv);
   if(server)await new Promise(r=>server.close(r));if(db)db.close();if(repo)await repo.close();
   if(admin){if(schema)await admin.query('DROP SCHEMA '+schema+' CASCADE');await admin.end();}
  }

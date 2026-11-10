@@ -200,6 +200,39 @@ test('An inaccessible connected account reports the key/permission mismatch inst
   });
 });
 
+test('Expected sandbox access probes are informational while authentication, production and financial failures remain errors', async () => {
+  const originalFetch=global.fetch,originalError=console.error,originalInfo=console.info;
+  try {
+    for(const scenario of [
+      {version:'v1',probe:true,status:403,code:'forbidden',info:true},
+      {version:'v2',probe:true,status:403,code:'forbidden',info:true},
+      {version:'v2',probe:true,status:404,code:'resource_missing',info:true},
+      {version:'v2',probe:false,status:403,code:'forbidden',info:false},
+      {version:'v2',probe:true,status:401,code:'api_key_expired',info:false},
+      {version:'v2',probe:true,status:500,code:'api_error',info:false},
+      {version:'v2',probe:true,status:403,code:'forbidden',live:true,info:false}
+    ]) {
+      await env({STRIPE_SECRET_KEY:scenario.live?'sk_live_probe_fixture':'sk_test_probe_fixture',APP_BASE_URL:'https://reusa.example',STRIPE_DEMO_MODE:'false'},async()=>{
+        const infos=[],errors=[];console.info=(...args)=>infos.push(args);console.error=(...args)=>errors.push(args);
+        global.fetch=async()=>new Response(JSON.stringify({error:{type:'api_error',code:scenario.code,message:'Access probe sk_test_probe_fixture seller@example.test'}}),{status:scenario.status,headers:{'Content-Type':'application/json','request-id':'req_access_probe'}});
+        await assert.rejects(stripe.connectedAccount('acct_previous',scenario.version,{accessCheck:scenario.probe}),error=>{
+          assert.equal(error.stripeCode,scenario.code);assert.equal(error.stripeRequestId,'req_access_probe');return true;
+        });
+        assert.equal(infos.length,scenario.info?1:0);assert.equal(errors.length,scenario.info?0:1);
+        const diagnostic=(infos[0]||errors[0])[1];assert.equal(diagnostic.status,scenario.status);assert.equal(diagnostic.stripeRequestId,'req_access_probe');
+        assert.equal(JSON.stringify(diagnostic).includes('sk_test_probe_fixture'),false);
+        assert.equal(JSON.stringify(diagnostic).includes('seller@example.test'),false);
+        // A direct charge also reads the seller, but never opts into an access probe.
+        if(scenario.info&&scenario.status===403&&scenario.version==='v1'){
+          infos.length=0;errors.length=0;
+          await assert.rejects(stripe.createCheckout({paymentId:'p',postId:'post',amountCents:2500,payerEmail:'buyer@example.test',method:'card',sellerAccountId:'acct_previous'}));
+          assert.equal(infos.length,0);assert.equal(errors.length,1);
+        }
+      });
+    }
+  }finally{global.fetch=originalFetch;console.error=originalError;console.info=originalInfo;}
+});
+
 test('Provider diagnostic changes preserve checkout rejection and ambiguous response handling', async () => {
   await env({STRIPE_SECRET_KEY:'sk_test_error_test',APP_BASE_URL:'https://reusa.example',STRIPE_DEMO_MODE:'true'},async()=>{
     const originalFetch=global.fetch,originalError=console.error;

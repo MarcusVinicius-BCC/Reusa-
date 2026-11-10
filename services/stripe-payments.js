@@ -47,7 +47,7 @@ function safeProviderMessage(value) {
     .replace(/[\u0000-\u001F\u007F]/g, ' ').replace(/\s+/g, ' ').trim().slice(0, 600);
 }
 
-function stripeFailure(method, path, response, data) {
+function stripeFailure(method, path, response, data, {accessCheck=false}={}) {
   const raw = data?.error || {};
   const identifier = value => typeof value === 'string' && /^[a-zA-Z0-9_]{1,100}$/.test(value) ? value : null;
   const type = identifier(raw.type) || 'api_error';
@@ -83,7 +83,12 @@ function stripeFailure(method, path, response, data) {
   error.stripeMessage = message;
   error.stripeRequestId = stripeRequestId;
   error.stripeParam = param;
-  console.error('[stripe] request failed', {method,endpoint,status:response.status,type,code,param,message:message || 'Stripe não retornou error.message.',stripeRequestId});
+  const diagnostic={method,endpoint,status:response.status,type,code,param,message:message || 'Stripe não retornou error.message.',stripeRequestId};
+  // Sandbox recovery deliberately probes the previous account. Keep that denial
+  // visible as a diagnostic while unexpected/financial failures remain errors.
+  if(accessCheck && isTestEnvironment() && method==='GET' && /^\/(?:v2\/core\/)?accounts\/acct_[A-Za-z0-9]+$/.test(path) && [403,404].includes(response.status) && ['forbidden','permission_error','resource_missing'].includes(code)) {
+    console.info('[stripe] sandbox account inaccessible',diagnostic);
+  } else console.error('[stripe] request failed',diagnostic);
   return error;
 }
 
@@ -93,7 +98,7 @@ function flatten(form, key, value) {
   if (typeof value === 'object') return Object.entries(value).forEach(([name, item]) => flatten(form, `${key}[${name}]`, item));
   form.append(key, String(value));
 }
-async function request(method, path, body, { accountId, idempotencyKey } = {}) {
+async function request(method, path, body, { accountId, idempotencyKey, accessCheck=false } = {}) {
   // A pause on new sales must not stop reconciliation, refunds or seller support.
   requireReady({operational:true});
   if (accountId && !/^acct_[A-Za-z0-9]+$/.test(accountId)) throw Object.assign(new Error('Invalid Stripe connected account'), { status: 400 });
@@ -112,7 +117,7 @@ async function request(method, path, body, { accountId, idempotencyKey } = {}) {
   catch { throw Object.assign(new Error('A confirmação da Stripe demorou. Consulte o status antes de tentar novamente.'), {status:502, uncertain:true}); }
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    throw stripeFailure(method, path, response, data);
+    throw stripeFailure(method, path, response, data, {accessCheck});
   }
   return data;
 }
@@ -127,20 +132,20 @@ function accountClient() {
   }
   return v2Client;
 }
-async function accountRequest(path, method, operation) {
+async function accountRequest(path, method, operation, options) {
   try {return await operation(accountClient());}
   catch (error) {
     if (error.stripeCode || error.status) throw error;
     if (!error.statusCode) throw Object.assign(new Error('A conexão com a Stripe demorou. Tente retomar o cadastro em instantes.'),{status:502,uncertain:true});
     throw stripeFailure(method,path,{status:error.statusCode || 502,headers:new Headers(error.headers || {})},
-      {error:error.raw || {type:error.rawType,code:error.code,message:error.message,param:error.param}});
+      {error:error.raw || {type:error.rawType,code:error.code,message:error.message,param:error.param}},options);
   }
 }
 const accountInclude = ['configuration.merchant','defaults','requirements'];
-async function connectedAccount(accountId, version='v1') {
+async function connectedAccount(accountId, version='v1', {accessCheck=false}={}) {
   if (!accountId) return null;
-  if (version === 'v2') return accountRequest('/v2/core/accounts/' + accountId,'GET',client => client.v2.core.accounts.retrieve(accountId,{include:accountInclude}));
-  return request('GET', '/accounts/' + encodeURIComponent(accountId));
+  if (version === 'v2') return accountRequest('/v2/core/accounts/' + accountId,'GET',client => client.v2.core.accounts.retrieve(accountId,{include:accountInclude}),{accessCheck});
+  return request('GET', '/accounts/' + encodeURIComponent(accountId),undefined,{accessCheck});
 }
 async function createConnectedAccount(email, idempotencyKey) {
   requireReady();

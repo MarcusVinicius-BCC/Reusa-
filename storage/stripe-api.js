@@ -59,7 +59,7 @@ function registerStripeRoutes(app, {postgres, sqlite, authenticate, jwt, jwtSecr
     const id=user[accountColumn()];
     if(!id)return {...stripe.sellerView(null),accountId:null,demoMode:stripe.demoEnabled(),testMode:stripe.isTestEnvironment(),liveMode:stripe.liveMode(),connectEnabled:process.env.STRIPE_CONNECT_ENABLED==='true'};
     let account;
-    try { account=await stripe.connectedAccount(id,accountVersion(user)); }
+    try { account=await stripe.connectedAccount(id,accountVersion(user),{accessCheck:true}); }
     catch(error) {
       if(!inaccessibleAccount(error))throw error;
       const payments=await work(c=>hasAccountPayments(c,id));
@@ -104,7 +104,7 @@ function registerStripeRoutes(app, {postgres, sqlite, authenticate, jwt, jwtSecr
     if(!previousId||req.body?.expectedAccountId!==previousId)fail(409,'O vínculo da conta mudou. Atualize a situação antes de continuar.');
     if(await work(c=>hasAccountPayments(c,previousId)))fail(409,'Esta conta possui pagamentos vinculados. Ajuste a chave ou as permissões com o suporte para preservar a conciliação.');
     let denied;
-    try { await stripe.connectedAccount(previousId,accountVersion(user)); }
+    try { await stripe.connectedAccount(previousId,accountVersion(user),{accessCheck:true}); }
     catch(error) { if(!inaccessibleAccount(error))throw error;denied=error.stripeCode; }
     if(!denied)fail(409,'A conta atual está acessível. Continue o cadastro existente.');
     const key='reusa-reconnect-test-'+crypto.createHash('sha256').update(user.id+':'+previousId).digest('hex');
@@ -121,7 +121,9 @@ function registerStripeRoutes(app, {postgres, sqlite, authenticate, jwt, jwtSecr
         [created.id,!current.stripe_account_id||current.stripe_account_id===previousId?created.id:current.stripe_account_id,user.id]);
     });
     // Save the new binding before requesting a short-lived link so a lost response can be resumed.
+    console.info('[stripe-connect] test account replacement saved',{requestId:req.correlationId||null,previousAccountId:previousId,accountId:created.id});
     const link=await onboardingLink(user.id,created.id,'v2');
+    console.info('[stripe-connect] test onboarding ready',{requestId:req.correlationId||null,accountId:created.id});
     res.json({authorizationUrl:link.url,accountId:created.id});
   }));
   app.get('/api/payments/stripe/refresh',route(async(req,res)=>{
