@@ -64,6 +64,8 @@ function stripeFailure(method, path, response, data) {
     publicMessage = 'A chave secreta Stripe foi recusada ou expirou. Atualize STRIPE_SECRET_KEY no Railway com a chave do ambiente correto.';
   } else if (code === 'resource_missing') {
     publicMessage = 'A conta ou o pagamento não foi encontrado neste ambiente Stripe. Confira se a chave pertence ao mesmo ambiente de teste ou produção utilizado no cadastro.';
+  } else if (response.status === 403 || code === 'forbidden') {
+    publicMessage = 'A chave Stripe atual não tem acesso à conta ou ao recurso solicitado. Confira a conta Stripe, o ambiente de teste e as permissões da integração.';
   } else if (code === 'idempotency_key_in_use' || response.status === 409 || response.status === 429) {
     publicMessage = 'A Stripe ainda está processando a solicitação. Aguarde e consulte o status antes de tentar novamente.';
   } else if (['/accounts','/account_links','/v2/core/accounts','/v2/core/account_links'].includes(path) && message) {

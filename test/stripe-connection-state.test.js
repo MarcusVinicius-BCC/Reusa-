@@ -59,6 +59,13 @@ test('Demo payments do not turn a seller with pending requirements into an appro
   assert.equal(approved.kind,'ready');assert.match(approved.description,/conta de teste da plataforma/);
 });
 
+test('An inaccessible stored account cannot be shown as approved or resumed as a valid connection', async () => {
+  const {stripeConnectionState} = await state;
+  const view=stripeConnectionState({connected:true,disabledReason:'account_access_denied',chargesEnabled:true,payoutsEnabled:true,testMode:true,canRestartTestConnection:true});
+  assert.equal(view.kind,'access_denied');assert.equal(view.connected,true);
+  assert.equal(view.ready,false);assert.equal(view.canResume,false);assert.equal(view.label,'Sem acesso');
+});
+
 test('Seller requirements from both account versions have readable labels and preserve unknown requirements', async () => {
   const {stripeRequirementLabel} = await state;
   for (const value of ['individual.dob.day','representative.date_of_birth.month','identity.individual.date_of_birth.year']) assert.equal(stripeRequirementLabel(value),'Data de nascimento');

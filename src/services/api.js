@@ -105,6 +105,7 @@ export const api = {
   updateCollectionStatus: (id, status) => request(`/collection-deliveries/${id}/status`, { method: 'PATCH', body: JSON.stringify({ status }) }),
   paymentItems: () => request('/profile/payment-items'),
   stripeConnect: () => request('/payments/stripe/connect'),
+  stripeReconnectTest: (expectedAccountId) => request('/payments/stripe/reconnect-test', { method:'POST', body:JSON.stringify({expectedAccountId}) }),
   stripeStatus: () => request('/payments/stripe/status'),
   stripeDashboard: () => request('/payments/stripe/dashboard', { method:'POST' }),
   switchOfferToCard: (id) => request(`/negotiations/${id}/switch-to-card`, { method:'POST' }),

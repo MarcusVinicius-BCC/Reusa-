@@ -186,6 +186,20 @@ test('Stripe authentication errors explain which configuration to update without
   });
 });
 
+test('An inaccessible connected account reports the key/permission mismatch instead of a generic failure', async () => {
+  await env({STRIPE_SECRET_KEY:'sk_test_permission_example',APP_BASE_URL:'https://reusa.example',STRIPE_DEMO_MODE:'true'},async()=>{
+    const originalFetch=global.fetch,originalError=console.error;
+    try {
+      console.error=()=>{};
+      global.fetch=async()=>new Response(JSON.stringify({error:{type:'api_error',code:'forbidden',message:'Permission denied for old account.'}}),{status:403,headers:{'Content-Type':'application/json','request-id':'req_permission'}});
+      await assert.rejects(stripe.connectedAccount('acct_previous','v2'),error=>{
+        assert.equal(error.stripeCode,'forbidden');assert.equal(error.stripeRequestId,'req_permission');assert.equal(error.uncertain,false);
+        assert.match(error.message,/chave Stripe atual não tem acesso/);return true;
+      });
+    }finally{global.fetch=originalFetch;console.error=originalError;}
+  });
+});
+
 test('Provider diagnostic changes preserve checkout rejection and ambiguous response handling', async () => {
   await env({STRIPE_SECRET_KEY:'sk_test_error_test',APP_BASE_URL:'https://reusa.example',STRIPE_DEMO_MODE:'true'},async()=>{
     const originalFetch=global.fetch,originalError=console.error;

@@ -2157,10 +2157,12 @@ function SettingsScreen({ onBack, onLogout }) {
   const [stripeStatus, setStripeStatus] = useState(null);
   const [stripeBusy, setStripeBusy] = useState(false);
   const [stripeError, setStripeError] = useState('');
+  const [stripeActionError, setStripeActionError] = useState('');
   const stripeMounted = useRef(true);
   const stripeRequest = useRef(null);
   const paymentDemoMode = Boolean(stripeStatus?.demoMode ?? profile?.user?.stripeDemoMode);
   const paymentTestMode = Boolean(stripeStatus?.testMode ?? profile?.user?.stripeTestMode);
+  const stripeAccessDenied = stripeStatus?.disabledReason === 'account_access_denied';
   const [form, setForm] = useState({ name: profile?.user?.name || '', city: profile?.user?.city || '', neighborhood: profile?.user?.neighborhood || '', cep: profile?.user?.cep || '', address: profile?.user?.address || '', businessName: profile?.user?.businessName || '' });
   const [passwordForm, setPasswordForm] = useState({ currentPassword: '', newPassword: '' });
   const [preferences, setPreferences] = useState(profile?.user?.notificationPreferences || ['Curtidas', 'Comentários', 'Interesse', 'Mensagens', 'Negociações', 'Avaliações', 'Sistema']);
@@ -2187,7 +2189,7 @@ function SettingsScreen({ onBack, onLogout }) {
   }, []);
 
   useEffect(() => {
-    if (activeSection !== 'pagamentos') return;
+    if (activeSection !== 'pagamentos' || stripeAccessDenied) return;
     const refresh = () => {
       if (document.visibilityState !== 'hidden') syncStripeStatus().catch(() => {});
     };
@@ -2202,7 +2204,7 @@ function SettingsScreen({ onBack, onLogout }) {
       window.removeEventListener('pageshow', refresh);
       document.removeEventListener('visibilitychange', refresh);
     };
-  }, [activeSection, syncStripeStatus]);
+  }, [activeSection, syncStripeStatus, stripeAccessDenied]);
 
   useEffect(() => {
     if (profile?.user) setForm({ name: profile.user.name || '', city: profile.user.city || '', neighborhood: profile.user.neighborhood || '', cep: profile.user.cep || '', address: profile.user.address || '', businessName: profile.user.businessName || '' });
@@ -2229,24 +2231,38 @@ function SettingsScreen({ onBack, onLogout }) {
   }
 
   async function connectStripe() {
-    setStripeBusy(true); setStripeError('');
+    setStripeBusy(true); setStripeError(''); setStripeActionError('');
     try {
       const status = await syncStripeStatus();
       if (!stripeConnectionState(status).canResume) return;
       const { authorizationUrl } = await api.stripeConnect();
       window.location.assign(authorizationUrl);
     } catch (error) {
-      setStripeError(error.message);
+      setStripeActionError(error.message);
     } finally { setStripeBusy(false); }
   }
 
   async function openStripeDashboard() {
-    setStripeBusy(true); setStripeError('');
-    try { window.location.assign((await api.stripeDashboard()).url); } catch(error) { setStripeError(error.message); } finally { setStripeBusy(false); }
+    setStripeBusy(true); setStripeError(''); setStripeActionError('');
+    try { window.location.assign((await api.stripeDashboard()).url); } catch(error) { setStripeActionError(error.message); } finally { setStripeBusy(false); }
+  }
+
+  async function reconnectStripeTest() {
+    if (!stripeStatus?.canRestartTestConnection) return;
+    setStripeBusy(true); setStripeError(''); setStripeActionError('');
+    try {
+      const { authorizationUrl } = await api.stripeReconnectTest(stripeStatus.accountId);
+      window.location.assign(authorizationUrl);
+    } catch (error) {
+      // A link response can fail after the replacement was saved. Show that new
+      // binding so the seller can resume it instead of requesting another account.
+      await syncStripeStatus().catch(() => {});
+      setStripeActionError(error.message);
+    } finally { setStripeBusy(false); }
   }
 
   async function refreshStripeStatus() {
-    setStripeBusy(true); setStripeError('');
+    setStripeBusy(true); setStripeError(''); setStripeActionError('');
     try { await syncStripeStatus(); } catch(error) { setStripeError(error.message); } finally { setStripeBusy(false); }
   }
 
@@ -2305,7 +2321,7 @@ function SettingsScreen({ onBack, onLogout }) {
             </section> : null}
             {activeSection === 'pagamentos' ? <section className="card settings-card settings-panel" id="pagamentos">
               <div className="settings-panel-heading"><div><span className="settings-panel-icon payments"><span className="material-symbols-outlined">payments</span></span><div><h2>Ofertas e pagamentos</h2><p>Acompanhe os itens que aguardam sua decisão ou pagamento.</p></div></div></div>
-              <StripeConnectionCard status={stripeStatus} testMode={paymentTestMode} demoMode={paymentDemoMode} error={stripeError} busy={stripeBusy} onConnect={connectStripe} onDashboard={openStripeDashboard} onRefresh={refreshStripeStatus} />
+              <StripeConnectionCard status={stripeStatus} testMode={paymentTestMode} demoMode={paymentDemoMode} error={stripeActionError || stripeError} busy={stripeBusy} onConnect={connectStripe} onReconnectTest={reconnectStripeTest} onDashboard={openStripeDashboard} onRefresh={refreshStripeStatus} />
               <div className="payment-items-list">{paymentItems.length ? paymentItems.map((item) => <article className="payment-item" key={item.negotiationId}><span className="payment-item-icon material-symbols-outlined">shopping_bag</span><div><strong>{item.title}</strong><small>R$ {((item.amountCents || 0) / 100).toFixed(2).replace('.', ',')} · {item.method === 'pix' ? 'PIX' : item.method === 'card' ? 'Cartão' : 'Boleto'}</small><small>{item.negotiationStatus === 'reserved' ? 'Reserva confirmada: combine a entrega antes de pagar' : 'Oferta enviada: aguardando resposta'}</small></div><button className="payment-item-action" onClick={() => window.location.assign(`/anuncios/${item.postId}`)}><span className="material-symbols-outlined">{item.negotiationStatus === 'reserved' ? 'payments' : 'open_in_new'}</span><span>{item.negotiationStatus === 'reserved' ? 'Entrega e pagamento' : 'Acompanhar oferta'}</span></button></article>) : <EmptyState icon="payments" title="Nenhum pagamento pendente" text="Quando você enviar uma oferta, ela aparecerá aqui para acompanhamento." />}</div>
             </section> : null}
           </div>

@@ -1521,6 +1521,7 @@ async function start() {
     ensureColumn('payments','provider_livemode','INTEGER');
     ensureColumn('payments','refunded_amount_cents','INTEGER NOT NULL DEFAULT 0');
     for (const statement of fs.readFileSync(path.join(ROOT,'migrations/20261109_stripe_production.sql'),'utf8').split(';').filter(part=>part.trim()&&!part.trim().startsWith('ALTER TABLE'))) run(statement);
+    for (const statement of fs.readFileSync(path.join(ROOT,'migrations/20261110_stripe_account_link_history.sql'),'utf8').split(';').filter(part=>part.trim())) run(statement);
 
     persistDb();
     console.log('[database] SQLite fallback enabled explicitly');

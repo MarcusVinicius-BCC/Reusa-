@@ -10,7 +10,8 @@ const {Client}=require('pg');
 // Real HTTP handlers, transactions and HMAC signatures; only the external Stripe HTTP responses are simulated.
 async function workflow(provider){
  const previousFetch=global.fetch, savedEnv={...process.env};
- let db,repo,server,admin,schema,currentTime=new Date(),accountReady=false,creates=0,refundCreates=0,failCreate=false,failRead=false,failRefund=false,rejectOnboarding=true,accountClosed=false,rejectCreate=false;
+ let db,repo,server,admin,schema,currentTime=new Date(),accountReady=false,creates=0,refundCreates=0,failCreate=false,failRead=false,failRefund=false,rejectOnboarding=true,accountClosed=false,rejectCreate=false,recoveryAccess='forbidden',rejectRecoveryCreation=false,failRecoveryLink=false;
+ const accountCreateKeys=new Map();
  const sessions=new Map(),intents=new Map(),refunds=new Map(),disputes=new Map(),createBodies=new Map();
  const baseSchema=`
  CREATE TABLE users(id TEXT PRIMARY KEY,name TEXT,email TEXT,role TEXT, stripe_account_id TEXT);
@@ -38,6 +39,8 @@ async function workflow(provider){
    const migration=fs.readFileSync(path.join(__dirname,'../migrations/20261109_stripe_production.sql'),'utf8').replaceAll('ADD COLUMN IF NOT EXISTS','ADD COLUMN');db.exec(migration);
    db.exec(fs.readFileSync(path.join(__dirname,'../migrations/20261109_stripe_v2_accounts.sql'),'utf8').replaceAll('ADD COLUMN IF NOT EXISTS','ADD COLUMN'));
   }
+  const linkHistorySchema=fs.readFileSync(path.join(__dirname,'../migrations/20261110_stripe_account_link_history.sql'),'utf8');
+  if(repo)await repo.query(linkHistorySchema);else db.exec(linkHistorySchema);
   const all=(q,p=[])=>{const r=db.exec(q,p)[0];return r?r.values.map(row=>Object.fromEntries(r.columns.map((k,i)=>[k,row[i]]))):[]};
   const sql=async(q,p=[])=>repo?(await repo.query(q,p)).rows:all(q.replace(/\$\d+/g,'?'),p);
   const one=async(q,p=[])=>(await sql(q,p))[0];
@@ -50,6 +53,7 @@ async function workflow(provider){
   await sql("INSERT INTO users(id,name,email,role) VALUES('seller','Seller','seller@example.test','user'),('buyer','Buyer','buyer@example.test','user'),('admin','Admin','admin@example.test','admin')");
   Object.assign(process.env,{NODE_ENV:'test',STRIPE_SECRET_KEY:'sk_test_workflow',APP_BASE_URL:'https://reusa.example',STRIPE_WEBHOOK_SECRET:'whsec_platform',STRIPE_CONNECT_WEBHOOK_SECRET:'whsec_connected',STRIPE_ACCOUNT_WEBHOOK_SECRET:'whsec_accounts',STRIPE_DEMO_MODE:'false',STRIPE_CONNECT_ENABLED:'true',STRIPE_ENABLE_LIVE:'false',STRIPE_PIX_ENABLED:'false'});
   const response=value=>({ok:true,json:async()=>value});
+  const accountFixture=id=>({id,object:'v2.core.account',livemode:false,closed:accountClosed,dashboard:'full',defaults:{responsibilities:{fees_collector:'stripe',losses_collector:'stripe'}},configuration:{merchant:{capabilities:{card_payments:{status:accountReady?'active':'pending'},stripe_balance:{payouts:{status:accountReady?'active':'pending'}}}}},requirements:{entries:accountReady?[]:[{description:'Documento de teste',awaiting_action_from:'user',minimum_deadline:{status:'currently_due'}}]}});
   global.fetch=async(url,options={})=>{
    if(new URL(String(url)).hostname!=='api.stripe.com')return previousFetch(url,options);
    const u=new URL(url),p=new URLSearchParams(options.body||'');
@@ -57,13 +61,22 @@ async function workflow(provider){
    if(u.pathname==='/v2/core/accounts'&&options.method==='POST'){
     const sent=JSON.parse(options.body);assert.equal(sent.type,undefined);assert.equal(sent.dashboard,'full');assert.equal(sent.identity.country,'BR');assert.equal(sent.defaults.responsibilities.losses_collector,'stripe');assert.equal(sent.defaults.responsibilities.fees_collector,'stripe');assert.equal(sent.configuration.merchant.capabilities.card_payments.requested,true);
     if(rejectOnboarding){rejectOnboarding=false;return v2Response({error:{type:'invalid_request_error',message:'You must complete your platform profile to use Connect.'}},400,{'request-id':'req_connect_setup'});}
-    return v2Response({id:sent.contact_email==='buyer@example.test'?'acct_buyer':'acct_seller',object:'v2.core.account',livemode:false});
+    if(rejectRecoveryCreation&&sent.contact_email==='recovery@example.test'){rejectRecoveryCreation=false;return v2Response({error:{type:'invalid_request_error',message:'Creation not available.'}},400);}
+    const key=new Headers(options.headers).get('idempotency-key');
+    if(!accountCreateKeys.has(key))accountCreateKeys.set(key,{id:sent.contact_email==='recovery@example.test'?'acct_recovered':sent.contact_email==='buyer@example.test'?'acct_buyer':'acct_seller',object:'v2.core.account',livemode:false});
+    return v2Response(accountCreateKeys.get(key));
    }
-   if(u.pathname==='/v2/core/accounts/acct_seller')return v2Response({id:'acct_seller',object:'v2.core.account',livemode:false,closed:accountClosed,dashboard:'full',defaults:{responsibilities:{fees_collector:'stripe',losses_collector:'stripe'}},configuration:{merchant:{capabilities:{card_payments:{status:accountReady?'active':'pending'},stripe_balance:{payouts:{status:accountReady?'active':'pending'}}}}},requirements:{entries:accountReady?[]:[{description:'Documento de teste',awaiting_action_from:'user',minimum_deadline:{status:'currently_due'}}]}});
+   if(['/v2/core/accounts/acct_seller','/v2/core/accounts/acct_recovered'].includes(u.pathname))return v2Response(accountFixture(u.pathname.split('/').pop()));
+   if(u.pathname==='/v2/core/accounts/acct_previous'){
+    if(recoveryAccess==='ok')return v2Response(accountFixture('acct_previous'));
+    const errors={forbidden:[403,'api_error','forbidden'],missing:[404,'invalid_request_error','resource_missing'],unauthorized:[401,'authentication_error','api_key_expired'],unavailable:[500,'api_error','api_error']};
+    const [status,type,code]=errors[recoveryAccess];return v2Response({error:{type,code,message:'Test account retrieval failed.'}},status);
+   }
    if(u.pathname==='/v1/accounts/acct_existing')return response({id:'acct_existing',charges_enabled:true,payouts_enabled:true,details_submitted:true});
    if(u.pathname==='/v1/account_links'){assert.equal(p.get('account'),'acct_existing');return response({url:'https://connect.stripe.com/setup/existing'});}
    if(u.pathname==='/v2/core/account_links'){
-    const sent=JSON.parse(options.body);assert.ok(['acct_seller','acct_buyer'].includes(sent.account));assert.equal(sent.use_case.type,'account_onboarding');assert.match(sent.use_case.account_onboarding.refresh_url,/stripe\/refresh/);assert.match(sent.use_case.account_onboarding.return_url,/configuracoes/);
+    const sent=JSON.parse(options.body);assert.ok(['acct_seller','acct_buyer','acct_recovered'].includes(sent.account));assert.equal(sent.use_case.type,'account_onboarding');assert.match(sent.use_case.account_onboarding.refresh_url,/stripe\/refresh/);assert.match(sent.use_case.account_onboarding.return_url,/configuracoes/);
+    if(sent.account==='acct_recovered'&&failRecoveryLink){failRecoveryLink=false;throw new Error('Account linked but onboarding response lost');}
     return v2Response({object:'v2.core.account_link',url:'https://connect.stripe.com/setup/test'});
    }
    if(u.pathname==='/v1/checkout/sessions'&&options.method==='POST'){
@@ -268,6 +281,51 @@ async function workflow(provider){
   process.env.STRIPE_CONNECT_ENABLED='false';
   assert.equal((await call('/api/payments/stripe/connect','seller')).status,503);
   process.env.STRIPE_CONNECT_ENABLED='true';process.env.STRIPE_DEMO_MODE='false';
+
+  // Recover an inaccessible sandbox link without deleting its history or touching live links/payments.
+  await sql("INSERT INTO users(id,name,email,role,stripe_test_account_id,stripe_test_account_version,stripe_live_account_id,stripe_live_account_version,stripe_account_id) VALUES('recovery','Recovery','recovery@example.test','user','acct_previous','v2','acct_live_preserved','v1','acct_live_preserved')");
+  const restart=()=>call('/api/payments/stripe/reconnect-test','recovery',{expectedAccountId:'acct_previous'});
+  const historyCount=async()=>Number((await one("SELECT COUNT(*) AS count FROM stripe_account_link_history WHERE user_id='recovery'")).count);
+  const beforeRecovery=accountCreateKeys.size;
+  const deniedStatus=await call('/api/payments/stripe/status','recovery');
+  assert.equal(deniedStatus.status,200);assert.equal(deniedStatus.data.disabledReason,'account_access_denied');
+  assert.equal(deniedStatus.data.canRestartTestConnection,true);assert.equal(deniedStatus.data.chargesEnabled,false);
+  assert.equal(deniedStatus.data.accountId,'acct_previous');
+  assert.equal((await call('/api/payments/stripe/reconnect-test','buyer',{expectedAccountId:'acct_previous'})).status,409);
+  assert.equal((await call('/api/payments/stripe/reconnect-test','recovery',{expectedAccountId:'acct_other'})).status,409);
+  assert.equal((await previousFetch(base+'/api/payments/stripe/reconnect-test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({expectedAccountId:'acct_previous'})})).status,401);
+  for(const [access,status] of [['ok',409],['unauthorized',503],['unavailable',500]]){
+   recoveryAccess=access;assert.equal((await restart()).status,status);
+   assert.equal(await historyCount(),0);assert.equal(accountCreateKeys.size,beforeRecovery);
+  }
+  recoveryAccess='forbidden';
+  await sql("INSERT INTO payments(id,payee_id,provider_account_id,status) VALUES('recovery-financial-fixture','recovery','acct_previous','failed')");
+  const protectedStatus=await call('/api/payments/stripe/status','recovery');
+  assert.equal(protectedStatus.data.canRestartTestConnection,false);assert.equal(protectedStatus.data.recoveryBlockedByPayments,true);
+  assert.equal((await restart()).status,409);assert.equal(await historyCount(),0);
+  await sql("DELETE FROM payments WHERE id='recovery-financial-fixture'");
+  rejectRecoveryCreation=true;assert.equal((await restart()).status,400);
+  assert.equal((await one("SELECT stripe_test_account_id FROM users WHERE id='recovery'")).stripe_test_account_id,'acct_previous');
+  assert.equal(await historyCount(),0);
+  process.env.STRIPE_SECRET_KEY='sk_live_fixture';process.env.STRIPE_ENABLE_LIVE='true';
+  assert.equal((await restart()).status,403);assert.equal(await historyCount(),0);
+  process.env.STRIPE_SECRET_KEY='sk_test_workflow';process.env.STRIPE_ENABLE_LIVE='false';
+  recoveryAccess='missing';
+  assert.equal((await call('/api/payments/stripe/status','recovery')).data.canRestartTestConnection,true);
+  recoveryAccess='forbidden';failRecoveryLink=true;
+  const restarted=await Promise.all([restart(),restart()]);
+  assert.ok(restarted.some(result=>[200,502].includes(result.status)));
+  assert.ok(restarted.every(result=>[200,409,502].includes(result.status)));
+  assert.equal(accountCreateKeys.size,beforeRecovery+1,'concurrent retries must create one provider account');
+  const recoveredUser=await one("SELECT * FROM users WHERE id='recovery'");
+  assert.equal(recoveredUser.stripe_test_account_id,'acct_recovered');assert.equal(recoveredUser.stripe_test_account_version,'v2');
+  assert.equal(recoveredUser.stripe_live_account_id,'acct_live_preserved');assert.equal(recoveredUser.stripe_live_account_version,'v1');
+  assert.equal(recoveredUser.stripe_account_id,'acct_live_preserved');assert.equal(await historyCount(),1);
+  const archived=await one("SELECT * FROM stripe_account_link_history WHERE user_id='recovery'");
+  assert.equal(archived.account_id,'acct_previous');assert.equal(archived.replacement_account_id,'acct_recovered');assert.equal(archived.environment,'test');
+  assert.equal((await call('/api/payments/stripe/status','recovery')).data.accountId,'acct_recovered');
+  assert.equal((await call('/api/payments/stripe/connect','recovery')).status,200,'a lost link response must resume the saved account');
+  assert.equal(accountCreateKeys.size,beforeRecovery+1);
 
   accountClosed=true;
   const closedEvent={...accountEvent,id:'evt_account_closed',type:'v2.core.account.closed'},closedRaw=JSON.stringify(closedEvent),closedTs=Math.floor(Date.now()/1000),closedSig='t='+closedTs+',v1='+crypto.createHmac('sha256','whsec_accounts').update(closedTs+'.'+closedRaw).digest('hex');

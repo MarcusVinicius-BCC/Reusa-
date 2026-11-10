@@ -6,6 +6,7 @@ const parse = value => { try { return JSON.parse(value || '{}'); } catch { retur
 const accountColumn = () => stripe.liveMode() ? 'stripe_live_account_id' : 'stripe_test_account_id';
 const accountVersionColumn = () => stripe.liveMode() ? 'stripe_live_account_version' : 'stripe_test_account_version';
 const accountVersion = user => user[accountVersionColumn()]==='v2'?'v2':'v1';
+const inaccessibleAccount = error => ['forbidden','permission_error','resource_missing'].includes(error?.stripeCode) && !error.uncertain;
 const objectId = value => typeof value === 'string' ? value : value?.id;
 const closedDispute = status => !status || ['won','warning_closed'].includes(status);
 function paymentView(p) {
@@ -51,12 +52,23 @@ function registerStripeRoutes(app, {postgres, sqlite, authenticate, jwt, jwtSecr
     if(![n.owner_id,n.interested_id].includes(user))fail(403,'Esta negociação é privada.'); return n;
   };
   const audit=(c,p,status,reason,correlation)=>c.query('INSERT INTO payment_audit_events(id,payment_id,from_status,to_status,reason,correlation_id,created_at) VALUES($1,$2,$3,$4,$5,$6,$7)',[crypto.randomUUID(),p.id,p.status,status,reason,correlation||crypto.randomUUID(),now()]);
+  const hasAccountPayments = (c,id) => one(c,'SELECT id FROM payments WHERE provider_account_id=$1 LIMIT 1',[id]);
   async function sellerStatus(userId) {
     const user=await queryOne('SELECT * FROM users WHERE id=$1',[userId]);
     if(!user)fail(404,'Usuário não encontrado.');
     const id=user[accountColumn()];
     if(!id)return {...stripe.sellerView(null),accountId:null,demoMode:stripe.demoEnabled(),testMode:stripe.isTestEnvironment(),liveMode:stripe.liveMode(),connectEnabled:process.env.STRIPE_CONNECT_ENABLED==='true'};
-    const account=await stripe.connectedAccount(id,accountVersion(user));
+    let account;
+    try { account=await stripe.connectedAccount(id,accountVersion(user)); }
+    catch(error) {
+      if(!inaccessibleAccount(error))throw error;
+      const payments=await work(c=>hasAccountPayments(c,id));
+      return {...stripe.sellerView(null),connected:true,accountId:id,disabledReason:'account_access_denied',
+        accountVersion:accountVersion(user),demoMode:stripe.demoEnabled(),testMode:stripe.isTestEnvironment(),liveMode:stripe.liveMode(),
+        connectEnabled:process.env.STRIPE_CONNECT_ENABLED==='true',
+        canRestartTestConnection:stripe.isTestEnvironment()&&process.env.STRIPE_CONNECT_ENABLED==='true'&&!payments,
+        recoveryBlockedByPayments:Boolean(payments)};
+    }
     const view=stripe.sellerView(account);
     await work(c=>c.query('UPDATE users SET stripe_status_json=$1,stripe_checked_at=$2 WHERE id=$3',[JSON.stringify(view),now(),userId]));
     return {...view,accountId:id,demoMode:stripe.demoEnabled(),testMode:stripe.isTestEnvironment(),liveMode:stripe.liveMode(),connectEnabled:process.env.STRIPE_CONNECT_ENABLED==='true'};
@@ -82,6 +94,35 @@ function registerStripeRoutes(app, {postgres, sqlite, authenticate, jwt, jwtSecr
       const stored=await queryOne('SELECT * FROM users WHERE id=$1',[user.id]);accountId=stored[accountColumn()];version=accountVersion(stored);
     }
     const link=await onboardingLink(user.id,accountId,version);res.json({authorizationUrl:link.url});
+  }));
+  app.post('/api/payments/stripe/reconnect-test',authenticate,route(async(req,res)=>{
+    stripe.requireReady();
+    if(!stripe.isTestEnvironment())fail(403,'A recuperação de conexão está disponível somente no ambiente de teste.');
+    if(process.env.STRIPE_CONNECT_ENABLED!=='true')fail(503,'O cadastro de vendedores ainda não foi habilitado na plataforma.');
+    const user=await queryOne('SELECT * FROM users WHERE id=$1',[req.user.id]);
+    const previousId=user?.stripe_test_account_id;
+    if(!previousId||req.body?.expectedAccountId!==previousId)fail(409,'O vínculo da conta mudou. Atualize a situação antes de continuar.');
+    if(await work(c=>hasAccountPayments(c,previousId)))fail(409,'Esta conta possui pagamentos vinculados. Ajuste a chave ou as permissões com o suporte para preservar a conciliação.');
+    let denied;
+    try { await stripe.connectedAccount(previousId,accountVersion(user)); }
+    catch(error) { if(!inaccessibleAccount(error))throw error;denied=error.stripeCode; }
+    if(!denied)fail(409,'A conta atual está acessível. Continue o cadastro existente.');
+    const key='reusa-reconnect-test-'+crypto.createHash('sha256').update(user.id+':'+previousId).digest('hex');
+    const created=await stripe.createConnectedAccount(user.email,key);
+    if(!/^acct_[A-Za-z0-9]+$/.test(created?.id||'')||created.object!=='v2.core.account'||created.id===previousId)fail(502,'A Stripe não retornou um novo cadastro de teste válido.');
+    await work(async c=>{
+      const current=await one(c,'SELECT * FROM users WHERE id=$1'+lock,[user.id]);
+      if(current.stripe_test_account_id===created.id)return; // Concurrent retries share the provider idempotency key.
+      if(current.stripe_test_account_id!==previousId)fail(409,'O vínculo da conta mudou. Atualize a situação antes de continuar.');
+      if(await hasAccountPayments(c,previousId))fail(409,'A conta passou a ter pagamentos vinculados. Solicite suporte antes de alterar a conexão.');
+      await c.query('INSERT INTO stripe_account_link_history(id,user_id,account_id,account_version,environment,replacement_account_id,reason,created_at) VALUES($1,$2,$3,$4,$5,$6,$7,$8)',
+        [crypto.randomUUID(),user.id,previousId,accountVersion(user),'test',created.id,denied,now()]);
+      await c.query("UPDATE users SET stripe_test_account_id=$1,stripe_test_account_version='v2',stripe_account_id=$2,stripe_status_json='{}',stripe_checked_at=NULL WHERE id=$3",
+        [created.id,!current.stripe_account_id||current.stripe_account_id===previousId?created.id:current.stripe_account_id,user.id]);
+    });
+    // Save the new binding before requesting a short-lived link so a lost response can be resumed.
+    const link=await onboardingLink(user.id,created.id,'v2');
+    res.json({authorizationUrl:link.url,accountId:created.id});
   }));
   app.get('/api/payments/stripe/refresh',route(async(req,res)=>{
     let state;

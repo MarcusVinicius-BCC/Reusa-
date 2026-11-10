@@ -41,3 +41,11 @@ As pendências aparecem em português na própria seção, com o botão “Conti
 A conexão criada não equivale à aprovação de identidade. Complete o cadastro hospedado e as etapas solicitadas pela Stripe. Os tokens genéricos de identificação de nove dígitos da documentação não constituem um CPF brasileiro documentado de onze dígitos; os testes de documento também não comprovam a conclusão da prova de vida. Caso o formulário brasileiro não ofereça dados de teste adequados, confirme o procedimento aplicável com o suporte Stripe. O ReUsa+ continua mostrando as pendências até a API indicar a habilitação efetiva.
 
 As contas de vendedores de teste e de produção são armazenadas separadamente. Não é necessário cadastrar produtos manualmente no Stripe nem habilitar `STRIPE_ENABLE_LIVE` para esta demonstração.
+
+## Troca de conta Stripe ou sandbox
+
+Uma chave de outra conta Stripe ou sandbox não dá acesso aos vendedores criados no ambiente anterior. Se a conta antiga foi excluída ou o ambiente foi substituído, o ReUsa+ mostra “Sem acesso”, mantém o ID do vínculo anterior e pausa as consultas automáticas. Isso não é uma verificação de identidade em andamento.
+
+Configure no Railway a chave `sk_test_` e os segredos de webhook do ambiente atual, com `STRIPE_CONNECT_ENABLED=true`. Em **Configurações → Ofertas e pagamentos**, use **Criar novo cadastro de teste**. O backend confirma a falta de acesso à conta anterior, cria uma conta Accounts v2 no ambiente atual, preserva o vínculo anterior em `stripe_account_link_history` e encaminha ao cadastro hospedado. Uma falha na geração do link pode ser retomada pelo botão “Continuar cadastro”, usando a conta já salva.
+
+A recuperação exige autenticação, confere o ID atualmente vinculado e utiliza uma chave de idempotência para não duplicar contas em chamadas concorrentes. Só está disponível com chave de teste, quando a conta anterior está inacessível e não possui registros de pagamentos associados. Contas acessíveis, falhas de autenticação, erros temporários e vínculos de produção não são substituídos por esse fluxo. Se existem pagamentos vinculados à conta antiga, o sistema exige revisão pelo suporte para preservar a conciliação. Após corrigir as permissões da mesma conta, use “Atualizar situação da conta” para retomar as consultas.
