@@ -3,6 +3,11 @@
 .stripe-account-status dt{font-size:11px;color:var(--text-variant)}
 .stripe-account-status dd{margin:0;font-size:12px;font-weight:700;color:var(--text)}
 .stripe-connection-status.is-pending{color:#715300;background:#fff4d6}
-.stripe-account-requirements{margin:12px 0;font-size:12px;line-height:1.6;color:var(--text-variant)}
-.stripe-account-requirements summary{cursor:pointer;font-weight:700}
+.stripe-account-requirements{margin:16px 0;padding:16px;border:1px solid var(--outline);border-radius:12px;font-size:12px;line-height:1.6;color:var(--text-variant)}
+.stripe-account-requirements strong{color:var(--text)}
+.stripe-account-requirements p{margin:8px 0}
+.stripe-account-requirements ul{margin:8px 0;padding-left:20px}
 .stripe-account-requirements li{overflow-wrap:anywhere}
+.stripe-account-details{margin:16px 0;font-size:12px;line-height:1.6;color:var(--text-variant)}
+.stripe-account-details summary{cursor:pointer;font-weight:700;color:var(--text)}
+.stripe-account-details code{overflow-wrap:anywhere}

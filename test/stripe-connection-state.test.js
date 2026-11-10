@@ -50,3 +50,21 @@ test('An unknown connection is queried before offering a new seller registration
   assert.equal(stripeConnectionState({connected:false}).canResume, true);
   assert.equal(stripeConnectionState({connected:true, detailsSubmitted:false}).canResume, true);
 });
+
+test('Demo payments do not turn a seller with pending requirements into an approved seller', async () => {
+  const {stripeConnectionState} = await state;
+  const view = stripeConnectionState({connected:true,demoMode:true,testMode:true,requirementsDue:['individual.proof_of_liveness'],chargesEnabled:false,payoutsEnabled:false});
+  assert.equal(view.kind,'needs_information');assert.equal(view.ready,false);assert.equal(view.canResume,true);
+  const approved = stripeConnectionState({connected:true,demoMode:true,testMode:true,chargesEnabled:true,payoutsEnabled:true});
+  assert.equal(approved.kind,'ready');assert.match(approved.description,/conta de teste da plataforma/);
+});
+
+test('Seller requirements from both account versions have readable labels and preserve unknown requirements', async () => {
+  const {stripeRequirementLabel} = await state;
+  for (const value of ['individual.dob.day','representative.date_of_birth.month','identity.individual.date_of_birth.year']) assert.equal(stripeRequirementLabel(value),'Data de nascimento');
+  assert.equal(stripeRequirementLabel('business_profile.support_phone'),'Telefone de suporte');
+  assert.equal(stripeRequirementLabel('identity.individual.id_numbers.br_cpf'),'Número de identificação (CPF)');
+  assert.equal(stripeRequirementLabel('individual.proof_of_liveness'),'Verificação de identidade e prova de vida');
+  assert.equal(stripeRequirementLabel('tos_acceptance.date'),'Aceite dos termos na Stripe');
+  assert.equal(stripeRequirementLabel('Nova informação exigida pela Stripe'),'Nova informação exigida pela Stripe');
+});

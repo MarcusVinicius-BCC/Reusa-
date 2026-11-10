@@ -55,11 +55,11 @@ function registerStripeRoutes(app, {postgres, sqlite, authenticate, jwt, jwtSecr
     const user=await queryOne('SELECT * FROM users WHERE id=$1',[userId]);
     if(!user)fail(404,'Usuário não encontrado.');
     const id=user[accountColumn()];
-    if(!id)return {...stripe.sellerView(null),demoMode:stripe.demoEnabled(),testMode:stripe.isTestEnvironment(),liveMode:stripe.liveMode(),connectEnabled:process.env.STRIPE_CONNECT_ENABLED==='true'};
+    if(!id)return {...stripe.sellerView(null),accountId:null,demoMode:stripe.demoEnabled(),testMode:stripe.isTestEnvironment(),liveMode:stripe.liveMode(),connectEnabled:process.env.STRIPE_CONNECT_ENABLED==='true'};
     const account=await stripe.connectedAccount(id,accountVersion(user));
     const view=stripe.sellerView(account);
     await work(c=>c.query('UPDATE users SET stripe_status_json=$1,stripe_checked_at=$2 WHERE id=$3',[JSON.stringify(view),now(),userId]));
-    return {...view,demoMode:stripe.demoEnabled(),testMode:stripe.isTestEnvironment(),liveMode:stripe.liveMode(),connectEnabled:process.env.STRIPE_CONNECT_ENABLED==='true'};
+    return {...view,accountId:id,demoMode:stripe.demoEnabled(),testMode:stripe.isTestEnvironment(),liveMode:stripe.liveMode(),connectEnabled:process.env.STRIPE_CONNECT_ENABLED==='true'};
   }
   const onboardingLink=async(userId,accountId,version)=>{
     const state=jwt.sign({purpose:'stripe-onboarding',sub:userId,accountId,live:stripe.liveMode()},jwtSecret,{expiresIn:'15m'});
@@ -67,12 +67,10 @@ function registerStripeRoutes(app, {postgres, sqlite, authenticate, jwt, jwtSecr
     return stripe.accountLink(accountId,base+'/api/payments/stripe/refresh?state='+encodeURIComponent(state),base+'/configuracoes?stripe_onboarding=1',version);
   };
   app.get('/api/payments/stripe/status',authenticate,route(async(req,res)=>{
-    if(stripe.demoEnabled())return res.json({demoMode:true,connected:false,chargesEnabled:false,payoutsEnabled:false,liveMode:false,testMode:true,connectEnabled:false});
     res.json(await sellerStatus(req.user.id));
   }));
   app.get('/api/payments/stripe/connect',authenticate,route(async(req,res)=>{
     stripe.requireReady();
-    if(stripe.demoEnabled())fail(409,'O modo demonstração não conecta contas de vendedores.');
     if(process.env.STRIPE_CONNECT_ENABLED!=='true')fail(503,'O cadastro de vendedores ainda não foi habilitado na plataforma.');
     const user=await queryOne('SELECT * FROM users WHERE id=$1',[req.user.id]);
     let accountId=user[accountColumn()];

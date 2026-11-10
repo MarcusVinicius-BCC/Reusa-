@@ -57,17 +57,17 @@ async function workflow(provider){
    if(u.pathname==='/v2/core/accounts'&&options.method==='POST'){
     const sent=JSON.parse(options.body);assert.equal(sent.type,undefined);assert.equal(sent.dashboard,'full');assert.equal(sent.identity.country,'BR');assert.equal(sent.defaults.responsibilities.losses_collector,'stripe');assert.equal(sent.defaults.responsibilities.fees_collector,'stripe');assert.equal(sent.configuration.merchant.capabilities.card_payments.requested,true);
     if(rejectOnboarding){rejectOnboarding=false;return v2Response({error:{type:'invalid_request_error',message:'You must complete your platform profile to use Connect.'}},400,{'request-id':'req_connect_setup'});}
-    return v2Response({id:'acct_seller',object:'v2.core.account',livemode:false});
+    return v2Response({id:sent.contact_email==='buyer@example.test'?'acct_buyer':'acct_seller',object:'v2.core.account',livemode:false});
    }
    if(u.pathname==='/v2/core/accounts/acct_seller')return v2Response({id:'acct_seller',object:'v2.core.account',livemode:false,closed:accountClosed,dashboard:'full',defaults:{responsibilities:{fees_collector:'stripe',losses_collector:'stripe'}},configuration:{merchant:{capabilities:{card_payments:{status:accountReady?'active':'pending'},stripe_balance:{payouts:{status:accountReady?'active':'pending'}}}}},requirements:{entries:accountReady?[]:[{description:'Documento de teste',awaiting_action_from:'user',minimum_deadline:{status:'currently_due'}}]}});
    if(u.pathname==='/v1/accounts/acct_existing')return response({id:'acct_existing',charges_enabled:true,payouts_enabled:true,details_submitted:true});
    if(u.pathname==='/v1/account_links'){assert.equal(p.get('account'),'acct_existing');return response({url:'https://connect.stripe.com/setup/existing'});}
    if(u.pathname==='/v2/core/account_links'){
-    const sent=JSON.parse(options.body);assert.equal(sent.account,'acct_seller');assert.equal(sent.use_case.type,'account_onboarding');assert.match(sent.use_case.account_onboarding.refresh_url,/stripe\/refresh/);assert.match(sent.use_case.account_onboarding.return_url,/configuracoes/);
+    const sent=JSON.parse(options.body);assert.ok(['acct_seller','acct_buyer'].includes(sent.account));assert.equal(sent.use_case.type,'account_onboarding');assert.match(sent.use_case.account_onboarding.refresh_url,/stripe\/refresh/);assert.match(sent.use_case.account_onboarding.return_url,/configuracoes/);
     return v2Response({object:'v2.core.account_link',url:'https://connect.stripe.com/setup/test'});
    }
    if(u.pathname==='/v1/checkout/sessions'&&options.method==='POST'){
-    assert.equal(options.headers['Stripe-Account'],'acct_seller');
+    assert.equal(options.headers['Stripe-Account'],process.env.STRIPE_DEMO_MODE==='true'?undefined:'acct_seller');
     const key=options.headers['Idempotency-Key'];
     if(rejectCreate){rejectCreate=false;return {ok:false,status:400,json:async()=>({error:{type:'invalid_request_error',param:'payment_method_types',message:'The payment_method_types parameter is no longer supported.'}})};}
     if(createBodies.has(key))assert.equal(options.body,createBodies.get(key),'provider idempotency must replay identical parameters');
@@ -247,6 +247,28 @@ async function workflow(provider){
   currentTime=new Date(currentTime.getTime()+24*3600000);await flow.runReconciliation();assert.equal(creates,beforeOldRetry);assert.match((await get(uncertain.id)).provider_reference,/^pending_/);
   assert.equal((await call('/api/admin/payments/stripe','buyer')).status,403);
   const diagnostics=await call('/api/admin/payments/stripe','admin');assert.equal(diagnostics.status,200);assert.ok(diagnostics.data.lastProcessedWebhookAt);assert.ok(!JSON.stringify(diagnostics.data).includes('sk_test_workflow'));
+
+  // Demo checkout routing must not hide or block the seller's real sandbox onboarding.
+  process.env.STRIPE_DEMO_MODE='true';accountReady=false;
+  const demoStatus=await call('/api/payments/stripe/status','seller');
+  assert.equal(demoStatus.status,200);assert.equal(demoStatus.data.demoMode,true);
+  assert.equal(demoStatus.data.connected,true);assert.equal(demoStatus.data.accountId,'acct_seller');
+  assert.equal(demoStatus.data.chargesEnabled,false);assert.equal(demoStatus.data.payoutsEnabled,false);
+  assert.equal(demoStatus.data.connectEnabled,true);
+  assert.deepEqual(demoStatus.data.requirementsDue,['Documento de teste']);
+  assert.equal((await call('/api/payments/stripe/connect','seller')).data.authorizationUrl,'https://connect.stripe.com/setup/test');
+  assert.equal((await one("SELECT stripe_test_account_id FROM users WHERE id='seller'")).stripe_test_account_id,'acct_seller');
+  const buyerStatus=await call('/api/payments/stripe/status','buyer');
+  assert.equal(buyerStatus.data.connected,false);assert.equal(buyerStatus.data.accountId,null);
+  assert.equal((await call('/api/payments/stripe/connect','buyer')).status,200);
+  assert.equal((await one("SELECT stripe_test_account_id FROM users WHERE id='buyer'")).stripe_test_account_id,'acct_buyer');
+  const demoNegotiation=await addSale('p_demo');const demoPayment=await pay(demoNegotiation);
+  assert.equal(demoPayment.status,201);assert.equal(demoPayment.data.payment.status,'processing');
+  assert.equal((await get(demoPayment.data.payment.id)).provider_account_id,null,'demo charges stay on the platform');
+  process.env.STRIPE_CONNECT_ENABLED='false';
+  assert.equal((await call('/api/payments/stripe/connect','seller')).status,503);
+  process.env.STRIPE_CONNECT_ENABLED='true';process.env.STRIPE_DEMO_MODE='false';
+
   accountClosed=true;
   const closedEvent={...accountEvent,id:'evt_account_closed',type:'v2.core.account.closed'},closedRaw=JSON.stringify(closedEvent),closedTs=Math.floor(Date.now()/1000),closedSig='t='+closedTs+',v1='+crypto.createHmac('sha256','whsec_accounts').update(closedTs+'.'+closedRaw).digest('hex');
   assert.equal((await call('/api/payments/stripe/accounts-webhook','buyer',closedEvent,'POST',{'stripe-signature':closedSig})).status,200);

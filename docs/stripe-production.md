@@ -103,6 +103,8 @@ Em **Configurações → Ofertas e pagamentos**, cada vendedor:
 
 Uma conta apenas criada não é considerada pronta. A API consulta a Stripe antes de permitir a aceitação de vendas e novamente antes de abrir o checkout. Revogação do acesso e restrições impedem novas cobranças.
 
+No ambiente de teste, o cadastro do vendedor pode ser exercitado mesmo com `STRIPE_DEMO_MODE=true`. Esse modo preserva os pagamentos na conta de teste da plataforma e mostra separadamente as permissões do vendedor; não comprova cobranças diretas nem repasses ao vendedor. Para validar o fluxo conectado, use `STRIPE_DEMO_MODE=false` e aguarde a habilitação efetiva da conta. Em produção, mantenha demonstração desligada e os controles de habilitação descritos acima.
+
 ## Compra, entrega e devolução
 
 - O comprador envia uma oferta; o vendedor aceita. Local e horário precisam ser propostos e aceitos por pessoas diferentes antes do pagamento.

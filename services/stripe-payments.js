@@ -141,7 +141,7 @@ async function connectedAccount(accountId, version='v1') {
   return request('GET', '/accounts/' + encodeURIComponent(accountId));
 }
 async function createConnectedAccount(email, idempotencyKey) {
-  if (demoEnabled()) throw Object.assign(new Error('Contas de vendedores são simuladas no modo demonstração.'), { status: 400 });
+  requireReady();
   return accountRequest('/v2/core/accounts','POST',client => client.v2.core.accounts.create({
     contact_email:email, identity:{country:'BR'}, dashboard:'full',
     defaults:{currency:'brl',locales:['pt-BR'],responsibilities:{fees_collector:'stripe',losses_collector:'stripe'}},
