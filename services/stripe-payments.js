@@ -154,7 +154,7 @@ async function accountLink(accountId, refreshUrl, returnUrl, version='v2') {
   }));
   return request('POST', '/account_links', { account: accountId, type: 'account_onboarding', refresh_url: refreshUrl, return_url: returnUrl });
 }
-async function createCheckout({ paymentId, postId, title, amountCents, payerEmail, method, sellerAccountId, sellerAccountVersion='v1', returnBaseUrl, expiresAt }) {
+async function createCheckout({ paymentId, postId, title, amountCents, payerEmail, method, sellerAccountId, sellerAccountVersion='v1', returnBaseUrl, expiresAt, checkoutVersion=2 }) {
   requireReady();
   if (!Number.isSafeInteger(amountCents) || amountCents < 100 || !payerEmail || !['card', 'pix'].includes(method)) {
     throw Object.assign(new Error('Invalid checkout details'), { status: 400 });
@@ -175,7 +175,9 @@ async function createCheckout({ paymentId, postId, title, amountCents, payerEmai
     expires_at: expiresAt,
     client_reference_id: paymentId,
     customer_email: payerEmail,
-    payment_method_types: [method],
+    // Preserve the original wire parameters when replaying a pre-migration attempt.
+    // New sessions filter Dashboard-enabled methods using the current API contract.
+    ...(checkoutVersion === 1 ? { payment_method_types: [method] } : { allowed_payment_method_types: [method] }),
     line_items: [{ price_data: { currency: 'brl', product_data: { name: String(title || 'Anúncio ReUsa+').slice(0, 120) }, unit_amount: amountCents }, quantity: 1 }],
     metadata: { payment_id: paymentId, post_id: postId },
     payment_intent_data: { metadata: { payment_id: paymentId } },

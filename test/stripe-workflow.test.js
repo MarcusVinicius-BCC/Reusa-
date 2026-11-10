@@ -10,7 +10,7 @@ const {Client}=require('pg');
 // Real HTTP handlers, transactions and HMAC signatures; only the external Stripe HTTP responses are simulated.
 async function workflow(provider){
  const previousFetch=global.fetch, savedEnv={...process.env};
- let db,repo,server,admin,schema,currentTime=new Date(),accountReady=false,creates=0,refundCreates=0,failCreate=false,failRead=false,failRefund=false,rejectOnboarding=true,accountClosed=false;
+ let db,repo,server,admin,schema,currentTime=new Date(),accountReady=false,creates=0,refundCreates=0,failCreate=false,failRead=false,failRefund=false,rejectOnboarding=true,accountClosed=false,rejectCreate=false;
  const sessions=new Map(),intents=new Map(),refunds=new Map(),disputes=new Map(),createBodies=new Map();
  const baseSchema=`
  CREATE TABLE users(id TEXT PRIMARY KEY,name TEXT,email TEXT,role TEXT, stripe_account_id TEXT);
@@ -69,8 +69,13 @@ async function workflow(provider){
    if(u.pathname==='/v1/checkout/sessions'&&options.method==='POST'){
     assert.equal(options.headers['Stripe-Account'],'acct_seller');
     const key=options.headers['Idempotency-Key'];
+    if(rejectCreate){rejectCreate=false;return {ok:false,status:400,json:async()=>({error:{type:'invalid_request_error',param:'payment_method_types',message:'The payment_method_types parameter is no longer supported.'}})};}
     if(createBodies.has(key))assert.equal(options.body,createBodies.get(key),'provider idempotency must replay identical parameters');
-    else{creates++;createBodies.set(key,options.body);sessions.set(key,{id:'cs_test_'+key.replaceAll('-','_'),client_reference_id:key,metadata:{payment_id:key},mode:'payment',currency:'brl',amount_total:2500,status:'open',payment_status:'unpaid',livemode:false,url:'https://checkout.stripe.com/c/pay/test'});}
+    else{
+     assert.equal(p.has('payment_method_types[0]'),false,'new sessions must not use the removed static payment methods parameter');
+     assert.equal(p.get('allowed_payment_method_types[0]'),'card','dynamic methods must respect the accepted offer');
+     creates++;createBodies.set(key,options.body);sessions.set(key,{id:'cs_test_'+key.replaceAll('-','_'),client_reference_id:key,metadata:{payment_id:key},mode:'payment',currency:'brl',amount_total:2500,status:'open',payment_status:'unpaid',livemode:false,url:'https://checkout.stripe.com/c/pay/test'});
+    }
     if(failCreate){failCreate=false;throw new Error('connection lost after provider accepted checkout');}
     return response(sessions.get(key));
    }
@@ -214,6 +219,29 @@ async function workflow(provider){
   assert.equal((await webhook('checkout.session.async_payment_failed',failed,'evt_async_failed')).status,200);
   assert.equal((await get(failed.id)).status,'failed');currentTime=new Date(currentTime.getTime()+360000);
   assert.equal((await call('/api/negotiations/'+n6+'/payment')).data.payment.status,'failed','a later status read must not reopen an asynchronous failure');
+
+  // A definitive API rejection permits a fresh attempt using the new Checkout contract.
+  const rejectedNegotiation=await addSale('p_rejected');rejectCreate=true;
+  assert.equal((await pay(rejectedNegotiation)).status,400);
+  const rejectedPayment=await one('SELECT * FROM payments WHERE negotiation_id=$1',[rejectedNegotiation]);
+  assert.equal(rejectedPayment.status,'failed');
+  const retried=await pay(rejectedNegotiation);assert.equal(retried.status,201);
+  assert.notEqual(retried.data.payment.id,rejectedPayment.id);
+  assert.equal(JSON.parse((await get(retried.data.payment.id)).provider_request_json).checkoutVersion,2);
+
+  // Model a pre-deployment request whose successful provider response was lost.
+  // Its stored request predates checkoutVersion and its provider key has the old body.
+  const legacyNegotiation=await addSale('p_legacy');failCreate=true;
+  assert.equal((await pay(legacyNegotiation)).status,502);
+  const legacyPayment=await one('SELECT * FROM payments WHERE negotiation_id=$1',[legacyNegotiation]);
+  const legacyRequest=JSON.parse(legacyPayment.provider_request_json);delete legacyRequest.checkoutVersion;
+  await sql('UPDATE payments SET provider_request_json=$1 WHERE id=$2',[JSON.stringify(legacyRequest),legacyPayment.id]);
+  createBodies.set(legacyPayment.id,createBodies.get(legacyPayment.id).replace('allowed_payment_method_types%5B0%5D','payment_method_types%5B0%5D'));
+  const beforeLegacyReplay=creates;currentTime=new Date(currentTime.getTime()+180000);
+  await flow.runReconciliation();
+  assert.match((await get(legacyPayment.id)).provider_reference,/^cs_/);
+  assert.equal(creates,beforeLegacyReplay,'an old uncertain request must recover the existing session');
+
   const n7=await addSale('p7');failCreate=true;assert.equal((await pay(n7)).status,502);
   const uncertain=await one('SELECT * FROM payments WHERE negotiation_id=$1',[n7]),beforeOldRetry=creates;
   currentTime=new Date(currentTime.getTime()+24*3600000);await flow.runReconciliation();assert.equal(creates,beforeOldRetry);assert.match((await get(uncertain.id)).provider_reference,/^pending_/);

@@ -20,6 +20,8 @@ STRIPE_ACCOUNT_WEBHOOK_SECRET=whsec_SEGREDO_CONTAS_V2_EM_TESTE
 
 `STRIPE_DEMO_MODE=false` permite que cada vendedor conecte sua conta de teste. O modo `true` usa apenas a conta de teste da plataforma e dispensa a conexão de vendedores. A chave `sk_test_` determina que as operações sejam de teste; desligar o modo de demonstração não as transforma em operações reais. Mantenha `NODE_ENV=production` no Railway: o ambiente do servidor é independente do ambiente financeiro Stripe.
 
+No mesmo ambiente de teste, habilite **Cartão** em **Configurações → Formas de pagamento** na Stripe. Em demonstração, use as configurações da plataforma; com vendedores conectados, confira a conta do vendedor que recebe a cobrança. O Checkout usa formas dinâmicas do Dashboard e `allowed_payment_method_types` para preservar a forma escolhida no acordo. Para Pix, também é necessário habilitá-lo na Stripe e definir `STRIPE_PIX_ENABLED=true`; a variável isolada não ativa o método no provedor.
+
 Crie os dois destinos de eventos **no ambiente de teste/sandbox**, ambos com a URL:
 
 ```text

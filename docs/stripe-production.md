@@ -9,6 +9,8 @@ O backend usa Stripe Checkout hospedado, cobrança direta em contas Connect Acco
 3. Habilite cartão. Pix é opcional e só deve ser exposto quando estiver liberado para as contas conectadas e para este fluxo de cobrança.
 4. Crie os destinos de eventos em produção abaixo, em formato **snapshot**. Cada destino recebe seu próprio segredo de assinatura. Não use eventos thin nesta integração.
 
+O Checkout usa formas de pagamento dinâmicas configuradas em **Configurações → Formas de pagamento** na Stripe. A API envia `allowed_payment_method_types` para limitar cada sessão à forma escolhida na oferta aceita. O parâmetro estático `payment_method_types` foi removido da criação de novas sessões na versão atual da API. Habilite a forma correspondente na conta conectada que recebe a cobrança; o filtro não ativa uma forma desabilitada no Dashboard. No modo de demonstração, essa configuração pertence à conta de teste da plataforma.
+
 Ambos os destinos usam:
 
 ```text
@@ -105,6 +107,7 @@ Uma conta apenas criada não é considerada pronta. A API consulta a Stripe ante
 
 - O comprador envia uma oferta; o vendedor aceita. Local e horário precisam ser propostos e aceitos por pessoas diferentes antes do pagamento.
 - A tentativa é persistida **antes** da chamada externa. Apenas uma cobrança pode ficar ativa por negociação. A chave Stripe e os parâmetros originais são preservados para recuperar uma resposta perdida sem criar outra cobrança.
+- Novas tentativas registram a versão do payload de Checkout. Tentativas anteriores à migração de formas dinâmicas mantêm o payload original ao repetir a mesma chave Stripe; uma rejeição definitiva permite iniciar uma nova tentativa com o contrato atual.
 - O retorno do navegador não confirma pagamento. Webhooks assinados e conciliação pela API verificam sessão, referência, conta, ambiente, valor, moeda e confirmação efetiva.
 - Uma rotina a cada minuto reprocessa eventos pendentes e seleciona pagamentos para conciliação. Pagamentos consultados com sucesso são normalmente revistos após cinco minutos; falhas têm nova tentativa após um minuto. Lotes de até 25 eventos e 25 pagamentos usam travas e leases no PostgreSQL.
 - Eventos duplicados não duplicam a transição, os avisos ou o registro financeiro. A inbox persiste apenas os campos necessários para processamento, sem dados de cartão ou documentos dos vendedores.

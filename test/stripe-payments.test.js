@@ -33,7 +33,8 @@ test('Stripe Checkout card sandbox uses BRL cents and no seller OAuth', async ()
         assert.equal(p.get('mode'), 'payment');
         assert.equal(p.get('client_reference_id'), 'payment-unique-1');
         assert.equal(p.get('line_items[0][price_data][unit_amount]'), '2000');
-        assert.equal(p.get('payment_method_types[0]'), 'card');
+        assert.equal(p.get('allowed_payment_method_types[0]'), 'card');
+        assert.equal(p.has('payment_method_types[0]'), false);
         assert.equal(p.get('line_items[0][price_data][currency]'), 'brl');
         assert.equal(p.get('metadata[payment_id]'), 'payment-unique-1');
         return { ok:true, json:async()=>({id:'cs_test_123',url:'https://checkout.stripe.com/c/pay/cs_test_123'}) };
@@ -48,6 +49,22 @@ test('Stripe Checkout card sandbox uses BRL cents and no seller OAuth', async ()
 test('Stripe checkout refuses Pix unless explicitly enabled', async () => {
   await env({ STRIPE_SECRET_KEY:'sk_test_stub',APP_BASE_URL:'https://reusa.example',STRIPE_DEMO_MODE:'true',STRIPE_PIX_ENABLED:'false' }, async () => {
     await assert.rejects(stripe.createCheckout({paymentId:'id',postId:'post',title:'Item',amountCents:200,payerEmail:'test@example.com',method:'pix'}), {status:503});
+  });
+});
+
+test('Pix Checkout filters dynamic Dashboard methods without sending the removed static parameter', async () => {
+  await env({STRIPE_SECRET_KEY:'sk_test_stub',APP_BASE_URL:'https://reusa.example',STRIPE_DEMO_MODE:'true',STRIPE_PIX_ENABLED:'true'},async()=>{
+    const original=global.fetch;
+    try {
+      let sent;
+      global.fetch=async(url,options)=>{
+        sent=new URLSearchParams(options.body);
+        return {ok:true,json:async()=>({id:'cs_test_pix',url:'https://checkout.stripe.com/c/pay/test-pix'})};
+      };
+      await stripe.createCheckout({paymentId:'pix-attempt',postId:'post',amountCents:2500,payerEmail:'buyer@example.test',method:'pix'});
+      assert.equal(sent.get('allowed_payment_method_types[0]'),'pix');
+      assert.equal(sent.has('payment_method_types[0]'),false);
+    }finally{global.fetch=original;}
   });
 });
 

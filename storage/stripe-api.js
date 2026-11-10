@@ -162,7 +162,9 @@ function registerStripeRoutes(app, {postgres, sqlite, authenticate, jwt, jwtSecr
       if(p.provider_request_json&&p.provider_reference.startsWith('pending_')){
         // Stripe only retains idempotency keys for at least 24h. Never recreate an uncertain old request.
         if(clock().getTime()-new Date(p.created_at).getTime()>23*3600000)fail(503,'Pagamento em conciliação manual. Não inicie outra cobrança.');
-        const created=await stripe.createCheckout(parse(p.provider_request_json));
+        // Attempts persisted before dynamic methods must retain their original
+        // payload when replayed with the same Stripe idempotency key.
+        const created=await stripe.createCheckout({checkoutVersion:1,...parse(p.provider_request_json)});
         await work(c=>c.query('UPDATE payments SET provider_reference=$1,checkout_url=$2 WHERE id=$3',[created.id,created.checkoutUrl,id]));
         p.provider_reference=created.id;p.checkout_url=created.checkoutUrl;
       }
@@ -245,7 +247,7 @@ function registerStripeRoutes(app, {postgres, sqlite, authenticate, jwt, jwtSecr
       const account=configured&&!stripe.demoEnabled()?seller[accountColumn()]:null;
       if(configured&&!stripe.demoEnabled()&&!account)fail(409,'O vendedor precisa concluir o cadastro Stripe.');
       const id='payment-'+crypto.createHash('sha256').update(n.id+':'+key).digest('hex').slice(0,40);
-      const request={paymentId:id,postId:post.id,title:post.title,amountCents:amount,payerEmail:payer.email,method,sellerAccountId:account,sellerAccountVersion:accountVersion(seller),returnBaseUrl:process.env.APP_BASE_URL,expiresAt:Math.floor(clock().getTime()/1000)+3600};
+      const request={checkoutVersion:2,paymentId:id,postId:post.id,title:post.title,amountCents:amount,payerEmail:payer.email,method,sellerAccountId:account,sellerAccountVersion:accountVersion(seller),returnBaseUrl:process.env.APP_BASE_URL,expiresAt:Math.floor(clock().getTime()/1000)+3600};
       await c.query('INSERT INTO payments(id,negotiation_id,payer_id,payee_id,amount_cents,currency,method,status,idempotency_key,provider_reference,created_at,updated_at,provider_account_id,provider_request_json,provider_livemode) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)',[id,n.id,n.interested_id,n.owner_id,amount,currency,method,configured?'processing':'succeeded',key,configured?'pending_'+id:'test_'+id,now(),now(),account,configured?JSON.stringify(request):null,configured?Number(stripe.liveMode()):null]);
       const payment=await one(c,'SELECT * FROM payments WHERE id=$1',[id]);await audit(c,{...payment,status:null},payment.status,'payment_attempt_recorded',req.correlationId);
       if(!configured)await c.query('UPDATE payments SET paid_at=$1 WHERE id=$2',[now(),id]);
