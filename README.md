@@ -436,7 +436,7 @@ Veja **[configuração completa de produção, vendedores e webhooks](docs/strip
 
 Veja também o [cadastro de vendedores e pagamentos em teste](docs/stripe-testing.md), sem ativação da conta de produção.
 
-Para demonstração sem dinheiro real, use `sk_test_`, `STRIPE_DEMO_MODE=true`, `STRIPE_ENABLE_LIVE=false`, `STRIPE_CONNECT_ENABLED=false` e o webhook do ambiente de teste. Para testar vendedores em sandbox, mantenha a chave `sk_test_`, desligue demonstração e habilite Connect no ambiente de teste. Nenhuma chave secreta deve ir ao frontend, Git ou chat.
+Para demonstração sem dinheiro real, use uma chave `sk_test_` ou `rk_test_`, `STRIPE_DEMO_MODE=true`, `STRIPE_ENABLE_LIVE=false`, `STRIPE_CONNECT_ENABLED=false` e o webhook do ambiente de teste. Para testar vendedores em sandbox, mantenha a chave `sk_test_` ou `rk_test_`, desligue demonstração e habilite Connect no ambiente de teste. Em produção, use `sk_live_` ou `rk_live_` com `STRIPE_ENABLE_LIVE=true`. Nenhuma chave secreta deve ir ao frontend, Git ou chat.
 
 ## Testes e validação
 

@@ -5,26 +5,28 @@ const signatureVerifier = new Stripe('sk_test_signature_verification_only');
 const STRIPE_API = 'https://api.stripe.com/v1';
 
 function secretKey() { return String(process.env.STRIPE_SECRET_KEY || '').trim(); }
+function isTestKey(key = secretKey()) { return key.startsWith('sk_test_') || key.startsWith('rk_test_'); }
+function isLiveKey(key = secretKey()) { return key.startsWith('sk_live_') || key.startsWith('rk_live_'); }
 function testMode() { return process.env.STRIPE_DEMO_MODE === 'true'; }
 function configured() {
   const key = secretKey();
-  return (key.startsWith('sk_test_') || key.startsWith('sk_live_')) && Boolean(String(process.env.APP_BASE_URL || '').trim());
+  return (isTestKey(key) || isLiveKey(key)) && Boolean(String(process.env.APP_BASE_URL || '').trim());
 }
 function requireReady({operational=false}={}) {
-  if (!configured()) throw Object.assign(new Error('Configure STRIPE_SECRET_KEY and APP_BASE_URL.'), { status: 503 });
+  if (!configured()) throw Object.assign(new Error('Configure STRIPE_SECRET_KEY (sk_ or rk_) and APP_BASE_URL.'), { status: 503 });
   let url;
   try { url = new URL(baseUrl()); } catch { throw Object.assign(new Error('APP_BASE_URL inválida.'), { status:503 }); }
   if (url.username || url.password || url.search || url.hash || url.pathname !== '/' ||
       (url.protocol !== 'https:' && !(process.env.NODE_ENV !== 'production' && ['localhost','127.0.0.1'].includes(url.hostname)))) {
     throw Object.assign(new Error('APP_BASE_URL deve ser a origem pública HTTPS do ReUsa+.'), {status:503});
   }
-  if (!operational && testMode() && !secretKey().startsWith('sk_test_')) throw Object.assign(new Error('Demonstração exige sk_test_ da Stripe.'), { status: 503 });
-  if (!operational && secretKey().startsWith('sk_live_') && process.env.STRIPE_ENABLE_LIVE !== 'true') throw Object.assign(new Error('Pagamentos reais Stripe não estão habilitados.'), { status: 503 });
-  if (!operational && secretKey().startsWith('sk_live_') && (process.env.STRIPE_CONNECT_ENABLED !== 'true' || !String(process.env.STRIPE_WEBHOOK_SECRET||'').startsWith('whsec_') || !String(process.env.STRIPE_CONNECT_WEBHOOK_SECRET||'').startsWith('whsec_') || process.env.STRIPE_WEBHOOK_SECRET===process.env.STRIPE_CONNECT_WEBHOOK_SECRET)) {
+  if (!operational && testMode() && !isTestKey()) throw Object.assign(new Error('Demonstração exige uma chave sk_test_ ou rk_test_ da Stripe.'), { status: 503 });
+  if (!operational && isLiveKey() && process.env.STRIPE_ENABLE_LIVE !== 'true') throw Object.assign(new Error('Pagamentos reais Stripe não estão habilitados.'), { status: 503 });
+  if (!operational && isLiveKey() && (process.env.STRIPE_CONNECT_ENABLED !== 'true' || !String(process.env.STRIPE_WEBHOOK_SECRET||'').startsWith('whsec_') || !String(process.env.STRIPE_CONNECT_WEBHOOK_SECRET||'').startsWith('whsec_') || process.env.STRIPE_WEBHOOK_SECRET===process.env.STRIPE_CONNECT_WEBHOOK_SECRET)) {
     throw Object.assign(new Error('Configure Connect e os dois segredos de webhook antes de receber pagamentos reais.'), {status:503});
   }
 }
-function demoEnabled() { return testMode() && secretKey().startsWith('sk_test_') && configured(); }
+function demoEnabled() { return testMode() && isTestKey() && configured(); }
 function baseUrl() { return String(process.env.APP_BASE_URL || '').trim().replace(/\/$/, ''); }
 
 function safeProviderMessage(value) {
@@ -229,8 +231,8 @@ function accountWebhookEvent(rawBody, signature) {
   if(!secret || !Buffer.isBuffer(rawBody) || rawBody.length>1024*1024)return null;
   try {return signatureVerifier.parseEventNotification(rawBody,signature,secret,300);}catch{return null;}
 }
-const liveMode = () => secretKey().startsWith('sk_live_');
-const isTestEnvironment = () => configured() && secretKey().startsWith('sk_test_');
+const liveMode = () => isLiveKey();
+const isTestEnvironment = () => configured() && isTestKey();
 const dashboardLink = (accountId,version='v2') => version === 'v2' ? Promise.resolve({url:'https://dashboard.stripe.com/'}) : request('POST', '/accounts/' + encodeURIComponent(accountId) + '/login_links');
 const paymentIntent = (id, accountId) => request('GET', '/payment_intents/' + encodeURIComponent(id) + '?expand[]=latest_charge', undefined, {accountId});
 const dispute = (id, accountId) => request('GET', '/disputes/' + encodeURIComponent(id), undefined, {accountId});

@@ -105,6 +105,21 @@ test('Live charges cannot activate accidentally by installing live credentials',
   });
 });
 
+test('Restricted Stripe keys preserve test and live environment detection', async () => {
+  await env({STRIPE_SECRET_KEY:'rk_test_stub',APP_BASE_URL:'https://reusa.example',STRIPE_DEMO_MODE:'true'},async()=>{
+    assert.equal(stripe.configured(),true);
+    assert.equal(stripe.isTestEnvironment(),true);
+    assert.equal(stripe.liveMode(),false);
+    assert.equal(stripe.demoEnabled(),true);
+  });
+  await env({STRIPE_SECRET_KEY:'rk_live_stub',APP_BASE_URL:'https://reusa.example',STRIPE_DEMO_MODE:'false',STRIPE_ENABLE_LIVE:'false'},async()=>{
+    assert.equal(stripe.configured(),true);
+    assert.equal(stripe.isTestEnvironment(),false);
+    assert.equal(stripe.liveMode(),true);
+    await assert.rejects(stripe.createCheckout({paymentId:'id',postId:'post',title:'Item',amountCents:100,payerEmail:'buyer@example.com',method:'card'}),{status:503});
+  });
+});
+
 
 test('Connected seller Checkout uses Stripe-Account header only when verified for payouts', async () => {
   await env({ STRIPE_SECRET_KEY:'sk_test_stub', APP_BASE_URL:'https://reusa.example', STRIPE_DEMO_MODE:'false' }, async () => {

@@ -90,7 +90,7 @@ Após configurar destinos e credenciais, habilite novas operações reais com:
 STRIPE_ENABLE_LIVE=true
 ```
 
-Reimplante o serviço após alterar variáveis. Não basta inserir `sk_live_`: demonstração deve estar desligada, Connect habilitado e ambos os segredos de assinatura configurados. Para interromper novas vendas, volte `STRIPE_ENABLE_LIVE=false`; consultas financeiras, webhooks de pagamentos já registrados e reembolsos continuam funcionando com as credenciais de produção preservadas.
+Reimplante o serviço após alterar variáveis. Uma chave `sk_live_` ou `rk_live_` só habilita operações reais quando `STRIPE_ENABLE_LIVE=true`, a demonstração está desligada, o Connect está habilitado e ambos os segredos de assinatura estão configurados. Para interromper novas vendas, volte `STRIPE_ENABLE_LIVE=false`; consultas financeiras, webhooks de pagamentos já registrados e reembolsos continuam funcionando com as credenciais de produção preservadas.
 
 ## Vendedores
 
