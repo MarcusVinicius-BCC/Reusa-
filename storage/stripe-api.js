@@ -283,7 +283,7 @@ function registerStripeRoutes(app, {postgres, sqlite, authenticate, jwt, jwtSecr
       if(post?.goal!=='Venda'||post.status!=='Reservado'||post.reserved_by!==n.interested_id)fail(409,'Esta venda não está reservada para você.');
       const d=await one(c,'SELECT * FROM collection_deliveries WHERE negotiation_id=$1',[n.id]);
       if(!d?.accepted_by||d.accepted_by===d.proposed_by||!['confirmed','in_transit'].includes(d.status)||new Date(d.confirmation_token_expires_at).getTime()<clock().getTime())fail(409,'Combine e aceite a entrega antes de pagar.');
-      if(await one(c,"SELECT id FROM payments WHERE negotiation_id=$1 AND status IN ('processing','succeeded','refunded')",[n.id]))fail(409,'Já existe uma cobrança nesta negociação. Consulte o status.');
+      if(await one(c,"SELECT id FROM payments WHERE negotiation_id=$1 AND status IN ('processing','succeeded')",[n.id]))fail(409,'Já existe uma cobrança nesta negociação. Consulte o status.');
       const seller=await one(c,'SELECT * FROM users WHERE id=$1',[n.owner_id]),payer=await one(c,'SELECT email FROM users WHERE id=$1',[n.interested_id]);
       const account=configured&&!stripe.demoEnabled()?seller[accountColumn()]:null;
       if(configured&&!stripe.demoEnabled()&&!account)fail(409,'O vendedor precisa concluir o cadastro Stripe.');

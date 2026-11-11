@@ -2168,7 +2168,7 @@ async function start() {
     const post = get('SELECT goal,status FROM posts WHERE id = ?', [negotiation.post_id]);
     if (!post || post.goal !== SALE_GOAL) return res.status(400).json({ error: 'Money offers are only available for items marked for sale' });
     if (negotiation.proposal_status && negotiation.proposal_status !== 'none'&&!resending) return res.status(409).json({ error: 'Você já enviou uma oferta para este anúncio.' });
-    if(resending&&(post.status!=='Disponível'||get('SELECT id FROM collection_deliveries WHERE negotiation_id=?',[negotiation.id])||get('SELECT id FROM payments WHERE negotiation_id=? LIMIT 1',[negotiation.id])))return res.status(409).json({error:'Esta negociação não está disponível para uma nova oferta.'});
+    if(resending&&(post.status!=='Disponível'||get("SELECT id FROM collection_deliveries WHERE negotiation_id=? AND status<>'cancelled'",[negotiation.id])||get("SELECT id FROM payments WHERE negotiation_id=? AND status IN ('processing','succeeded') LIMIT 1",[negotiation.id])))return res.status(409).json({error:'Esta negociação não está disponível para uma nova oferta.'});
     if (!Number.isSafeInteger(amountCents) || amountCents < 100 || amountCents > 100000000) return res.status(400).json({ error: 'Amount must be between R$ 1,00 and R$ 1.000.000,00' });
     if (!['pix', 'card'].includes(method)) return res.status(400).json({ error: 'Use pix ou cartão' });
     if (method === 'pix' && process.env.STRIPE_PIX_ENABLED !== 'true') return res.status(409).json({ error: 'Pix ainda não está habilitado nesta integração Stripe. Escolha cartão.' });
