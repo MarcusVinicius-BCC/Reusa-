@@ -289,10 +289,10 @@ function registerDeliveryRoutes(app, { postgres, sqlite, authenticate, flush, re
           const active = await rows(c, "SELECT id FROM negotiations WHERE post_id=$1 AND status<>'cancelled'", [req.params.id]);
           if (!active.length) return;
         }
-        const active = await rows(c, 'SELECT id FROM negotiations WHERE post_id=$1', [req.params.id]);
+        const active = await rows(c, "SELECT id FROM negotiations WHERE post_id=$1 AND status IN ('interested','reserved','completed')", [req.params.id]);
         for (const n of active) {
           const d = await delivery(c, n.id);
-          if (await payment(c, n.id) || d?.payment_locked || (d && !['cancelled','completed'].includes(d.status))) error(409, 'Há uma entrega ou pagamento vinculado. Cancele o acordo pendente antes de alterar a reserva; pagamentos em andamento ou aprovados exigem resolução com a outra pessoa.');
+          if (await payment(c, n.id) || (d?.payment_locked && d.status !== 'cancelled') || (d && !['cancelled','completed'].includes(d.status))) error(409, 'Há uma entrega ou pagamento vinculado. Cancele o acordo pendente antes de alterar a reserva; pagamentos em andamento ou aprovados exigem resolução com a outra pessoa.');
           if (d?.status === 'completed') error(409, 'Este item já teve o recebimento confirmado.');
         }
       });
