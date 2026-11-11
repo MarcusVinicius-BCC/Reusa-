@@ -4,8 +4,8 @@
 .stripe-account-status-heading strong,.stripe-account-status-heading small{display:block}
 .stripe-account-status-heading strong{font-size:13px}
 .stripe-account-status-heading small{margin-top:2px;color:var(--text-variant);font-size:11px}
-.stripe-account-status-item{display:flex;align-items:center;gap:8px;min-width:0;padding:10px 8px;border-radius:12px;background:color-mix(in srgb,var(--surface-lowest,#fff) 70%,transparent)}
-.stripe-account-status-item>.material-symbols-outlined{color:var(--primary);font-size:18px}
+.stripe-account-status-item{display:grid;grid-template-columns:30px minmax(0,1fr);align-items:center;gap:8px;min-width:0;padding:11px 10px;border-radius:12px;background:color-mix(in srgb,var(--surface-lowest,#fff) 70%,transparent)}
+.stripe-account-status-item>.material-symbols-outlined{display:grid;width:30px;height:30px;place-items:center;border-radius:9px;color:var(--primary);background:var(--secondary-container);font-size:17px}
 .stripe-account-status-item>span:last-child{min-width:0}
 .stripe-account-status dt{font-size:11px;color:var(--text-variant)}
 .stripe-account-status dd{margin:4px 0 0;font-size:12px;font-weight:800;color:#17653f}
