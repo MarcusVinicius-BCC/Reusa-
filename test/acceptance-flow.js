@@ -11,6 +11,7 @@ async function exerciseAcceptanceFlow(request) {
   const seller = await register('seller');
   const buyer = await register('buyer');
   const other = await register('other');
+  const proposalVersions = new Map();
   const send = (path, actor, body = {}, method = 'POST') => request(path, { method, headers:actor.headers, body:JSON.stringify(body) });
   const setup = async (withOther = true) => {
     const created = await send('/api/posts',seller,{ title:'Mesa para reutilização', description:'Mesa de estudo em bom estado.', category:'Móveis', goal:'Venda', condition:'Bom estado', location:'Belém, PA', imageUrl:'https://images.example.test/mesa.jpg' });
@@ -19,12 +20,14 @@ async function exerciseAcceptanceFlow(request) {
     const offer=async(actor,amount)=>{
       assert.equal((await send('/api/messages/threads',actor,{postId:id})).response.status,201);
       const n=(await request(`/api/posts/${id}/negotiation`,{headers:actor.headers})).payload.negotiation;
-      assert.equal((await send(`/api/negotiations/${n.id}/proposal`,actor,{amountCents:amount,method:'card'})).response.status,201);
+      const proposed = await send(`/api/negotiations/${n.id}/proposal`,actor,{amountCents:amount,method:'card'});
+      assert.equal(proposed.response.status,201);
+      proposalVersions.set(n.id, proposed.payload.proposal.createdAt);
       return n.id;
     };
     return { id, first:await offer(buyer,1000), second:withOther?await offer(other,2000):null };
   };
-  const accept = id => send(`/api/negotiations/${id}/proposal`,seller,{decision:'accepted'},'PATCH');
+  const accept = id => send(`/api/negotiations/${id}/proposal`,seller,{decision:'accepted',expectedProposalCreatedAt:proposalVersions.get(id)},'PATCH');
   const cancel = (id, actor=seller) => send(`/api/negotiations/${id}/cancel-acceptance`,actor);
   const list = async postId => (await request(`/api/posts/${postId}/interested`,{headers:seller.headers})).payload.negotiations;
   const schedule = { mode:'pickup', scheduledFor:new Date(Date.now()+86400000).toISOString(), address:'Rua da Escola, 100, Centro, Belém, PA' };

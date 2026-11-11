@@ -90,7 +90,7 @@ test('PostgreSQL provider persists a post, thread, reservation and outbox event'
     const restoredInbox = await request(baseUrl, '/api/messages/threads', { headers: auth(interested.payload.token) });
     assert.equal(restoredInbox.payload.threads.length, 1);
     assert.equal(restoredInbox.payload.threads[0].id, threadId);
-    const reserved = await request(baseUrl, `/api/posts/${postId}/reserve`, { method: 'POST', headers: auth(owner.payload.token), body: JSON.stringify({ interestedId: interested.payload.user.id }) });
+    const reserved = await request(baseUrl, `/api/posts/${postId}/reserve`, { method: 'POST', headers: auth(owner.payload.token), body: JSON.stringify({ interestedId: interested.payload.user.id, expectedProposalCreatedAt: proposal.payload.proposal.createdAt }) });
     assert.equal(reserved.response.status, 200);
     assert.equal(reserved.payload.post.status, 'Reservado');
     const delivery = await request(baseUrl, `/api/negotiations/${negotiation.payload.negotiation.id}/collection`, { method:'POST', headers:auth(owner.payload.token), body:JSON.stringify({ mode:'pickup', scheduledFor:new Date(Date.now()+86400000).toISOString(), address:'Rua da Escola, 100, Belém, PA' }) });
@@ -141,6 +141,7 @@ test('PostgreSQL provider persists a post, thread, reservation and outbox event'
     assert.equal(saved.received, 2);
     assert.equal(saved.accepting, false);
     await require('./acceptance-flow').exerciseAcceptanceFlow((path, options) => request(baseUrl, path, options));
+    await require('./offer-cancellation-flow').exerciseOfferCancellation((path, options) => request(baseUrl, path, options));
     const communityResult=await require('./community-flow').exerciseCommunity((path,options)=>request(baseUrl,path,options));
     const discoveryDb=new (require('../storage/postgres-repository').PostgresRepository)(require('../storage/database-config').postgresConnectionString());
     try{

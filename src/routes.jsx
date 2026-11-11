@@ -71,7 +71,8 @@ const negotiationStatusLabel = (status) => ({
 const proposalStatusLabel = (status) => ({
   pending: 'Pendente',
   accepted: 'Aceita',
-  rejected: 'Recusada'
+  rejected: 'Recusada',
+  cancelled: 'Cancelada'
 }[status] || status);
 function showBrowserNotification(notification) {
   if (typeof Notification === 'undefined' || Notification.permission !== 'granted') return;
@@ -811,8 +812,8 @@ function FeedCard({ post, onNavigate, onOpenChat, onOpenPayment }) {
   const [offerStatus, setOfferStatus] = useState(post.offerStatus || 'none');
   const listingLocation = post.location || post.author?.city || '';
   const isSale = post.goal === 'Venda';
-  const offerStatusLabel = offerStatus === 'accepted' ? 'Oferta aceita' : offerStatus === 'rejected' ? 'Oferta recusada' : 'Proposta aguardando resposta';
-  const offerStatusIcon = offerStatus === 'accepted' ? 'check_circle' : offerStatus === 'rejected' ? 'cancel' : 'schedule';
+  const offerStatusLabel = offerStatus === 'accepted' ? 'Oferta aceita' : offerStatus === 'rejected' ? 'Oferta recusada' : offerStatus === 'cancelled' ? 'Oferta cancelada' : 'Proposta aguardando resposta';
+  const offerStatusIcon = offerStatus === 'accepted' ? 'check_circle' : ['rejected', 'cancelled'].includes(offerStatus) ? 'cancel' : 'schedule';
   const [now, setNow] = useState(Date.now());
 
   useEffect(() => {
@@ -871,7 +872,7 @@ function FeedCard({ post, onNavigate, onOpenChat, onOpenPayment }) {
 
   async function openProposal() {
     if (!isSale) return;
-    if (offerStatus !== 'none') {
+    if (!['none', 'cancelled'].includes(offerStatus)) {
       alert('Você já enviou uma oferta para este anúncio.');
       return;
     }
@@ -935,7 +936,7 @@ function FeedCard({ post, onNavigate, onOpenChat, onOpenPayment }) {
         <div className="post-stats"><button className={liked ? 'ghost-inline liked' : 'ghost-inline'} onClick={like}><span key={heartAnimationKey} className={liked ? 'material-symbols-outlined like-icon liked-heart' : 'material-symbols-outlined like-icon'}>{liked ? 'favorite' : 'favorite_border'}</span>{likes}</button><button className="ghost-inline" onClick={toggleComments}><span className="material-symbols-outlined">chat_bubble</span>{commentCount}</button></div>
         <div className="post-action-ctas">
           <button type="button" className="view-post-btn" onClick={() => onNavigate(`/anuncios/${post.id}`)} aria-label={`Ver anúncio: ${post.title}`}><span className="material-symbols-outlined" aria-hidden="true">visibility</span>Ver anúncio</button>
-          {post.authorId !== session?.id ? <button className="primary-btn compact" disabled={offerStatus !== 'none'} onClick={() => setInterestOptionsOpen(true)}><span className="material-symbols-outlined">handshake</span>{offerStatus !== 'none' ? 'Oferta enviada' : 'Tenho interesse'}</button> : <span className="post-owner-label">Seu anúncio</span>}
+          {post.authorId !== session?.id ? <button className="primary-btn compact" disabled={!['none', 'cancelled'].includes(offerStatus)} onClick={() => setInterestOptionsOpen(true)}><span className="material-symbols-outlined">handshake</span>{!['none', 'cancelled'].includes(offerStatus) ? 'Oferta enviada' : 'Tenho interesse'}</button> : <span className="post-owner-label">Seu anúncio</span>}
         </div>
       </div>
       {commentsOpen ? <section className="comments-panel"><div className="comments-list">{comments.length ? comments.map((comment) => <div className="comment" key={comment.id}>{comment.avatar ? <img src={comment.avatar} alt="" /> : <span className="avatar-placeholder material-symbols-outlined" aria-hidden="true">person</span>}<div><strong>{comment.name}</strong><p>{comment.text}</p></div></div>) : commentCount === 0 ? <p className="comments-empty">Ainda não há comentários. Seja o primeiro.</p> : null}</div><form className="comment-form" onSubmit={addComment}><input value={commentText} maxLength="500" onChange={(event) => setCommentText(event.target.value)} placeholder="Escreva um comentário..." /><button className="send-btn" disabled={commentBusy} aria-label="Publicar comentário"><span className="material-symbols-outlined">send</span></button></form></section> : null}
@@ -1258,6 +1259,9 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
   const [proposalForm, setProposalForm] = useState({ amount: '', method: 'card' });
   const [proposalBusy, setProposalBusy] = useState(false);
   const [cancellingAcceptance, setCancellingAcceptance] = useState('');
+  const [cancellingOffer, setCancellingOffer] = useState(false);
+  const cancellingOfferRef = useRef(false);
+  const [offerError, setOfferError] = useState('');
   const [editing, setEditing] = useState(false);
   const [editForm, setEditForm] = useState({});
   const [editImages, setEditImages] = useState([]);
@@ -1299,6 +1303,7 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
   useEffect(() => {
     setStatusUpdating('');
     setStatusMessage('');
+    setOfferError('');
     setBusy(true);
     Promise.all([api.post(postId), api.comments(postId)]).then(([postResult, commentResult]) => {
       setPost(postResult.post);
@@ -1419,9 +1424,11 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
       const amountCents = Number(String(proposalForm.amount).replace(/\D/g, ''));
       if (!Number.isSafeInteger(amountCents) || amountCents < 100) return alert('Informe um valor válido a partir de R$ 1,00.');
       setProposalBusy(true);
+      setOfferError('');
       try {
         const result = await api.createProposal(negotiation.id, { amountCents, method: proposalForm.method });
-        setNegotiation((current) => ({ ...current, proposalStatus: result.proposal.status, proposalAmountCents: result.proposal.amountCents, proposalMethod: result.proposal.method, proposalCreatedAt: result.proposal.createdAt }));
+        setNegotiation((current) => ({ ...current, status: 'interested', canCancelOffer: false, proposalStatus: result.proposal.status, proposalAmountCents: result.proposal.amountCents, proposalMethod: result.proposal.method, proposalCreatedAt: result.proposal.createdAt }));
+        await refreshPost();
         alert('Proposta enviada. Aguarde a resposta do vendedor.');
       } catch (error) {
         alert(error.message);
@@ -1485,6 +1492,27 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
     return item.canCancelAcceptance && !(item.id === negotiation?.id && (collection || payment));
   }
 
+  async function cancelOwnOffer() {
+    if (cancellingOfferRef.current || !negotiation?.canCancelOffer || negotiation.interestedId !== session?.id) return;
+    cancellingOfferRef.current = true;
+    setCancellingOffer(true);
+    setOfferError('');
+    let cancelled = false;
+    try {
+      await api.cancelOffer(negotiation.id, negotiation.proposalCreatedAt);
+      cancelled = true;
+      setNegotiation((current) => ({ ...current, status: 'cancelled', proposalStatus: 'cancelled', canCancelOffer: false }));
+      setProposalForm((current) => ({ ...current, amount: '' }));
+      await refreshPost();
+    } catch (error) {
+      if (!cancelled) await refreshPost().catch(() => {});
+      setOfferError(cancelled ? 'A oferta foi cancelada, mas não foi possível atualizar todos os dados. Atualize a página para conferir.' : error.message);
+    } finally {
+      cancellingOfferRef.current = false;
+      setCancellingOffer(false);
+    }
+  }
+
   async function cancelAcceptance(id) {
     if (cancellingAcceptance || !window.confirm('Cancelar o aceite? O item ficará disponível para aceitar outra oferta.')) return;
     setCancellingAcceptance(id);
@@ -1495,6 +1523,16 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
 
   async function reserve(interestedId) {
     try { await useAppStore.getState().reservePost(post.id, interestedId); await refreshPost(); await loadInterested(); } catch (error) { alert(error.message); }
+  }
+
+  async function decideOffer(item, decision) {
+    try {
+      await api.decideProposal(item.id, decision, item.proposalCreatedAt);
+    } catch (error) {
+      alert(error.message);
+    }
+    try { await refreshPost(); } catch (error) { alert(error.message); }
+    await loadInterested();
   }
 
   async function updateStatus(status) {
@@ -1618,8 +1656,8 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
         <PostStatusControls post={post} deliveryLocked={Boolean((collection && collection.status !== 'cancelled') || ['processing','succeeded'].includes(payment?.status))} statusUpdating={statusUpdating} statusMessage={statusMessage} onChange={updateStatus} />
         {interested.length ? <div className="interested-list">{interested.map((item) => <article key={item.id}>{item.user?.avatar ? <img className="interested-avatar" src={item.user.avatar} alt={`Foto de ${item.user.name || 'usuário'}`} /> : <span className="avatar-placeholder material-symbols-outlined">person</span>}<div><strong>{item.user?.name || 'Usuário'}</strong><small>{item.user?.city} · {negotiationStatusLabel(item.status)}</small>{item.proposalStatus !== 'none' ? <small>Proposta: {Number.isFinite(Number(item.proposalAmountCents)) && Number(item.proposalAmountCents) > 0 ? `R$ ${(Number(item.proposalAmountCents) / 100).toFixed(2).replace('.', ',')}` : 'Valor indisponível'} · {proposalStatusLabel(item.proposalStatus)}</small> : null}</div>{isSale ? (
             (item.proposalStatus === 'pending' || (item.proposalStatus === 'rejected' && post.status === 'Disponível')) ? <>
-              {item.proposalStatus === 'pending' && <button className="secondary-btn" onClick={() => api.decideProposal(item.id, 'rejected').then(loadInterested).catch((error) => alert(error.message))}>Recusar oferta</button>}
-              <button className="primary-btn" disabled={post.status !== 'Disponível' || Boolean(cancellingAcceptance)} title={post.status !== 'Disponível' ? 'Cancele o aceite atual antes de aceitar outra oferta' : undefined} onClick={() => api.decideProposal(item.id, 'accepted').then(async () => { await refreshPost(); await loadInterested(); }).catch((error) => alert(error.message))}>{item.proposalStatus === 'rejected' ? 'Reconsiderar oferta' : 'Aceitar oferta e reservar'}</button>
+              {item.proposalStatus === 'pending' && <button className="secondary-btn" onClick={() => decideOffer(item, 'rejected')}>Recusar oferta</button>}
+              <button className="primary-btn" disabled={post.status !== 'Disponível' || Boolean(cancellingAcceptance)} title={post.status !== 'Disponível' ? 'Cancele o aceite atual antes de aceitar outra oferta' : undefined} onClick={() => decideOffer(item, 'accepted')}>{item.proposalStatus === 'rejected' ? 'Reconsiderar oferta' : 'Aceitar oferta e reservar'}</button>
             </> : item.proposalStatus === 'accepted' && item.status === 'reserved' ? <div className="accepted-offer-actions"><span className="reserve-btn reserve-btn-active"><span className="material-symbols-outlined" aria-hidden="true">check_circle</span>Oferta aceita · Item reservado</span><button type="button" className="cancel-acceptance-btn" disabled={!canCancelAcceptedOffer(item) || Boolean(cancellingAcceptance)} onClick={() => cancelAcceptance(item.id)} title={canCancelAcceptedOffer(item) ? 'Retirar o aceite e liberar o item para outra oferta' : 'Indisponível: a negociação já avançou para entrega ou pagamento'}>{cancellingAcceptance === item.id ? 'Cancelando…' : 'Cancelar aceite'}</button>{!canCancelAcceptedOffer(item) && <small>A negociação já avançou para entrega ou pagamento.</small>}</div> : null
           ) : (
             item.status === 'reserved'
@@ -1632,8 +1670,10 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
     ) : null}
     <TransportPanel key={post.id} post={post} own={ownPost} onSaved={refreshPost}/>
     <Questions post={post} session={session}/>
-    {!ownPost && isSale && negotiation?.status === 'interested' && negotiation.proposalStatus === 'none' ? <section className="review-form-card proposal-card"><span className="eyebrow">Oferta com pagamento</span><h2>Envie sua proposta</h2><p>Informe o valor e a forma de pagamento. O vendedor receberá sua proposta para análise.</p><form onSubmit={submitProposal}><label>Valor da oferta (R$)<input inputMode="decimal" value={proposalForm.amount} onChange={(event) => setProposalForm((current) => ({ ...current, amount: formatMoneyInput(event.target.value) }))} placeholder="10,00" required /></label>    <label>Forma de pagamento<select value={proposalForm.method} onChange={(event) => setProposalForm((current) => ({ ...current, method: event.target.value }))}><option value="card">Cartão</option><option value="pix" disabled={!stripePixEnabled}>PIX{stripePixEnabled ? "" : " (indisponível)"}</option></select></label><button className="primary-btn" disabled={proposalBusy}>{proposalBusy ? 'Enviando...' : 'Enviar proposta'}<span className="material-symbols-outlined">send</span></button></form></section> : null}
-    {!ownPost && isSale && negotiation?.status === 'interested' && negotiation.proposalStatus === 'pending' ? <section className="payment-waiting-card"><div className="payment-waiting-icon"><span className="material-symbols-outlined">hourglass_top</span></div><div><span className="eyebrow">Proposta enviada</span><h2>Aguardando resposta do vendedor</h2><p>Sua oferta de R$ {((negotiation.proposalAmountCents || 0) / 100).toFixed(2).replace('.', ',')} foi enviada. O pagamento ficará disponível após o vendedor aceitar a oferta e as duas pessoas combinarem e aceitarem a entrega.</p></div><button className="secondary-btn" onClick={startConversation}><span className="material-symbols-outlined">chat_bubble</span>Conversar com o anunciante</button></section> : null}
+    {!ownPost && isSale && offerError ? <p className="offer-cancellation-error" role="alert">{offerError}</p> : null}
+    {!ownPost && isSale && negotiation?.proposalStatus === 'cancelled' ? <p className="offer-cancellation-feedback" role="status">Oferta cancelada. {post.status === 'Disponível' ? 'Você pode enviar uma nova proposta abaixo.' : 'Você poderá enviar uma nova proposta quando o anúncio estiver disponível.'}</p> : null}
+    {!ownPost && isSale && post.status === 'Disponível' && negotiation && ((negotiation.status === 'interested' && negotiation.proposalStatus === 'none') || (negotiation.status === 'cancelled' && negotiation.proposalStatus === 'cancelled')) ? <section className="review-form-card proposal-card"><span className="eyebrow">Oferta com pagamento</span><h2>{negotiation.proposalStatus === 'cancelled' ? 'Envie uma nova proposta' : 'Envie sua proposta'}</h2><p>Informe o valor e a forma de pagamento. O vendedor receberá sua proposta para análise.</p><form onSubmit={submitProposal}><label>Valor da oferta (R$)<input inputMode="decimal" value={proposalForm.amount} onChange={(event) => setProposalForm((current) => ({ ...current, amount: formatMoneyInput(event.target.value) }))} placeholder="10,00" required /></label>    <label>Forma de pagamento<select value={proposalForm.method} onChange={(event) => setProposalForm((current) => ({ ...current, method: event.target.value }))}><option value="card">Cartão</option><option value="pix" disabled={!stripePixEnabled}>PIX{stripePixEnabled ? "" : " (indisponível)"}</option></select></label><button className="primary-btn" disabled={proposalBusy}>{proposalBusy ? 'Enviando...' : 'Enviar proposta'}<span className="material-symbols-outlined">send</span></button></form></section> : null}
+    {!ownPost && isSale && negotiation?.status === 'interested' && negotiation.proposalStatus === 'pending' ? <section className="payment-waiting-card"><div className="payment-waiting-icon"><span className="material-symbols-outlined">hourglass_top</span></div><div><span className="eyebrow">Proposta enviada</span><h2>Aguardando resposta do vendedor</h2><p>Sua oferta de R$ {((negotiation.proposalAmountCents || 0) / 100).toFixed(2).replace('.', ',')} foi enviada. O pagamento ficará disponível após o vendedor aceitar a oferta e as duas pessoas combinarem e aceitarem a entrega.</p></div><div className="payment-waiting-actions"><button className="secondary-btn" onClick={startConversation}><span className="material-symbols-outlined">chat_bubble</span>Conversar com o anunciante</button>{negotiation.canCancelOffer && negotiation.interestedId === session?.id && !collection && !payment ? <button type="button" className="cancel-offer-btn" disabled={cancellingOffer} onClick={cancelOwnOffer}>{cancellingOffer ? 'Cancelando…' : 'Cancelar oferta'}</button> : null}</div></section> : null}
     {negotiation && (['reserved','completed'].includes(negotiation.status) || payment) ? <DeliveryCard negotiation={negotiation} collection={collection} onChange={setCollection} isSale={isSale} payment={payment} testMode={payment?.testMode ?? paymentDemoMode} isOwner={ownPost} onRefreshStatus={refreshPost} onReceived={refreshPost} onChat={() => onNavigate(`/mensagens/ana?thread=${negotiation.threadId || negotiation.thread_id}`)}>
     {!ownPost && isSale && negotiation?.status === 'reserved' && negotiation.proposalMethod === 'pix' && !stripePixEnabled && (!payment || payment.status === 'failed') && <section className="delivery-payment"><h3>Atualize a forma de pagamento</h3><p>Pix não está disponível. Você pode reenviar o mesmo valor por cartão. A reserva e o acordo anteriores serão cancelados; o vendedor precisará aceitar novamente.</p><button className="primary-btn" disabled={paymentBusy} onClick={async()=>{if(!window.confirm('Reenviar a oferta por cartão e aguardar um novo aceite?'))return;setPaymentBusy(true);try{await api.switchOfferToCard(negotiation.id);await refreshPost();}catch(error){alert(error.message);}finally{setPaymentBusy(false);}}}>Reenviar oferta por cartão</button></section>}
     {!ownPost && isSale && negotiation?.status === 'reserved' && negotiation?.proposalStatus === 'accepted' && (!payment || payment.status === 'failed') && (negotiation.proposalMethod !== 'pix' || stripePixEnabled) ? <section className="delivery-payment"><h3>{collection?.paymentReady ? 'Finalize seu pagamento' : 'Pagamento ainda bloqueado'}</h3><p>{collection?.paymentReady ? 'Local e horário foram aceitos pelas duas pessoas. Confira o item antes de pagar; o recebimento será confirmado separadamente.' : 'O aceite da oferta reserva o item. Para pagar, as duas pessoas também precisam aceitar o local e o horário acima.'}</p>{paymentDemoMode ? <p role="status"><strong>Ambiente de teste:</strong> o pagamento é simulado e não transfere dinheiro real ao vendedor. Para cartão, use somente dados de teste do Stripe; o Pix só estará disponível se a Stripe habilitar essa forma de pagamento.</p> : null}<form onSubmit={submitPayment}><button className="primary-btn" disabled={paymentBusy || !collection?.paymentReady}>{paymentBusy ? 'Abrindo checkout...' : 'Continuar para pagamento'}<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><rect x="3" y="5" width="18" height="14" rx="3"/><path d="M3 10h18m-13 5h3"/></svg></button></form></section> : null}

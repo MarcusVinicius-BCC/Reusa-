@@ -63,7 +63,7 @@ function registerDeliveryRoutes(app, { postgres, sqlite, authenticate, flush, re
         const owner=n.owner_id===req.user.id;
         let stage='decision', label='Aguardando resposta', action=owner;
         if(n.status==='completed') {stage='completed';label='Concluída';action=false;}
-        else if(n.status==='cancelled'||n.proposal_status==='rejected'){stage='closed';label='Oferta encerrada';action=false;}
+        else if(n.status==='cancelled'||n.proposal_status==='rejected'){stage='closed';label=n.proposal_status==='cancelled'?'Oferta cancelada':'Oferta encerrada';action=false;}
         else if(n.status==='reserved') {
           if(!d||d.status==='cancelled'){stage='agreement';label='Combinar entrega';action=true;}
           else if(d.status==='scheduled'){stage='agreement';label='Aguardando aceite da entrega';action=d.proposed_by!==req.user.id;}
@@ -73,11 +73,34 @@ function registerDeliveryRoutes(app, { postgres, sqlite, authenticate, flush, re
         const incident=d?await one(c,'SELECT detail,created_at FROM delivery_incidents WHERE delivery_id=$1 ORDER BY created_at DESC LIMIT 1',[d.id]):null;
         return {id:n.id,postId:n.post_id,title:n.title,imageUrl:n.image_url,goal:n.goal,location:n.location,
           role:owner?'owner':'interested',counterparty:owner?n.buyer_name:n.owner_name,threadId:n.thread_id,stage,label,needsYourAction:action,
+          canCancelOffer:!owner&&n.goal==='Venda'&&n.status==='interested'&&n.proposal_status==='pending'&&!d&&!p,
+          proposalCreatedAt:n.proposal_created_at||null,
           amountCents:Number(p?.amount_cents||n.proposal_amount_cents||0),paymentStatus:p?.status||null,scheduledFor:d&&!['cancelled'].includes(d.status)?d.scheduled_for:null,
           deliveryStatus:d?.status||null,incident:incident||null,updatedAt:n.updated_at};
       }));
     });
     res.json({negotiations:items});
+  }));
+  app.post('/api/negotiations/:id/cancel-offer', authenticate, route(async (req, res) => {
+    const expected=typeof req.body?.expectedProposalCreatedAt==='string'?Date.parse(req.body.expectedProposalCreatedAt):NaN;
+    if(!Number.isFinite(expected))error(400,'Atualize a oferta antes de solicitar o cancelamento.');
+    await work(async c => {
+      // Seller decisions lock post first, then negotiation. Use the same order
+      // so acceptance and withdrawal cannot race or deadlock.
+      const target=await one(c,'SELECT post_id FROM negotiations WHERE id=$1',[req.params.id]);
+      if(!target)error(404,'Negociação não encontrada.');
+      const post=await one(c,`SELECT * FROM posts WHERE id=$1${postgres?' FOR UPDATE':''}`,[target.post_id]);
+      const n=await negotiation(c,req.params.id,req.user.id);
+      if(n.interested_id!==req.user.id)error(403,'Somente quem enviou a oferta pode cancelá-la.');
+      if(new Date(n.proposal_created_at).getTime()!==expected)error(409,'A oferta foi atualizada. Confira a nova oferta antes de cancelar.');
+      if(n.status==='cancelled'&&n.proposal_status==='cancelled')return;
+      if(!post||post.goal!=='Venda'||n.status!=='interested'||n.proposal_status!=='pending')error(409,'Somente uma oferta aguardando resposta pode ser cancelada.');
+      if(await delivery(c,n.id)||await one(c,'SELECT id FROM payments WHERE negotiation_id=$1 LIMIT 1',[n.id]))error(409,'Esta negociação já avançou para entrega ou pagamento.');
+      await c.query("UPDATE negotiations SET status='cancelled',proposal_status='cancelled',updated_at=$1 WHERE id=$2",[clock().toISOString(),n.id]);
+      await notice(c,n.owner_id,'Oferta cancelada',`A pessoa interessada cancelou a oferta enviada para ${post.title}.`,n);
+      await emit(c,'negotiation.offer_cancelled',{negotiationId:n.id,postId:n.post_id,ownerId:n.owner_id,interestedId:n.interested_id},req);
+    });
+    void flush();res.json({ok:true,cancelled:true});
   }));
   app.post('/api/collection-deliveries/:id/incidents', authenticate, route(async (req,res) => {
     const kind=req.body?.kind, detail=typeof req.body?.detail==='string'?req.body.detail.trim():'';

@@ -377,6 +377,7 @@ img { display: block; max-width: 100%; }
 .offer-status-pending { color: #7c5608; background: #fff4d6; }
 .offer-status-accepted { color: #075b38; background: #dff5e7; }
 .offer-status-rejected { color: #8b2630; background: #ffe4e5; }
+.offer-status-cancelled { color: #52655b; background: #edf2ef; }
 @media (max-width: 420px) { .feed-page .post-head .post-offer-status { max-width: 150px; padding: 5px 7px; font-size: 9px; } .feed-page .post-head .post-offer-status .material-symbols-outlined { font-size: 14px; } }
 @media (max-width: 1200px) and (min-width: 801px) { .landing-header { min-height: 80px; gap: 10px; }.landing-header .landing-brand { display: none; }.landing-hero-logo { width: min(338px, 72%); margin: 0 auto 18px; }.landing-nav, .landing-account-actions { gap: 4px; }.landing-nav a, .landing-nav button { padding: 8px 7px; font-size: 11px; }.landing-account-actions .landing-login, .landing-account-actions .landing-start { width: 112px; min-height: 38px; font-size: 11px; } }
 @media (min-width: 1201px) { .landing-header { min-height: 82px; }.landing-header .landing-brand { display: none; }.landing-hero-logo { width: 338px; margin: 0 auto 18px; } }
@@ -3392,6 +3393,15 @@ body { background: var(--app-night-deep); }
 .cancel-acceptance-btn:hover:not(:disabled) { background:#fff1ee; border-color:#c97a6d; }
 .cancel-acceptance-btn:disabled { opacity:.55; cursor:not-allowed; }
 .cancel-acceptance-btn:focus-visible { outline:3px solid #983f3540; outline-offset:3px; }
+.cancel-offer-btn { display:inline-flex; align-items:center; justify-content:center; min-height:42px; padding:10px 15px; border:1px solid #d8aaa2; border-radius:12px; background:#fff; color:#983f35; font:inherit; font-size:12px; font-weight:700; cursor:pointer; }
+.cancel-offer-btn:hover:not(:disabled) { background:#fff1ee; border-color:#c97a6d; }
+.cancel-offer-btn:disabled { opacity:.55; cursor:wait; }
+.cancel-offer-btn:focus-visible { outline:3px solid #983f3540; outline-offset:3px; }
+.payment-waiting-actions { display:flex; flex-wrap:wrap; gap:10px; grid-column:2; margin-top:2px; }
+.payment-waiting-actions button { max-width:100%; white-space:normal; }
+.offer-cancellation-feedback,.offer-cancellation-error { margin:16px 0; padding:14px 16px; border-radius:12px; font-size:13px; line-height:1.6; }
+.offer-cancellation-feedback { border:1px solid #9ac9aa; background:#effaf2; color:#17653f; }
+.offer-cancellation-error { border:1px solid #d8aaa2; background:#fff5f3; color:#983f35; }
 .accepted-offer-actions .reserve-btn { max-width:100%; white-space:normal; font-size:12px; font-weight:700; line-height:1.4; }
 @media(max-width:600px) { .interested-list article:has(.accepted-offer-actions) { flex-wrap:wrap; } .interested-list article>.accepted-offer-actions { flex:0 0 100%; } }
 

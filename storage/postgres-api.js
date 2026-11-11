@@ -345,37 +345,42 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
   });
   app.get('/api/posts/:id/negotiation', authenticate, async (req, res, next) => {
     try {
-      const post = await db.one('SELECT id FROM posts WHERE id=$1', [req.params.id]);
+      const post = await db.one('SELECT id,goal FROM posts WHERE id=$1', [req.params.id]);
       if (!post) return res.status(404).json({ error: 'Post not found' });
       const negotiation = await db.one("SELECT id,status,thread_id,owner_id,interested_id,completed_at,proposal_status,proposal_amount_cents,proposal_method,proposal_created_at FROM negotiations WHERE post_id=$1 AND (owner_id=$2 OR interested_id=$2) ORDER BY CASE WHEN status='reserved' THEN 0 WHEN status='completed' THEN 1 ELSE 2 END, updated_at DESC LIMIT 1", [post.id, req.user.id]);
-      return res.json({ negotiation: negotiation ? { id: negotiation.id, status: negotiation.status, threadId: negotiation.thread_id, ownerId: negotiation.owner_id, interestedId: negotiation.interested_id, completedAt: negotiation.completed_at, proposalStatus: negotiation.proposal_status || 'none', proposalAmountCents: negotiation.proposal_amount_cents || null, proposalMethod: negotiation.proposal_method || null, proposalCreatedAt: negotiation.proposal_created_at || null } : null });
+      const canCancelOffer=Boolean(negotiation&&post.goal===SALE_GOAL&&negotiation.interested_id===req.user.id&&negotiation.status==='interested'&&negotiation.proposal_status==='pending'&&!await db.one('SELECT id FROM collection_deliveries WHERE negotiation_id=$1',[negotiation.id])&&!await db.one('SELECT id FROM payments WHERE negotiation_id=$1 LIMIT 1',[negotiation.id]));
+      return res.json({ negotiation: negotiation ? { id: negotiation.id, status: negotiation.status, threadId: negotiation.thread_id, ownerId: negotiation.owner_id, interestedId: negotiation.interested_id, canCancelOffer, completedAt: negotiation.completed_at, proposalStatus: negotiation.proposal_status || 'none', proposalAmountCents: negotiation.proposal_amount_cents || null, proposalMethod: negotiation.proposal_method || null, proposalCreatedAt: negotiation.proposal_created_at || null } : null });
     } catch (error) { return next(error); }
   });
   app.post('/api/negotiations/:id/proposal', authenticate, async (req, res, next) => {
     try {
-      const negotiation = await db.one('SELECT * FROM negotiations WHERE id=$1', [req.params.id]);
       const amountCents = req.body?.amountCents !== undefined
         ? Number(req.body.amountCents)
         : parseMoneyToCents(req.body?.amount);
       const method = String(req.body?.method || '').trim().toLowerCase();
-      if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
-      if (negotiation.interested_id !== req.user.id) return res.status(403).json({ error: 'Only the interested user can send this proposal' });
-      if (negotiation.proposal_status && negotiation.proposal_status !== 'none') return res.status(409).json({ error: 'Você já enviou uma oferta para este anúncio.' });
-      if (negotiation.status !== 'interested') return res.status(400).json({ error: 'This negotiation is no longer accepting proposals' });
-      const post = await db.one('SELECT title,goal FROM posts WHERE id=$1', [negotiation.post_id]);
-      if (!post || post.goal !== SALE_GOAL) return res.status(400).json({ error: 'Money offers are only available for items marked for sale' });
       if (!Number.isSafeInteger(amountCents) || amountCents < 100 || amountCents > 100000000) return res.status(400).json({ error: 'Amount must be between R$ 1,00 and R$ 1.000.000,00' });
       if (!['pix', 'card'].includes(method)) return res.status(400).json({ error: 'Use pix ou cartão' });
-    if (method === 'pix' && process.env.STRIPE_PIX_ENABLED !== 'true') return res.status(409).json({ error: 'Pix ainda não está habilitado nesta integração Stripe. Escolha cartão.' });
-      const createdAt = new Date().toISOString();
+      if (method === 'pix' && process.env.STRIPE_PIX_ENABLED !== 'true') return res.status(409).json({ error: 'Pix ainda não está habilitado nesta integração Stripe. Escolha cartão.' });
       const updated = await db.transaction(async (client) => {
-        const result = await client.query('UPDATE negotiations SET proposal_status=$1,proposal_amount_cents=$2,proposal_method=$3,proposal_created_at=$4,updated_at=$4 WHERE id=$5 RETURNING *', ['pending', amountCents, method, createdAt, negotiation.id]);
+        const target=(await client.query('SELECT post_id FROM negotiations WHERE id=$1',[req.params.id])).rows[0];
+        if(!target)throw Object.assign(new Error('Negotiation not found'),{status:404});
+        const post=(await client.query('SELECT title,goal,status FROM posts WHERE id=$1 FOR UPDATE',[target.post_id])).rows[0];
+        const negotiation=(await client.query('SELECT * FROM negotiations WHERE id=$1 FOR UPDATE',[req.params.id])).rows[0];
+        if(negotiation.interested_id!==req.user.id)throw Object.assign(new Error('Only the interested user can send this proposal'),{status:403});
+        const resending=negotiation.status==='cancelled'&&negotiation.proposal_status==='cancelled';
+        if(negotiation.proposal_status&&negotiation.proposal_status!=='none'&&!resending)throw Object.assign(new Error('Você já enviou uma oferta para este anúncio.'),{status:409});
+        if(negotiation.status!=='interested'&&!resending)throw Object.assign(new Error('This negotiation is no longer accepting proposals'),{status:400});
+        if(!post||post.goal!==SALE_GOAL)throw Object.assign(new Error('Money offers are only available for items marked for sale'),{status:400});
+        if(resending&&(post.status!=='Disponível'||(await client.query('SELECT id FROM collection_deliveries WHERE negotiation_id=$1',[negotiation.id])).rows[0]||(await client.query('SELECT id FROM payments WHERE negotiation_id=$1 LIMIT 1',[negotiation.id])).rows[0]))throw Object.assign(new Error('Esta negociação não está disponível para uma nova oferta.'),{status:409});
+        const previousCreatedAt=new Date(negotiation.proposal_created_at||0).getTime();
+        const createdAt=new Date(Math.max(Date.now(),Number.isFinite(previousCreatedAt)?previousCreatedAt+1:0)).toISOString();
+        const result = await client.query("UPDATE negotiations SET status='interested',proposal_status=$1,proposal_amount_cents=$2,proposal_method=$3,proposal_created_at=$4,updated_at=$4 WHERE id=$5 RETURNING *", ['pending', amountCents, method, createdAt, negotiation.id]);
         await emit(client, 'negotiation.proposal_created', { negotiationId: negotiation.id, postId: negotiation.post_id, postTitle: post.title || 'anúncio', ownerId: negotiation.owner_id, interestedId: negotiation.interested_id, amountCents, method }, req.correlationId);
         return result.rows[0];
       });
       queueMicrotask(() => publisher?.flush?.());
       return res.status(201).json({ proposal: { negotiationId: updated.id, status: updated.proposal_status, amountCents: updated.proposal_amount_cents, method: updated.proposal_method, createdAt: updated.proposal_created_at } });
-    } catch (error) { return next(error); }
+    } catch (error) { if(error?.status)return res.status(error.status).json({error:error.message});return next(error); }
   });
   app.patch('/api/negotiations/:id/proposal', authenticate, async (req, res, next) => {
     try {
@@ -389,6 +394,11 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
         if (!post) throw Object.assign(new Error('Post not found'), { status: 404 });
         const negotiation = (await client.query('SELECT * FROM negotiations WHERE id=$1 FOR UPDATE', [req.params.id])).rows[0];
         if (negotiation.owner_id !== req.user.id || post.author_id !== req.user.id) throw Object.assign(new Error('Only the seller can decide this proposal'), { status: 403 });
+        if (post.goal === SALE_GOAL) {
+          const expected = typeof req.body?.expectedProposalCreatedAt === 'string' ? Date.parse(req.body.expectedProposalCreatedAt) : NaN;
+          if (!Number.isFinite(expected)) throw Object.assign(new Error('Atualize a oferta antes de responder.'), { status: 400 });
+          if (new Date(negotiation.proposal_created_at).getTime() !== expected) throw Object.assign(new Error('A oferta foi atualizada. Confira o valor e a forma de pagamento antes de responder.'), { status: 409 });
+        }
         if (negotiation.proposal_status !== 'pending' && !(decision === 'accepted' && negotiation.proposal_status === 'rejected')) throw Object.assign(new Error('There is no pending proposal to decide'), { status: 400 });
         if (decision === 'accepted') {
           if (post.goal !== SALE_GOAL) throw Object.assign(new Error('Only sale offers can be accepted here'), { status: 400 });
@@ -441,6 +451,11 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
         if (!['Disponível', 'Reservado'].includes(post.status)) throw Object.assign(new Error('This post is no longer available'), { status: 400 });
         const negotiation = (await client.query("SELECT * FROM negotiations WHERE post_id=$1 AND interested_id=$2 AND status <> 'cancelled'", [post.id, req.body?.interestedId])).rows[0];
         if (!negotiation) throw Object.assign(new Error('Choose a user who demonstrated interest'), { status: 400 });
+        if (post.goal === SALE_GOAL) {
+          const expected = typeof req.body?.expectedProposalCreatedAt === 'string' ? Date.parse(req.body.expectedProposalCreatedAt) : NaN;
+          if (!Number.isFinite(expected)) throw Object.assign(new Error('Atualize a oferta antes de reservar o item.'), { status: 400 });
+          if (new Date(negotiation.proposal_created_at).getTime() !== expected) throw Object.assign(new Error('A oferta foi atualizada. Confira o valor e a forma de pagamento antes de reservar.'), { status: 409 });
+        }
         await client.query("UPDATE negotiations SET status='interested',updated_at=now() WHERE post_id=$1 AND status='reserved'", [post.id]);
         await client.query("UPDATE negotiations SET status='reserved',proposal_status=CASE WHEN proposal_status='pending' THEN 'accepted' ELSE proposal_status END,updated_at=now() WHERE id=$1", [negotiation.id]);
         await client.query("UPDATE posts SET status='Reservado',reserved_by=$1,updated_at=now() WHERE id=$2", [negotiation.interested_id, post.id]);

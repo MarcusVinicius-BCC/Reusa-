@@ -397,7 +397,7 @@ test('sale posts allow money offers and are completed as sold', async () => {
 
   const accepted = await request(`/api/negotiations/${negotiation.payload.negotiation.id}/proposal`, {
     method: 'PATCH', headers: ownerAuth,
-    body: JSON.stringify({ decision: 'accepted' })
+    body: JSON.stringify({ decision: 'accepted', expectedProposalCreatedAt: proposal.payload.proposal.createdAt })
   });
   assert.equal(accepted.response.status, 200);
   assert.equal(accepted.payload.proposal.status, 'accepted');
@@ -619,6 +619,10 @@ test('community campaigns track only confirmed deliveries and enforce permission
 
 test('seller cancels acceptance only before delivery or payment and can choose another bid', async () => {
   await require('./acceptance-flow').exerciseAcceptanceFlow(request);
+});
+
+test('buyer cancels their own pending offer and can resend without stale requests cancelling the new offer', async () => {
+  await require('./offer-cancellation-flow').exerciseOfferCancellation(request);
 });
 
 test('community tools protect alerts, coordinates, public questions, donation offers and reports',async()=>{

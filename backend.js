@@ -2142,16 +2142,17 @@ async function start() {
     if (post.author_id !== req.user.id) return res.status(403).json({ error: 'Only the owner can view interested users' });
     const negotiations = all('SELECT * FROM negotiations WHERE post_id = ? ORDER BY created_at DESC', [post.id]).map((item) => {
       const user = get('SELECT id, name, city, avatar FROM users WHERE id = ?', [item.interested_id]);
-      return { id: item.id, status: item.status, canCancelAcceptance: item.status === 'reserved' && item.proposal_status === 'accepted' && !get('SELECT id FROM collection_deliveries WHERE negotiation_id = ?', [item.id]) && !get('SELECT id FROM payments WHERE negotiation_id = ? LIMIT 1', [item.id]), proposalStatus: item.proposal_status || 'none', proposalAmountCents: item.proposal_amount_cents || null, proposalMethod: item.proposal_method || null, createdAt: item.created_at, threadId: item.thread_id, user: user ? { ...user, avatar: safeAvatar(user.avatar) } : null };
+      return { id: item.id, status: item.status, canCancelAcceptance: item.status === 'reserved' && item.proposal_status === 'accepted' && !get('SELECT id FROM collection_deliveries WHERE negotiation_id = ?', [item.id]) && !get('SELECT id FROM payments WHERE negotiation_id = ? LIMIT 1', [item.id]), proposalStatus: item.proposal_status || 'none', proposalAmountCents: item.proposal_amount_cents || null, proposalMethod: item.proposal_method || null, proposalCreatedAt: item.proposal_created_at || null, createdAt: item.created_at, threadId: item.thread_id, user: user ? { ...user, avatar: safeAvatar(user.avatar) } : null };
     });
     return res.json({ negotiations });
   });
 
   app.get('/api/posts/:id/negotiation', authMiddleware, (req, res) => {
-    const post = get('SELECT id, author_id FROM posts WHERE id = ?', [req.params.id]);
+    const post = get('SELECT id, author_id, goal FROM posts WHERE id = ?', [req.params.id]);
     if (!post) return res.status(404).json({ error: 'Post not found' });
     const negotiation = get("SELECT * FROM negotiations WHERE post_id = ? AND (owner_id = ? OR interested_id = ?) ORDER BY CASE WHEN status='reserved' THEN 0 WHEN status='completed' THEN 1 ELSE 2 END, updated_at DESC LIMIT 1", [post.id, req.user.id, req.user.id]);
-    return res.json({ negotiation: negotiation ? { id: negotiation.id, status: negotiation.status, threadId: negotiation.thread_id, ownerId: negotiation.owner_id, interestedId: negotiation.interested_id, completedAt: negotiation.completed_at, proposalStatus: negotiation.proposal_status || 'none', proposalAmountCents: negotiation.proposal_amount_cents || null, proposalMethod: negotiation.proposal_method || null, proposalCreatedAt: negotiation.proposal_created_at || null } : null });
+    const canCancelOffer=Boolean(negotiation&&post.goal===SALE_GOAL&&negotiation.interested_id===req.user.id&&negotiation.status==='interested'&&negotiation.proposal_status==='pending'&&!get('SELECT id FROM collection_deliveries WHERE negotiation_id=?',[negotiation.id])&&!get('SELECT id FROM payments WHERE negotiation_id=? LIMIT 1',[negotiation.id]));
+    return res.json({ negotiation: negotiation ? { id: negotiation.id, status: negotiation.status, threadId: negotiation.thread_id, ownerId: negotiation.owner_id, interestedId: negotiation.interested_id, canCancelOffer, completedAt: negotiation.completed_at, proposalStatus: negotiation.proposal_status || 'none', proposalAmountCents: negotiation.proposal_amount_cents || null, proposalMethod: negotiation.proposal_method || null, proposalCreatedAt: negotiation.proposal_created_at || null } : null });
   });
 
   app.post('/api/negotiations/:id/proposal', authMiddleware, (req, res) => {
@@ -2162,15 +2163,18 @@ async function start() {
     const method = String(req.body?.method || '').trim().toLowerCase();
     if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
     if (negotiation.interested_id !== req.user.id) return res.status(403).json({ error: 'Only the interested user can send this proposal' });
-    if (negotiation.status !== 'interested') return res.status(400).json({ error: 'This negotiation is no longer accepting proposals' });
-    const post = get('SELECT goal FROM posts WHERE id = ?', [negotiation.post_id]);
+    const resending=negotiation.status==='cancelled'&&negotiation.proposal_status==='cancelled';
+    if (negotiation.status !== 'interested'&&!resending) return res.status(400).json({ error: 'This negotiation is no longer accepting proposals' });
+    const post = get('SELECT goal,status FROM posts WHERE id = ?', [negotiation.post_id]);
     if (!post || post.goal !== SALE_GOAL) return res.status(400).json({ error: 'Money offers are only available for items marked for sale' });
-    if (negotiation.proposal_status && negotiation.proposal_status !== 'none') return res.status(409).json({ error: 'Você já enviou uma oferta para este anúncio.' });
+    if (negotiation.proposal_status && negotiation.proposal_status !== 'none'&&!resending) return res.status(409).json({ error: 'Você já enviou uma oferta para este anúncio.' });
+    if(resending&&(post.status!=='Disponível'||get('SELECT id FROM collection_deliveries WHERE negotiation_id=?',[negotiation.id])||get('SELECT id FROM payments WHERE negotiation_id=? LIMIT 1',[negotiation.id])))return res.status(409).json({error:'Esta negociação não está disponível para uma nova oferta.'});
     if (!Number.isSafeInteger(amountCents) || amountCents < 100 || amountCents > 100000000) return res.status(400).json({ error: 'Amount must be between R$ 1,00 and R$ 1.000.000,00' });
     if (!['pix', 'card'].includes(method)) return res.status(400).json({ error: 'Use pix ou cartão' });
     if (method === 'pix' && process.env.STRIPE_PIX_ENABLED !== 'true') return res.status(409).json({ error: 'Pix ainda não está habilitado nesta integração Stripe. Escolha cartão.' });
-    const now = new Date().toISOString();
-    run("UPDATE negotiations SET proposal_status = 'pending', proposal_amount_cents = ?, proposal_method = ?, proposal_created_at = ?, updated_at = ? WHERE id = ?", [amountCents, method, now, now, negotiation.id]);
+    const previousCreatedAt=Date.parse(negotiation.proposal_created_at||'');
+    const now = new Date(Math.max(Date.now(),Number.isFinite(previousCreatedAt)?previousCreatedAt+1:0)).toISOString();
+    run("UPDATE negotiations SET status='interested',proposal_status = 'pending', proposal_amount_cents = ?, proposal_method = ?, proposal_created_at = ?, updated_at = ? WHERE id = ?", [amountCents, method, now, now, negotiation.id]);
     if (!eventPublisher.enabled()) notification(negotiation.owner_id, 'negotiation', 'Nova proposta recebida', `Uma proposta de ${formatMoney(amountCents)} foi enviada.`, `/anuncios/${negotiation.post_id}`);
     persistDb();
     return res.status(201).json({ proposal: { negotiationId: negotiation.id, status: 'pending', amountCents, method, createdAt: now } });
@@ -2181,11 +2185,16 @@ async function start() {
     const decision = String(req.body?.decision || '').trim().toLowerCase();
     if (!negotiation) return res.status(404).json({ error: 'Negotiation not found' });
     if (negotiation.owner_id !== req.user.id) return res.status(403).json({ error: 'Only the seller can decide this proposal' });
-    if (negotiation.proposal_status !== 'pending' && !(decision === 'accepted' && negotiation.proposal_status === 'rejected')) return res.status(400).json({ error: 'There is no pending proposal to decide' });
     if (!['accepted', 'rejected'].includes(decision)) return res.status(400).json({ error: 'Decision must be accepted or rejected' });
+    const post = get('SELECT * FROM posts WHERE id = ?', [negotiation.post_id]);
+    if (post?.goal === SALE_GOAL) {
+      const expected = typeof req.body?.expectedProposalCreatedAt === 'string' ? Date.parse(req.body.expectedProposalCreatedAt) : NaN;
+      if (!Number.isFinite(expected)) return res.status(400).json({ error: 'Atualize a oferta antes de responder.' });
+      if (new Date(negotiation.proposal_created_at).getTime() !== expected) return res.status(409).json({ error: 'A oferta foi atualizada. Confira o valor e a forma de pagamento antes de responder.' });
+    }
+    if (negotiation.proposal_status !== 'pending' && !(decision === 'accepted' && negotiation.proposal_status === 'rejected')) return res.status(400).json({ error: 'There is no pending proposal to decide' });
     const now = new Date().toISOString();
     if (decision === 'accepted') {
-      const post = get('SELECT * FROM posts WHERE id = ?', [negotiation.post_id]);
       if (!post || post.goal !== SALE_GOAL) return res.status(400).json({ error: 'Only sale offers can be accepted here' });
       if (!['Disponível', 'Reservado'].includes(post.status || 'Disponível') ||
           (post.status === 'Reservado' && post.reserved_by !== negotiation.interested_id) ||
@@ -2239,6 +2248,11 @@ async function start() {
     if (!['Disponível', 'Reservado'].includes(post.status || 'Disponível')) return res.status(400).json({ error: 'This post is no longer available' });
     const negotiation = get('SELECT * FROM negotiations WHERE post_id = ? AND interested_id = ?', [post.id, interestedId]);
     if (!negotiation || negotiation.status === 'cancelled') return res.status(400).json({ error: 'Choose a user who demonstrated interest' });
+    if (post.goal === SALE_GOAL) {
+      const expected = typeof req.body?.expectedProposalCreatedAt === 'string' ? Date.parse(req.body.expectedProposalCreatedAt) : NaN;
+      if (!Number.isFinite(expected)) return res.status(400).json({ error: 'Atualize a oferta antes de reservar o item.' });
+      if (new Date(negotiation.proposal_created_at).getTime() !== expected) return res.status(409).json({ error: 'A oferta foi atualizada. Confira o valor e a forma de pagamento antes de reservar.' });
+    }
     const now = new Date().toISOString();
     run("UPDATE negotiations SET status = 'interested', updated_at = ? WHERE post_id = ? AND status = 'reserved'", [now, post.id]);
     run("UPDATE negotiations SET status = 'reserved', proposal_status = CASE WHEN proposal_status = 'pending' THEN 'accepted' ELSE proposal_status END, updated_at = ? WHERE id = ?", [now, negotiation.id]);
