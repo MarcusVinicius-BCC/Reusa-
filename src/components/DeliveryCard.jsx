@@ -31,6 +31,20 @@ export default function DeliveryCard({ negotiation, collection, onChange, onRece
     catch (e) { setError(e.message); }
     finally { setBusy(false); }
   }
+  async function withdrawPurchase() {
+    if (busy || !isSale || isOwner || ['completed', 'cancelled'].includes(negotiation.status)) return;
+    if (!window.confirm('Você realmente deseja desistir desta compra? O anúncio ficará disponível novamente para outras pessoas.')) return;
+    setBusy(true); setError(''); setMessage('');
+    try {
+      const result = await api.withdrawPurchase(negotiation.id);
+      setMessage(result.refundRequested ? 'Compra cancelada. O anúncio voltou a ficar disponível e o reembolso foi solicitado.' : 'Compra cancelada. O anúncio voltou a ficar disponível no feed.');
+      await onRefreshStatus();
+    } catch (e) {
+      setError(e.message);
+    } finally {
+      setBusy(false);
+    }
+  }
   function propose(event) {
     event.preventDefault();
     const date = new Date(form.scheduledFor);
@@ -89,6 +103,7 @@ export default function DeliveryCard({ negotiation, collection, onChange, onRece
     {children}
       {collection?.canReceive && <div className="delivery-receipt"><label><input type="checkbox" checked={receiptChecked} onChange={e => setReceiptChecked(e.target.checked)} />Já recebi e conferi o item pessoalmente.</label><button className="primary-btn" disabled={busy || !receiptChecked} onClick={() => { if (window.confirm('Confirmar que o item está com você? Isso conclui a negociação e não pode ser desfeito por esta tela.')) act(() => api.confirmCollection(collection.id), 'Recebimento confirmado. Negociação concluída!', true); }}>Confirmar recebimento do item</button></div>}
     <NegotiationProblem negotiation={negotiation}/>
+    {isSale && !isOwner && !['completed', 'cancelled'].includes(negotiation.status) && <div className="purchase-withdraw-actions"><button type="button" className="cancel-offer-btn purchase-withdraw-btn" disabled={busy} onClick={withdrawPurchase}>{busy ? 'Cancelando compra…' : 'Desistir da compra'}</button><small>Ao confirmar, a reserva será cancelada e o anúncio ficará disponível novamente.</small></div>}
     <footer className="delivery-footer"><details><summary>Sobre entrega e pagamento</summary><p>O ReUsa+ não oferece transporte, guarda do valor ou reembolso automático. Se não receber o item, não confirme a entrega: converse com o vendedor e registre um problema neste acordo. O vendedor pode solicitar o reembolso pela negociação. Para contestar uma compra no cartão, procure o banco emissor; o vendedor acompanha a contestação no painel Stripe.</p></details></footer>
   </section>;
 }

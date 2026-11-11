@@ -1994,6 +1994,11 @@ button, input, select, textarea { max-width: 100%; }
   background: #ffdfe2;
   color: #8f252d;
 }
+.admin-action-button:disabled {
+  cursor: wait;
+  opacity: .65;
+  transform: none;
+}
 @media (max-width: 560px) {
   .admin-row { flex-wrap: wrap; }
   .admin-row > div:first-child { flex: 1 1 100%; }
@@ -3417,6 +3422,8 @@ body { background: var(--app-night-deep); }
 .cancel-offer-btn:hover:not(:disabled) { background:#fff1ee; border-color:#c97a6d; }
 .cancel-offer-btn:disabled { opacity:.55; cursor:wait; }
 .cancel-offer-btn:focus-visible { outline:3px solid #983f3540; outline-offset:3px; }
+.purchase-withdraw-actions { display:grid; gap:8px; margin-top:18px; padding-top:16px; border-top:1px solid var(--outline); }
+.purchase-withdraw-actions small { color:var(--text-variant); font-size:11px; line-height:1.5; }
 .payment-waiting-actions { display:flex; flex-wrap:wrap; gap:10px; grid-column:2; margin-top:2px; }
 .payment-waiting-actions button { max-width:100%; white-space:normal; }
 .offer-cancellation-feedback,.offer-cancellation-error { margin:16px 0; padding:14px 16px; border-radius:12px; font-size:13px; line-height:1.6; }

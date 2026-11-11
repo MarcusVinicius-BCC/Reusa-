@@ -102,6 +102,38 @@ function registerDeliveryRoutes(app, { postgres, sqlite, authenticate, flush, re
     });
     void flush();res.json({ok:true,cancelled:true});
   }));
+  app.post('/api/negotiations/:id/withdraw-purchase', authenticate, route(async (req, res) => {
+    let refundRequested = false;
+    await work(async c => {
+      const target = await one(c, 'SELECT post_id FROM negotiations WHERE id=$1', [req.params.id]);
+      if (!target) error(404, 'Negociação não encontrada.');
+      const post = await one(c, `SELECT * FROM posts WHERE id=$1${postgres ? ' FOR UPDATE' : ''}`, [target.post_id]);
+      const n = await negotiation(c, req.params.id, req.user.id);
+      if (n.interested_id !== req.user.id) error(403, 'Somente o comprador pode desistir da compra.');
+      if (!(await sale(c, n))) error(409, 'Esta negociação não é uma compra.');
+      if (n.status === 'completed') error(409, 'Esta compra já foi concluída e não pode ser cancelada.');
+      if (!post) error(404, 'Anúncio não encontrado.');
+      if (n.status === 'cancelled') return;
+
+      const currentPayment = await one(c, 'SELECT * FROM payments WHERE negotiation_id=$1 ORDER BY created_at DESC LIMIT 1', [n.id]);
+      if (currentPayment && ['processing', 'succeeded'].includes(currentPayment.status) && currentPayment.provider_reference?.startsWith('cs_')) {
+        refundRequested = currentPayment.refund_status === 'requested' || currentPayment.refund_status === 'pending' || currentPayment.refund_status === 'requires_action';
+        if (!refundRequested) {
+          await c.query("UPDATE payments SET refund_status='requested',refund_requested_at=$1,reconcile_after=$1,updated_at=$1 WHERE id=$2", [clock().toISOString(), currentPayment.id]);
+          refundRequested = true;
+        }
+      }
+
+      const now = clock().toISOString();
+      await c.query("UPDATE collection_deliveries SET status='cancelled',updated_at=$1 WHERE negotiation_id=$2 AND status<>'completed'", [now, n.id]);
+      await c.query("UPDATE negotiations SET status='cancelled',proposal_status='cancelled',updated_at=$1 WHERE id=$2", [now, n.id]);
+      await c.query("UPDATE posts SET status='Disponível',reserved_by=NULL,updated_at=$1 WHERE id=$2", [now, post.id]);
+      await notice(c, n.owner_id, 'Compra cancelada', `${req.user.name} desistiu da compra de ${post.title}. O anúncio está disponível novamente.`, n);
+      await emit(c, 'negotiation.purchase_withdrawn', { negotiationId:n.id, postId:post.id, ownerId:n.owner_id, interestedId:n.interested_id, refundRequested }, req);
+    });
+    void flush();
+    res.json({ ok: true, cancelled: true, refundRequested });
+  }));
   app.post('/api/collection-deliveries/:id/incidents', authenticate, route(async (req,res) => {
     const kind=req.body?.kind, detail=typeof req.body?.detail==='string'?req.body.detail.trim():'';
     if(!['delay','cannot_attend','location','other'].includes(kind)||detail.length<10||detail.length>500)error(400,'Escolha o tipo de imprevisto e descreva o ocorrido em 10 a 500 caracteres.');
