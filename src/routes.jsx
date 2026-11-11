@@ -2323,7 +2323,7 @@ function SettingsScreen({ onBack, onLogout }) {
             <button className={`settings-menu-item ${activeSection === 'perfil' ? 'active' : ''}`} onClick={() => setActiveSection('perfil')}><span className="material-symbols-outlined">person</span><span><strong>Meu perfil</strong></span></button>
             <button className={`settings-menu-item ${activeSection === 'seguranca' ? 'active' : ''}`} onClick={() => setActiveSection('seguranca')}><span className="material-symbols-outlined">shield</span><span><strong>Segurança</strong></span></button>
             <button className={`settings-menu-item ${activeSection === 'notificacoes' ? 'active' : ''}`} onClick={() => setActiveSection('notificacoes')}><span className="material-symbols-outlined">notifications</span><span><strong>Notificações</strong></span></button>
-            <button className={`settings-menu-item ${activeSection === 'pagamentos' ? 'active' : ''}`} onClick={() => setActiveSection('pagamentos')}><span className="material-symbols-outlined">payments</span><span><strong>Compromissos</strong><small>Ofertas e pagamentos</small></span></button>
+            <button className={`settings-menu-item ${activeSection === 'pagamentos' ? 'active' : ''}`} onClick={() => setActiveSection('pagamentos')}><span className="material-symbols-outlined">payments</span><span><strong>Compromissos</strong></span></button>
           </aside>
           <div className="settings-content">
             {activeSection === 'perfil' ? <section className="settings-profile-banner">
@@ -2360,7 +2360,6 @@ function SettingsScreen({ onBack, onLogout }) {
               <div className="settings-form-footer"><span /><button className="secondary-btn" onClick={savePreferences}>Salvar preferências</button></div>
             </section> : null}
             {activeSection === 'pagamentos' ? <section className="card settings-card settings-panel" id="pagamentos">
-              <div className="settings-panel-heading"><div><span className="settings-panel-icon payments"><span className="material-symbols-outlined">payments</span></span><div><h2>Ofertas e pagamentos</h2><p>Acompanhe os itens que aguardam sua decisão ou pagamento.</p></div></div></div>
               <StripeConnectionCard status={stripeStatus} testMode={paymentTestMode} demoMode={paymentDemoMode} error={stripeActionError || stripeError} busy={stripeBusy} onConnect={connectStripe} onReconnectTest={reconnectStripeTest} onDashboard={openStripeDashboard} onRefresh={refreshStripeStatus} />
               <div className="payment-items-list">{paymentItems.length ? paymentItems.map((item) => {
                 const isReserved = item.negotiationStatus === 'reserved';

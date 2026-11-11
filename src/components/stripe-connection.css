@@ -1,10 +1,10 @@
-.stripe-account-status{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:16px 0;padding:10px;border:1px solid color-mix(in srgb,var(--primary) 16%,var(--outline));border-radius:16px;background:linear-gradient(135deg,var(--surface-lowest,#fff),color-mix(in srgb,var(--secondary-container) 24%,var(--surface-lowest,#fff)))}
+.stripe-account-status{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:clamp(18px,5vw,56px);margin:16px 0;padding:14px clamp(18px,4vw,42px);border:1px solid color-mix(in srgb,var(--primary) 16%,var(--outline));border-radius:16px;background:linear-gradient(135deg,var(--surface-lowest,#fff),color-mix(in srgb,var(--secondary-container) 24%,var(--surface-lowest,#fff)))}
 .stripe-account-status-heading{display:flex;grid-column:1/-1;align-items:center;gap:9px;padding:3px 4px 8px;border-bottom:1px solid color-mix(in srgb,var(--primary) 12%,var(--outline))}
 .stripe-account-status-heading>.material-symbols-outlined{display:grid;width:32px;height:32px;place-items:center;border-radius:10px;color:#17653f;background:#e8f7ed;font-size:18px}
 .stripe-account-status-heading strong,.stripe-account-status-heading small{display:block}
 .stripe-account-status-heading strong{font-size:13px}
 .stripe-account-status-heading small{margin-top:2px;color:var(--text-variant);font-size:11px}
-.stripe-account-status-item{display:grid;grid-template-columns:30px minmax(0,1fr);align-items:center;gap:8px;min-width:0;padding:11px 10px;border-radius:12px;background:color-mix(in srgb,var(--surface-lowest,#fff) 70%,transparent)}
+.stripe-account-status-item{display:grid;grid-template-columns:30px minmax(0,1fr);align-items:center;gap:8px;min-width:0;padding:11px 8px;border-radius:12px;background:color-mix(in srgb,var(--surface-lowest,#fff) 70%,transparent)}
 .stripe-account-status-item>.material-symbols-outlined{display:grid;width:30px;height:30px;place-items:center;border-radius:9px;color:var(--primary);background:var(--secondary-container);font-size:17px}
 .stripe-account-status-item>span:last-child{min-width:0}
 .stripe-account-status dt{font-size:11px;color:var(--text-variant)}
