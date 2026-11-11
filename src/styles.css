@@ -3426,9 +3426,7 @@ body { background: var(--app-night-deep); }
 .purchase-withdraw-actions small { color:var(--text-variant); font-size:11px; line-height:1.5; }
 .payment-waiting-actions { display:flex; flex-wrap:wrap; gap:10px; grid-column:2; margin-top:2px; }
 .payment-waiting-actions button { max-width:100%; white-space:normal; }
-.offer-cancellation-feedback,.offer-cancellation-error { margin:16px 0; padding:14px 16px; border-radius:12px; font-size:13px; line-height:1.6; }
-.offer-cancellation-feedback { border:1px solid #9ac9aa; background:#effaf2; color:#17653f; }
-.offer-cancellation-error { border:1px solid #d8aaa2; background:#fff5f3; color:#983f35; }
+.offer-cancellation-error { margin:16px 0; padding:14px 16px; border-radius:12px; font-size:13px; line-height:1.6; border:1px solid #d8aaa2; background:#fff5f3; color:#983f35; }
 .accepted-offer-actions .reserve-btn { max-width:100%; white-space:normal; font-size:12px; font-weight:700; line-height:1.4; }
 @media(max-width:600px) { .interested-list article:has(.accepted-offer-actions) { flex-wrap:wrap; } .interested-list article>.accepted-offer-actions { flex:0 0 100%; } }
 
