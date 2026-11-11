@@ -2362,7 +2362,21 @@ function SettingsScreen({ onBack, onLogout }) {
             {activeSection === 'pagamentos' ? <section className="card settings-card settings-panel" id="pagamentos">
               <div className="settings-panel-heading"><div><span className="settings-panel-icon payments"><span className="material-symbols-outlined">payments</span></span><div><h2>Ofertas e pagamentos</h2><p>Acompanhe os itens que aguardam sua decisão ou pagamento.</p></div></div></div>
               <StripeConnectionCard status={stripeStatus} testMode={paymentTestMode} demoMode={paymentDemoMode} error={stripeActionError || stripeError} busy={stripeBusy} onConnect={connectStripe} onReconnectTest={reconnectStripeTest} onDashboard={openStripeDashboard} onRefresh={refreshStripeStatus} />
-              <div className="payment-items-list">{paymentItems.length ? paymentItems.map((item) => <article className="payment-item" key={item.negotiationId}><span className="payment-item-icon material-symbols-outlined">shopping_bag</span><div><strong>{item.title}</strong><small>R$ {((item.amountCents || 0) / 100).toFixed(2).replace('.', ',')} · {item.method === 'pix' ? 'PIX' : item.method === 'card' ? 'Cartão' : 'Boleto'}</small><small>{item.negotiationStatus === 'reserved' ? 'Reserva confirmada: combine a entrega antes de pagar' : 'Oferta enviada: aguardando resposta'}</small></div><button className="payment-item-action" onClick={() => window.location.assign(`/anuncios/${item.postId}`)}><span className="material-symbols-outlined">{item.negotiationStatus === 'reserved' ? 'payments' : 'open_in_new'}</span><span>{item.negotiationStatus === 'reserved' ? 'Entrega e pagamento' : 'Acompanhar oferta'}</span></button></article>) : <EmptyState icon="payments" title="Nenhum pagamento pendente" text="Quando você enviar uma oferta, ela aparecerá aqui para acompanhamento." />}</div>
+              <div className="payment-items-list">{paymentItems.length ? paymentItems.map((item) => {
+                const isReserved = item.negotiationStatus === 'reserved';
+                const methodLabel = item.method === 'pix' ? 'PIX' : item.method === 'card' ? 'Cartão' : 'Boleto';
+                return <article className={`payment-item ${isReserved ? 'is-reserved' : ''}`} key={item.negotiationId}>
+                  <div className="payment-item-main">
+                    <span className="payment-item-icon material-symbols-outlined">{isReserved ? 'handshake' : 'shopping_bag'}</span>
+                    <div className="payment-item-info">
+                      <div className="payment-item-heading"><strong>{item.title}</strong><span className="payment-item-status">{isReserved ? 'Reserva confirmada' : 'Aguardando resposta'}</span></div>
+                      <div className="payment-item-meta"><span className="payment-item-amount">R$ {((item.amountCents || 0) / 100).toFixed(2).replace('.', ',')}</span><span>{methodLabel}</span></div>
+                      <small>{isReserved ? 'Combine a entrega com a outra pessoa antes de realizar o pagamento.' : 'Sua oferta foi enviada e está aguardando uma decisão.'}</small>
+                    </div>
+                  </div>
+                  <button className="payment-item-action" onClick={() => window.location.assign(`/anuncios/${item.postId}`)}><span className="material-symbols-outlined">{isReserved ? 'payments' : 'open_in_new'}</span><span>{isReserved ? 'Entrega e pagamento' : 'Acompanhar oferta'}</span><span className="material-symbols-outlined payment-item-action-arrow">arrow_forward</span></button>
+                </article>;
+              }) : <EmptyState icon="payments" title="Nenhum pagamento pendente" text="Quando você enviar uma oferta, ela aparecerá aqui para acompanhamento." />}</div>
             </section> : null}
           </div>
         </div>
