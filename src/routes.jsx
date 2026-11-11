@@ -788,7 +788,7 @@ function CategoryBar({ selected, onChange, showSaved = false, savedCount = 0 }) 
 }
 
 function FeedCard({ post, onNavigate, onOpenChat, onOpenPayment }) {
-  const stripePixEnabled = useAppStore((state) => Boolean(state.profile?.user?.stripePixEnabled));
+  const stripePixEnabled = useAppStore((state) => Boolean(state.profile?.user?.stripePixEnabled ?? state.session?.stripePixEnabled));
   const toggleLike = useAppStore((state) => state.toggleLike);
   const toggleFavorite = useAppStore((state) => state.toggleFavorite);
   const deletePost = useAppStore((state) => state.deletePost);
@@ -1243,7 +1243,7 @@ function PostStatusControls({ post, deliveryLocked, statusUpdating, statusMessag
 }
 
 function PostDetailScreen({ postId, onBack, onNavigate }) {
-  const stripePixEnabled = useAppStore((state) => Boolean(state.profile?.user?.stripePixEnabled));
+  const stripePixEnabled = useAppStore((state) => Boolean(state.profile?.user?.stripePixEnabled ?? state.session?.stripePixEnabled));
   const session = useAppStore((state) => state.session);
   const paymentDemoMode = useAppStore((state) => Boolean(state.profile?.user?.stripeTestMode || state.profile?.user?.stripeDemoMode));
   const toggleFavorite = useAppStore((state) => state.toggleFavorite);

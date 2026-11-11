@@ -1,7 +1,7 @@
 // conexão frontend com backend
 const API_BASE = '/api';
 const TOKEN_KEY = 'reusa_token';
-
+STRIPE_ACCOUNT_WEBHOOK_SECRET=whsec_segredo_novo
 export function getToken() {
   return window.localStorage.getItem(TOKEN_KEY);
 }
