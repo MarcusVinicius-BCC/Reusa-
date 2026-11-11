@@ -2788,6 +2788,12 @@ async function start() {
   app.delete('/api/admin/posts/:id', authMiddleware, adminMiddleware, (req, res) => {
     const post = get('SELECT id FROM posts WHERE id = ?', [req.params.id]);
     if (!post) return res.status(404).json({ error: 'Post not found' });
+    if (get('SELECT id FROM payments p JOIN negotiations n ON n.id = p.negotiation_id WHERE n.post_id = ? LIMIT 1', [post.id])) {
+      run("UPDATE posts SET status = 'Encerrado', reserved_by = NULL, updated_at = ? WHERE id = ?", [new Date().toISOString(), post.id]);
+      run('DELETE FROM reports WHERE target_type = ? AND target_id = ?', ['post', post.id]);
+      persistDb();
+      return res.json({ ok: true, archived: true });
+    }
     run('DELETE FROM favorites WHERE post_id = ?', [post.id]);
     run('DELETE FROM post_views WHERE post_id = ?', [post.id]);
     run('DELETE FROM post_likes WHERE post_id = ?', [post.id]);

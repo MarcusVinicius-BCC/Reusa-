@@ -411,6 +411,8 @@ function registerStripeRoutes(app, {postgres, sqlite, authenticate, jwt, jwtSecr
     next();
   }));
   for(const path of ['/api/posts/:id','/api/admin/posts/:id'])app.delete(path,authenticate,route(async(req,res,next)=>{
+    if(path==='/api/admin/posts/:id'&&req.user?.role==='admin'&&
+      !(await queryOne("SELECT id FROM negotiations WHERE post_id=$1 AND status<>'cancelled' LIMIT 1",[req.params.id])))return next();
     const post=await queryOne('SELECT author_id FROM posts WHERE id=$1',[req.params.id]);
     if(post&&post.author_id!==req.user.id&&req.user.role!=='admin')fail(403,'Você não pode excluir este anúncio.');
     if(await queryOne('SELECT p.id FROM payments p JOIN negotiations n ON n.id=p.negotiation_id WHERE n.post_id=$1 LIMIT 1',[req.params.id]))fail(409,'Este anúncio possui registros financeiros. Encerre o anúncio em vez de excluir para manter o histórico de pagamentos e reembolsos.');

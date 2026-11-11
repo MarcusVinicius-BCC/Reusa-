@@ -285,6 +285,10 @@ function registerDeliveryRoutes(app, { postgres, sqlite, authenticate, flush, re
   for (const [method, path] of [['patch','/api/posts/:id/status'],['post','/api/posts/:id/reserve'],['put','/api/posts/:id'],['delete','/api/posts/:id'],['delete','/api/admin/posts/:id']]) {
     app[method](path, authenticate, route(async (req, res, next) => {
       await work(async c => {
+        if (path === '/api/admin/posts/:id' && req.user?.role === 'admin') {
+          const active = await rows(c, "SELECT id FROM negotiations WHERE post_id=$1 AND status<>'cancelled'", [req.params.id]);
+          if (!active.length) return;
+        }
         const active = await rows(c, 'SELECT id FROM negotiations WHERE post_id=$1', [req.params.id]);
         for (const n of active) {
           const d = await delivery(c, n.id);

@@ -873,12 +873,18 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       const removed = await db.transaction(async (client) => {
         const post = await client.query('SELECT id FROM posts WHERE id=$1 FOR UPDATE', [req.params.id]);
         if (!post.rowCount) return false;
+        const financial = await client.query('SELECT p.id FROM payments p JOIN negotiations n ON n.id=p.negotiation_id WHERE n.post_id=$1 LIMIT 1', [req.params.id]);
+        if (financial.rowCount) {
+          await client.query("UPDATE posts SET status='Encerrado', reserved_by=NULL, updated_at=now() WHERE id=$1", [req.params.id]);
+          await client.query("DELETE FROM reports WHERE target_type='post' AND target_id=$1", [req.params.id]);
+          return 'archived';
+        }
         await client.query("DELETE FROM reports WHERE target_type='post' AND target_id=$1", [req.params.id]);
         await client.query('DELETE FROM posts WHERE id=$1', [req.params.id]);
         return true;
       });
       if (!removed) return res.status(404).json({ error: 'Post not found' });
-      return res.json({ ok: true });
+      return res.json({ ok: true, archived: removed === 'archived' });
     } catch (error) { return next(error); }
   });
 
