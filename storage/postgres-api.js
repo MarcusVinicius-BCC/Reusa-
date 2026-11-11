@@ -334,6 +334,20 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       return res.json({ post: await postView(db, refreshed, req.user.id) });
     } catch (error) { return next(error); }
   });
+  app.patch('/api/posts/:id/status', authenticate, async (req, res, next) => {
+    try {
+      const status = String(req.body?.status || '').trim();
+      if (!['Disponível', 'Encerrado'].includes(status)) return res.status(400).json({ error: 'Use the reservation or completion flow for this status' });
+      const post = await db.one('SELECT * FROM posts WHERE id=$1', [req.params.id]);
+      if (!post) return res.status(404).json({ error: 'Post not found' });
+      if (post.author_id !== req.user.id) return res.status(403).json({ error: 'Only the owner can change this status' });
+      const updated = await db.one(
+        'UPDATE posts SET status=$1,reserved_by=CASE WHEN $1=$2 THEN NULL ELSE reserved_by END,updated_at=now() WHERE id=$3 RETURNING *',
+        [status, 'Disponível', post.id]
+      );
+      return res.json({ post: await postView(db, updated, req.user.id) });
+    } catch (error) { return next(error); }
+  });
   app.get('/api/posts/:id/interested', authenticate, async (req, res, next) => {
     try {
       const post = await db.one('SELECT id,author_id FROM posts WHERE id=$1', [req.params.id]);
