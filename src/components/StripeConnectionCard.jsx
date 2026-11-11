@@ -14,17 +14,18 @@ export default function StripeConnectionCard({status,testMode,demoMode,error,bus
         <span className={'connection-status stripe-connection-status '+(view.ready?'is-ready':'is-pending')} role="status">{view.label}</span>
     </div>
     {view.connected&&<dl className="stripe-account-status" aria-label="Situação da conta Stripe">
-      <div><dt>Conexão</dt><dd>{denied?'Sem acesso':'Reconhecida'}</dd></div>
-      <div><dt>Cobranças</dt><dd>{denied?'Não consultadas':view.ready||status?.chargesEnabled?'Liberadas':'Aguardando liberação'}</dd></div>
-      <div><dt>Repasses</dt><dd>{denied?'Não consultados':view.ready||status?.payoutsEnabled?'Liberados':'Aguardando liberação'}</dd></div>
+      <div className="stripe-account-status-heading"><span className="material-symbols-outlined">account_balance</span><span><strong>Resumo da conta</strong><small>Permissões para vender e receber</small></span></div>
+      <div className="stripe-account-status-item"><span className="material-symbols-outlined">link</span><span><dt>Conexão</dt><dd>{denied?'Sem acesso':'Reconhecida'}</dd></span></div>
+      <div className="stripe-account-status-item"><span className="material-symbols-outlined">shopping_cart</span><span><dt>Cobranças</dt><dd>{denied?'Não consultadas':view.ready||status?.chargesEnabled?'Liberadas':'Aguardando liberação'}</dd></span></div>
+      <div className="stripe-account-status-item"><span className="material-symbols-outlined">account_balance_wallet</span><span><dt>Repasses</dt><dd>{denied?'Não consultados':view.ready||status?.payoutsEnabled?'Liberados':'Aguardando liberação'}</dd></span></div>
     </dl>}
     {testMode&&!demoMode&&!denied&&status?.canAttemptTestCardCharge&&<p className="delivery-feedback" role="status"><strong>Teste de compra com vendedor conectado.</strong> O ReUsa+ permite tentar um pagamento por cartão na conta de teste deste vendedor. A Stripe confirma a disponibilidade ao abrir o checkout. O cadastro permanece com as pendências indicadas abaixo.</p>}
     {error&&<p className="delivery-error" role="alert">{error}</p>}
     <div className="seller-payment-actions">
       {view.canResume&&canOnboard&&<button type="button" className="primary-btn" disabled={busy} onClick={onConnect}>{view.connected?'Continuar cadastro':'Conectar Stripe'}</button>}
       {denied&&testMode&&status?.canRestartTestConnection&&<button type="button" className="primary-btn" disabled={busy} onClick={onReconnectTest}>Criar novo cadastro de teste</button>}
-      {view.connected&&!denied&&<button type="button" className="secondary-btn" disabled={busy} onClick={onDashboard}>Abrir painel de recebimentos</button>}
-      <button type="button" className="secondary-btn" disabled={busy} onClick={onRefresh}>{busy?'Consultando…':'Atualizar situação da conta'}</button>
+      {view.connected&&!denied&&<button type="button" className="secondary-btn stripe-action-dashboard" disabled={busy} onClick={onDashboard}><span className="material-symbols-outlined">open_in_new</span>Abrir painel de recebimentos</button>}
+      <button type="button" className="secondary-btn stripe-action-refresh" disabled={busy} onClick={onRefresh}><span className="material-symbols-outlined">refresh</span>{busy?'Consultando…':'Atualizar situação'}</button>
     </div>
     {denied&&<p className="community-hint">{status?.canRestartTestConnection?'O novo cadastro será vinculado ao ambiente de teste atual. A conexão anterior ficará no histórico.':'Solicite ao suporte a revisão da conta Stripe, do ambiente e das permissões configuradas na integração.'} {status?.recoveryBlockedByPayments?'Existem pagamentos vinculados à conta anterior. A conexão precisa ser revisada preservando esses registros.':''} As consultas automáticas estão pausadas; use “Atualizar situação da conta” após corrigir o acesso.</p>}
     {!canOnboard&&view.canResume&&<p className="community-hint">O cadastro de vendedores está temporariamente indisponível. Entre em contato com o suporte do ReUsa+.</p>}
