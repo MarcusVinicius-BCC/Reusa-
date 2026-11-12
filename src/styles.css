@@ -3515,6 +3515,15 @@ body { background: var(--app-night-deep); }
   }
 }
 
+.interested-list article > .offer-decision-actions { display:flex; flex:0 1 auto; flex-wrap:wrap; align-items:stretch; justify-content:flex-end; gap:10px; }
+.offer-decision-actions > button { min-height:44px; max-width:100%; padding:10px 14px; border-radius:12px; font:inherit; font-size:13px; font-weight:750; line-height:1.4; white-space:normal; transition:background .18s ease, border-color .18s ease, box-shadow .18s ease; }
+.offer-decision-actions svg { width:19px; height:19px; flex-shrink:0; }
+.offer-decision-actions > .reject-offer-btn { border-color:#e5c1ba; background:#fff8f6; color:#983f35; box-shadow:none; }
+.offer-decision-actions > .reject-offer-btn:hover { border-color:#c97a6d; background:#fff1ee; }
+.offer-decision-actions > button:focus-visible { outline:3px solid #079b5760; outline-offset:3px; }
+.offer-decision-actions > .reject-offer-btn:focus-visible { outline-color:#983f3540; }
+@media(max-width:800px) { .interested-list article:has(> .offer-decision-actions) { flex-wrap:wrap; } .interested-list article > .offer-decision-actions { flex:0 0 100%; display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); } }
+@media(max-width:600px) { .interested-list article > .offer-decision-actions { grid-template-columns:1fr; } .offer-decision-actions > button { width:100%; } }
 .accepted-offer-actions { display:flex; flex-wrap:wrap; align-items:center; gap:9px; }
 .accepted-offer-actions>small { flex-basis:100%; color:var(--text-variant); font-size:11px; line-height:1.5; }
 .cancel-acceptance-btn { min-height:40px; padding:9px 13px; border:1px solid #e5c1ba; border-radius:12px; background:#fff; color:#983f35; font:inherit; font-size:12px; font-weight:700; cursor:pointer; }
