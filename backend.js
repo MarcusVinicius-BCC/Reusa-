@@ -2848,6 +2848,46 @@ async function start() {
     return res.json({ suspended });
   });
 
+  app.delete('/api/admin/users/:id', authMiddleware, adminMiddleware, (req, res) => {
+    if (req.params.id === req.user.id) return res.status(400).json({ error: 'You cannot delete your own account' });
+    const user = get('SELECT id FROM users WHERE id = ?', [req.params.id]);
+    if (!user) return res.status(404).json({ error: 'User not found' });
+    const postIds = all('SELECT id FROM posts WHERE author_id = ?', [user.id]).map((item) => item.id);
+    const negotiationIds = all('SELECT id FROM negotiations WHERE owner_id = ? OR interested_id = ? OR post_id IN (SELECT id FROM posts WHERE author_id = ?)', [user.id, user.id, user.id]).map((item) => item.id);
+    if (negotiationIds.some((id) => get('SELECT id FROM payments WHERE negotiation_id = ? LIMIT 1', [id]))) {
+      return res.status(409).json({ error: 'Este usuário possui pagamentos vinculados e não pode ser excluído para preservar o histórico financeiro.' });
+    }
+    postIds.forEach((postId) => {
+      run('DELETE FROM delivery_incidents WHERE delivery_id IN (SELECT id FROM collection_deliveries WHERE negotiation_id IN (SELECT id FROM negotiations WHERE post_id = ?))', [postId]);
+      run('DELETE FROM collection_deliveries WHERE negotiation_id IN (SELECT id FROM negotiations WHERE post_id = ?)', [postId]);
+      run('DELETE FROM messages WHERE thread_id IN (SELECT id FROM threads WHERE post_id = ?)', [postId]);
+      run('DELETE FROM threads WHERE post_id = ?', [postId]);
+      run('DELETE FROM post_images WHERE post_id = ?', [postId]);
+      run('DELETE FROM favorites WHERE post_id = ?', [postId]);
+      run('DELETE FROM post_views WHERE post_id = ?', [postId]);
+      run('DELETE FROM post_likes WHERE post_id = ?', [postId]);
+      run('DELETE FROM comments WHERE post_id = ?', [postId]);
+      run('DELETE FROM reports WHERE target_type = ? AND target_id = ?', ['post', postId]);
+    });
+    run('DELETE FROM messages WHERE sender_id = ?', [user.id]);
+    run('DELETE FROM reviews WHERE reviewer_id = ? OR reviewee_id = ?', [user.id, user.id]);
+    if (negotiationIds.length) {
+      run('DELETE FROM reviews WHERE negotiation_id IN (' + negotiationIds.map(() => '?').join(',') + ')', negotiationIds);
+      run('DELETE FROM negotiations WHERE id IN (' + negotiationIds.map(() => '?').join(',') + ')', negotiationIds);
+    }
+    run('DELETE FROM posts WHERE author_id = ?', [user.id]);
+    run('DELETE FROM favorites WHERE user_id = ?', [user.id]);
+    run('DELETE FROM post_views WHERE user_id = ?', [user.id]);
+    run('DELETE FROM post_likes WHERE user_id = ?', [user.id]);
+    run('DELETE FROM reports WHERE reporter_id = ?', [user.id]);
+    run('DELETE FROM blocked_users WHERE blocker_id = ? OR blocked_id = ?', [user.id, user.id]);
+    run('DELETE FROM notifications WHERE user_id = ?', [user.id]);
+    run('DELETE FROM collection_point_suggestions WHERE user_id = ?', [user.id]);
+    run('DELETE FROM users WHERE id = ?', [user.id]);
+    persistDb();
+    return res.json({ ok: true });
+  });
+
   app.get('/api/admin/posts', authMiddleware, adminMiddleware, (_req, res) => {
     const rows = all("SELECT * FROM posts WHERE status <> 'Encerrado' ORDER BY created_at DESC LIMIT 200");
     return res.json({ posts: rows.map((row) => publicPost(row)) });

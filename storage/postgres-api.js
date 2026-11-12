@@ -826,6 +826,43 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       return res.json({ suspended });
     } catch (error) { return next(error); }
   });
+  app.delete('/api/admin/users/:id', authenticate, async (req, res, next) => {
+    try {
+      if (!await requireAdmin(req, res)) return;
+      if (req.params.id === req.user.id) return res.status(400).json({ error: 'You cannot delete your own account' });
+      const removed = await db.transaction(async (client) => {
+        const user = (await client.query('SELECT id FROM users WHERE id=$1 FOR UPDATE', [req.params.id])).rows[0];
+        if (!user) return false;
+        const financial = await client.query(`SELECT p.id FROM payments p
+          WHERE p.payer_id=$1 OR p.payee_id=$1 OR p.negotiation_id IN
+          (SELECT id FROM negotiations WHERE owner_id=$1 OR interested_id=$1 OR post_id IN (SELECT id FROM posts WHERE author_id=$1))
+          LIMIT 1`, [user.id]);
+        if (financial.rowCount) throw Object.assign(new Error('Este usuário possui pagamentos vinculados e não pode ser excluído para preservar o histórico financeiro.'), { status: 409 });
+        await client.query('DELETE FROM reports WHERE reporter_id=$1 OR (target_type=$2 AND target_id IN (SELECT id FROM posts WHERE author_id=$1))', [user.id, 'post']);
+        await client.query('DELETE FROM reviews WHERE reviewer_id=$1 OR reviewee_id=$1 OR negotiation_id IN (SELECT id FROM negotiations WHERE owner_id=$1 OR interested_id=$1 OR post_id IN (SELECT id FROM posts WHERE author_id=$1))', [user.id]);
+        await client.query('DELETE FROM messages WHERE sender_id=$1 OR thread_id IN (SELECT thread_id FROM negotiations WHERE owner_id=$1 OR interested_id=$1)', [user.id]);
+        await client.query('DELETE FROM delivery_incidents WHERE delivery_id IN (SELECT id FROM collection_deliveries WHERE negotiation_id IN (SELECT id FROM negotiations WHERE owner_id=$1 OR interested_id=$1 OR post_id IN (SELECT id FROM posts WHERE author_id=$1)))', [user.id]);
+        await client.query('DELETE FROM collection_deliveries WHERE negotiation_id IN (SELECT id FROM negotiations WHERE owner_id=$1 OR interested_id=$1 OR post_id IN (SELECT id FROM posts WHERE author_id=$1))', [user.id]);
+        await client.query('DELETE FROM negotiations WHERE owner_id=$1 OR interested_id=$1 OR post_id IN (SELECT id FROM posts WHERE author_id=$1)', [user.id]);
+        await client.query('DELETE FROM post_images WHERE post_id IN (SELECT id FROM posts WHERE author_id=$1)', [user.id]);
+        await client.query('DELETE FROM comments WHERE post_id IN (SELECT id FROM posts WHERE author_id=$1)', [user.id]);
+        await client.query('DELETE FROM favorites WHERE post_id IN (SELECT id FROM posts WHERE author_id=$1)', [user.id]);
+        await client.query('DELETE FROM post_views WHERE post_id IN (SELECT id FROM posts WHERE author_id=$1)', [user.id]);
+        await client.query('DELETE FROM post_likes WHERE post_id IN (SELECT id FROM posts WHERE author_id=$1)', [user.id]);
+        await client.query('DELETE FROM posts WHERE author_id=$1', [user.id]);
+        await client.query('DELETE FROM favorites WHERE user_id=$1 OR post_id IN (SELECT id FROM posts WHERE author_id=$1)', [user.id]);
+        await client.query('DELETE FROM post_views WHERE user_id=$1 OR post_id IN (SELECT id FROM posts WHERE author_id=$1)', [user.id]);
+        await client.query('DELETE FROM post_likes WHERE user_id=$1 OR post_id IN (SELECT id FROM posts WHERE author_id=$1)', [user.id]);
+        await client.query('DELETE FROM blocked_users WHERE blocker_id=$1 OR blocked_id=$1', [user.id]);
+        await client.query('DELETE FROM notifications WHERE user_id=$1', [user.id]);
+        await client.query('DELETE FROM collection_point_suggestions WHERE user_id=$1', [user.id]);
+        await client.query('DELETE FROM users WHERE id=$1', [user.id]);
+        return true;
+      });
+      if (!removed) return res.status(404).json({ error: 'User not found' });
+      return res.json({ ok: true });
+    } catch (error) { if (error?.status) return res.status(error.status).json({ error: error.message }); return next(error); }
+  });
 
   app.post('/api/collection-points/suggestions', authenticate, async (req, res, next) => {
     try {

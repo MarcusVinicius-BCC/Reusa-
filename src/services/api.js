@@ -145,6 +145,7 @@ export const api = {
   adminDashboard: () => request('/admin/dashboard'),
   adminUsers: (query = '') => request(`/admin/users?q=${encodeURIComponent(query)}`),
   setUserSuspension: (id, suspended) => request(`/admin/users/${id}/suspension`, { method: 'PATCH', body: JSON.stringify({ suspended }) }),
+  removeAdminUser: (id) => request(`/admin/users/${id}`, { method: 'DELETE' }),
   adminPosts: () => request('/admin/posts'),
   removeAdminPost: (id) => request(`/admin/posts/${id}`, { method: 'DELETE' }),
   adminReports: () => request('/admin/reports'),
