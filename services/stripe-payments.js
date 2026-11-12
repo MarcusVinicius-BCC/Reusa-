@@ -70,6 +70,8 @@ function stripeFailure(method, path, response, data, {accessCheck=false}={}) {
     publicMessage = 'A chave Stripe atual não tem acesso à conta ou ao recurso solicitado. Confira a conta Stripe, o ambiente de teste e as permissões da integração.';
   } else if (code === 'idempotency_key_in_use' || response.status === 409 || response.status === 429) {
     publicMessage = 'A Stripe ainda está processando a solicitação. Aguarde e consulte o status antes de tentar novamente.';
+  } else if (path === '/checkout/sessions' && param === 'allowed_payment_method_types' && message && /invalid|activated|enabled/i.test(message)) {
+    publicMessage = 'O Pix não está habilitado ou elegível na conta Stripe que recebe este pagamento. Ative o Pix nessa conta e conclua o cadastro do vendedor antes de tentar novamente.';
   } else if (path === '/checkout/sessions' && isTestEnvironment() && message) {
     publicMessage = 'A Stripe recusou a criação do pagamento de teste. Motivo: ' + message;
   } else if (['/accounts','/account_links','/v2/core/accounts','/v2/core/account_links'].includes(path) && message) {
@@ -156,7 +158,7 @@ async function createConnectedAccount(email, idempotencyKey) {
   return accountRequest('/v2/core/accounts','POST',client => client.v2.core.accounts.create({
     contact_email:email, identity:{country:'BR'}, dashboard:'full',
     defaults:{currency:'brl',locales:['pt-BR'],responsibilities:{fees_collector:'stripe',losses_collector:'stripe'}},
-    configuration:{merchant:{capabilities:{card_payments:{requested:true}}}}, include:accountInclude
+    configuration:{merchant:{capabilities:{card_payments:{requested:true},pix_payments:{requested:true}}}}, include:accountInclude
   },{idempotencyKey}));
 }
 async function accountLink(accountId, refreshUrl, returnUrl, version='v2') {

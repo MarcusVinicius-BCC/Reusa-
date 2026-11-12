@@ -98,10 +98,12 @@ Em **Configurações → Ofertas e pagamentos**, cada vendedor:
 
 1. Seleciona **Conectar Stripe** e conclui o cadastro hospedado com seus dados e conta bancária.
 2. Retorna ao ReUsa+ e consulta a situação da conta. Contas de teste e de produção têm identificadores separados no banco.
-3. Aguarda a Stripe habilitar `charges_enabled` e `payouts_enabled`.
+3. Aguarda a Stripe habilitar `charges_enabled` e `payouts_enabled`. Para aceitar Pix, a conta também precisa ter a capacidade `pix_payments` ativa e o Pix habilitado nas formas de pagamento dessa mesma conta.
 4. Usa **Abrir painel de recebimentos** para acessar saldo, repasses, dados pendentes e contestações no painel completo da Stripe. O vendedor entra com o e-mail usado no cadastro e escolhe sua conta no seletor da Stripe. Contas antigas Express continuam usando seus links temporários, criados apenas para o proprietário autenticado.
 
 Uma conta apenas criada não é considerada pronta. A API consulta a Stripe antes de permitir a aceitação de vendas e novamente antes de abrir o checkout. Revogação do acesso e restrições impedem novas cobranças.
+
+Contas conectadas criadas pelo ReUsa+ passam a solicitar cartão e Pix. Contas conectadas criadas anteriormente precisam ser reabertas no cadastro hospedado ou ajustadas no Dashboard da própria conta para habilitar Pix; `STRIPE_PIX_ENABLED=true` apenas libera o fluxo na aplicação e não altera as permissões da Stripe.
 
 No ambiente de teste, o cadastro do vendedor pode ser exercitado mesmo com `STRIPE_DEMO_MODE=true`. Esse modo preserva os pagamentos na conta de teste da plataforma e mostra separadamente as permissões do vendedor; não comprova cobranças diretas nem repasses ao vendedor. Para validar o fluxo conectado, use `STRIPE_DEMO_MODE=false` e aguarde a habilitação efetiva da conta. Em produção, mantenha demonstração desligada e os controles de habilitação descritos acima.
 
