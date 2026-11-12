@@ -639,21 +639,21 @@ function adminMiddleware(req, res, next) {
   return next();
 }
 
-function notification(userId, type, title, text, link = '') {
+function notification(userId, type, title, text, link = '', createdAt = new Date().toISOString()) {
   run(
     'INSERT INTO notifications (id, user_id, type, title, text, created_at, link) VALUES (?, ?, ?, ?, ?, ?, ?)',
-    [uid('notification'), userId, type, title, text, new Date().toISOString(), link]
+    [uid('notification'), userId, type, title, text, createdAt, link]
   );
 }
 
 // Transactional outbox: the business change and its event are persisted in the
 // same local database before any network call is attempted. This gives us
 // at-least-once delivery even when RabbitMQ is temporarily unavailable.
-function emitDomainEvent(type, data, correlationId = 'system') {
+function emitDomainEvent(type, data, correlationId = 'system', occurredAt = new Date().toISOString()) {
   const event = {
     id: uid('event'),
     type,
-    occurredAt: new Date().toISOString(),
+    occurredAt,
     correlationId,
     data
   };
@@ -771,7 +771,40 @@ function publicPost(row, viewerId = null) {
 }
 
 
-function threadSummary(row, currentUserId, { hideCleared = false } = {}) {
+function messageNoticeLink(threadId) {
+  return `/mensagens/ana?thread=${encodeURIComponent(threadId)}`;
+}
+
+function applyMessageClearState(notifications, userId) {
+  const clears = new Map(all('SELECT thread_id, cleared_at FROM message_clears WHERE user_id = ?', [userId])
+    .map((clear) => [messageNoticeLink(clear.thread_id), clear.cleared_at]));
+  return notifications.map((notice) => {
+    const clearedAt = notice.type === 'message' && clears.get(notice.link);
+    return !notice.readAt && clearedAt && Date.parse(notice.createdAt) <= Date.parse(clearedAt)
+      ? { ...notice, readAt: clearedAt } : notice;
+  });
+}
+
+async function notificationsForUser(userId, { limit = 50 } = {}) {
+  const local = all(`SELECT id, type, title, text, link, created_at AS createdAt, read_at AS readAt FROM notifications WHERE user_id = ? ORDER BY created_at DESC${limit ? ' LIMIT ' + limit : ''}`, [userId]);
+  const distributed = await distributedServiceValue(NOTIFICATION_SERVICE_URL, `/notifications/${encodeURIComponent(userId)}`);
+  const remote = (distributed?.notifications || []).map((item) => ({ ...item, createdAt: item.createdAt || item.created_at, readAt: item.readAt || item.read_at || null }));
+  const notifications = applyMessageClearState([...local, ...remote], userId)
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
+  return limit ? notifications.slice(0, limit) : notifications;
+}
+
+function markClearedMessageNoticesRead(userId, threadId, clearedAt) {
+  run("UPDATE notifications SET read_at = ? WHERE user_id = ? AND type = 'message' AND link = ? AND read_at IS NULL AND created_at <= ?", [clearedAt, userId, messageNoticeLink(threadId), clearedAt]);
+}
+
+function messageClearTimestamp(userId, threads) {
+  const previous = get('SELECT MAX(cleared_at) AS cleared_at FROM message_clears WHERE user_id = ?', [userId]);
+  return new Date(Math.max(Date.now(), Date.parse(previous?.cleared_at || '') || 0,
+    ...threads.map((thread) => Date.parse(thread.last_message_at || '') || 0))).toISOString();
+}
+
+function threadSummary(row, currentUserId, { hideCleared = false, notifications } = {}) {
   const participants = JSON.parse(row.participants_json || '[]');
   const otherParticipantId = participants.find((participantId) => participantId !== currentUserId) || participants[0];
   const otherUser = otherParticipantId ? get('SELECT id, name, avatar FROM users WHERE id = ?', [otherParticipantId]) : null;
@@ -786,7 +819,9 @@ function threadSummary(row, currentUserId, { hideCleared = false } = {}) {
   return {
     id: row.id,
     threadId: row.id,
-    unreadCount: row.unread_count,
+    unreadCount: notifications
+      ? notifications.filter((notice) => notice.type === 'message' && !notice.readAt && notice.link === messageNoticeLink(row.id)).length
+      : Number(get("SELECT COUNT(*) AS count FROM notifications WHERE user_id = ? AND type = 'message' AND link = ? AND read_at IS NULL AND (? IS NULL OR created_at > ?)", [currentUserId, messageNoticeLink(row.id), clear?.cleared_at || null, clear?.cleared_at || null])?.count || 0),
     title: otherUser ? otherUser.name : 'Conversa',
     subtitle: lastMessage ? lastMessage.text : post ? post.title : 'Sem mensagens',
     time: lastMessage ? lastMessage.sent_at : '',
@@ -2518,9 +2553,10 @@ async function start() {
     return res.status(201).json({ thread: threadSummary(thread, req.user.id) });
   });
 
-  app.get('/api/messages/threads', authMiddleware, (req, res) => {
+  app.get('/api/messages/threads', authMiddleware, async (req, res) => {
+    const notifications = await notificationsForUser(req.user.id, { limit: null });
     const rows = all('SELECT * FROM threads ORDER BY last_message_at DESC').filter((row) => JSON.parse(row.participants_json || '[]').includes(req.user.id));
-    const threads = rows.map((row) => threadSummary(row, req.user.id, { hideCleared: true })).filter(Boolean);
+    const threads = rows.map((row) => threadSummary(row, req.user.id, { hideCleared: true, notifications })).filter(Boolean);
     res.json({ threads });
   });
 
@@ -2536,29 +2572,47 @@ async function start() {
     const messages = clear
       ? all('SELECT * FROM messages WHERE thread_id = ? AND sent_at > ? ORDER BY sent_at ASC', [row.id, clear.cleared_at])
       : all('SELECT * FROM messages WHERE thread_id = ? ORDER BY sent_at ASC', [row.id]);
-    res.json({ thread: row, participants: JSON.parse(row.participants_json || '[]'), messages });
+    res.json({ thread: { ...row, unread_count: threadSummary(row, req.user.id).unreadCount }, participants: JSON.parse(row.participants_json || '[]'), messages });
   });
 
   app.delete('/api/messages/threads/:id/messages', authMiddleware, (req, res) => {
-    const thread = get('SELECT id, participants_json FROM threads WHERE id = ?', [req.params.id]);
+    const thread = get('SELECT id, participants_json, last_message_at FROM threads WHERE id = ?', [req.params.id]);
     if (!thread) return res.status(404).json({ error: 'Thread not found' });
     if (!JSON.parse(thread.participants_json || '[]').includes(req.user.id)) return res.status(403).json({ error: 'Thread access denied' });
-    const clearedAt = new Date().toISOString();
-    run(
-      'INSERT INTO message_clears (user_id, thread_id, cleared_at) VALUES (?, ?, ?) ON CONFLICT(user_id, thread_id) DO UPDATE SET cleared_at = excluded.cleared_at',
-      [req.user.id, thread.id, clearedAt]
-    );
+    const clearedAt = messageClearTimestamp(req.user.id, [thread]);
+    try {
+      db.exec('BEGIN TRANSACTION');
+      run(
+        'INSERT INTO message_clears (user_id, thread_id, cleared_at) VALUES (?, ?, ?) ON CONFLICT(user_id, thread_id) DO UPDATE SET cleared_at = excluded.cleared_at',
+        [req.user.id, thread.id, clearedAt]
+      );
+      markClearedMessageNoticesRead(req.user.id, thread.id, clearedAt);
+      db.exec('COMMIT');
+    } catch (error) {
+      try { db.exec('ROLLBACK'); } catch {}
+      throw error;
+    }
     persistDb();
     return res.json({ ok: true, clearedAt });
   });
 
   app.delete('/api/messages/threads', authMiddleware, (req, res) => {
-    const now = new Date().toISOString();
-    const threads = all('SELECT id, participants_json FROM threads').filter((thread) => JSON.parse(thread.participants_json || '[]').includes(req.user.id));
-    threads.forEach((thread) => run(
-      'INSERT INTO message_clears (user_id, thread_id, cleared_at) VALUES (?, ?, ?) ON CONFLICT(user_id, thread_id) DO UPDATE SET cleared_at = excluded.cleared_at',
-      [req.user.id, thread.id, now]
-    ));
+    const threads = all('SELECT id, participants_json, last_message_at FROM threads').filter((thread) => JSON.parse(thread.participants_json || '[]').includes(req.user.id));
+    const now = messageClearTimestamp(req.user.id, threads);
+    try {
+      db.exec('BEGIN TRANSACTION');
+      threads.forEach((thread) => {
+        run(
+          'INSERT INTO message_clears (user_id, thread_id, cleared_at) VALUES (?, ?, ?) ON CONFLICT(user_id, thread_id) DO UPDATE SET cleared_at = excluded.cleared_at',
+          [req.user.id, thread.id, now]
+        );
+        markClearedMessageNoticesRead(req.user.id, thread.id, now);
+      });
+      db.exec('COMMIT');
+    } catch (error) {
+      try { db.exec('ROLLBACK'); } catch {}
+      throw error;
+    }
     persistDb();
     return res.json({ ok: true, clearedAt: now });
   });
@@ -2583,7 +2637,8 @@ async function start() {
       return res.status(403).json({ error: 'You cannot message a blocked user' });
     }
 
-    const sentAt = new Date().toISOString();
+    const lastClear = get('SELECT MAX(cleared_at) AS cleared_at FROM message_clears WHERE thread_id = ?', [thread.id]);
+    const sentAt = new Date(Math.max(Date.now(), (Date.parse(lastClear?.cleared_at || '') || 0) + 1)).toISOString();
     const message = {
       id: uid('msg'),
       thread_id: thread.id,
@@ -2600,8 +2655,8 @@ async function start() {
     );
     run('UPDATE threads SET last_message_at = ? WHERE id = ?', [sentAt, thread.id]);
     if (recipientId) {
-      if (!eventPublisher.enabled()) notification(recipientId, 'message', 'Nova mensagem', `${req.user.name} enviou uma mensagem.`, `/mensagens/ana?thread=${thread.id}`);
-      emitDomainEvent('message.sent', { messageId: message.id, threadId: thread.id, postId: thread.post_id, senderId: req.user.id, senderName: req.user.name, recipientId, link: `/mensagens/ana?thread=${thread.id}` }, req.correlationId);
+      if (!eventPublisher.enabled()) notification(recipientId, 'message', 'Nova mensagem', `${req.user.name} enviou uma mensagem.`, `/mensagens/ana?thread=${thread.id}`, sentAt);
+      emitDomainEvent('message.sent', { messageId: message.id, threadId: thread.id, postId: thread.post_id, senderId: req.user.id, senderName: req.user.name, recipientId, link: `/mensagens/ana?thread=${thread.id}` }, req.correlationId, sentAt);
     }
     persistDb();
 
@@ -2609,10 +2664,7 @@ async function start() {
   });
 
   app.get('/api/notifications', authMiddleware, async (req, res) => {
-    const localNotifications = all('SELECT id, type, title, text, link, created_at AS createdAt, read_at AS readAt FROM notifications WHERE user_id = ? ORDER BY created_at DESC LIMIT 50', [req.user.id]);
-    const distributed = await distributedServiceValue(NOTIFICATION_SERVICE_URL, `/notifications/${encodeURIComponent(req.user.id)}`);
-    const remoteNotifications = (distributed?.notifications || []).map((item) => ({ ...item, createdAt: item.createdAt || item.created_at, readAt: item.readAt || item.read_at || null }));
-    const notifications = [...localNotifications, ...remoteNotifications].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 50);
+    const notifications = await notificationsForUser(req.user.id);
     res.json({ notifications, unreadCount: notifications.filter((notification) => !notification.readAt).length });
   });
 
@@ -2628,8 +2680,8 @@ async function start() {
     if (!JSON.parse(thread.participants_json || '[]').includes(req.user.id)) {
       return res.status(403).json({ error: 'Thread access denied' });
     }
-    const link = `/mensagens/ana?thread=${thread.id}`;
-    run('UPDATE notifications SET read_at = ? WHERE user_id = ? AND read_at IS NULL AND link = ?', [new Date().toISOString(), req.user.id, link]);
+    const link = messageNoticeLink(thread.id);
+    run("UPDATE notifications SET read_at = ? WHERE user_id = ? AND type = 'message' AND read_at IS NULL AND link = ?", [new Date().toISOString(), req.user.id, link]);
     persistDb();
     res.json({ ok: true });
   });

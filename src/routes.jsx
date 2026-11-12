@@ -998,23 +998,24 @@ function FeedCard({ post, onNavigate, onOpenChat, onOpenPayment }) {
 function MessagesScreen({ onOpenThread }) {
   const threads = useAppStore((state) => state.threads);
   const loadThreads = useAppStore((state) => state.loadThreads);
+  const loadNotifications = useAppStore((state) => state.loadNotifications);
+  const clearMessages = useAppStore((state) => state.clearMessages);
   const [search, setSearch] = useState('');
   const [clearing, setClearing] = useState(false);
 
   useEffect(() => {
-    loadThreads().catch(() => {});
-    const timer = window.setInterval(() => loadThreads().catch(() => {}), 3000);
+    const sync = () => Promise.all([loadThreads(), loadNotifications()]).catch(() => {});
+    sync();
+    const timer = window.setInterval(sync, 3000);
     return () => window.clearInterval(timer);
-  }, [loadThreads]);
+  }, [loadThreads, loadNotifications]);
 
   const visibleThreads = threads.filter((thread) => `${thread.title} ${thread.subtitle}`.toLowerCase().includes(search.toLowerCase()));
   async function clearAll() {
     if (!threads.length || clearing || !window.confirm('Limpar todas as suas mensagens? O histórico dos outros participantes será preservado.')) return;
     setClearing(true);
     try {
-      const result = await api.clearAllMessages();
-      if (!result?.ok) throw new Error('Não foi possível limpar as mensagens. Tente novamente.');
-      await loadThreads();
+      await clearMessages();
     } catch (error) {
       alert(error.message);
     } finally {
@@ -1050,7 +1051,7 @@ function ChatScreen({ onBack }) {
   const [thread, setThread] = useState(null);
   const [clearingConversation, setClearingConversation] = useState(false);
   const sendMessage = useAppStore((state) => state.sendMessage);
-  const loadThreads = useAppStore((state) => state.loadThreads);
+  const clearMessages = useAppStore((state) => state.clearMessages);
   const readThreadNotifications = useAppStore((state) => state.readThreadNotifications);
   const session = useAppStore((state) => state.session);
   const threadId = new URLSearchParams(window.location.search).get('thread');
@@ -1077,11 +1078,9 @@ function ChatScreen({ onBack }) {
     if (!threadId || clearingConversation || !window.confirm('Limpar esta conversa? O histórico dos outros participantes será preservado.')) return;
     setClearingConversation(true);
     try {
-      const result = await api.clearThreadMessages(threadId);
-      if (!result?.ok) throw new Error('Não foi possível limpar a conversa. Tente novamente.');
+      await clearMessages(threadId);
       setMessages([]);
-      setThread((current) => current ? { ...current, last_message_at: null } : current);
-      await loadThreads();
+      setThread((current) => current ? { ...current, unread_count: 0, last_message_at: null } : current);
     } catch (error) {
       alert(error.message);
     } finally {

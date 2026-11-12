@@ -12,6 +12,7 @@ let dataDir;
 let routingServer;
 let routingBaseUrl;
 let routingRequests = 0;
+const distributedNotifications = new Map();
 
 function availablePort() {
   return new Promise((resolve, reject) => {
@@ -47,6 +48,11 @@ async function request(pathname, options = {}) {
 before(async () => {
   dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'reusa-test-'));
   routingServer = http.createServer((req, res) => {
+    if (req.url.startsWith('/notifications/')) {
+      const userId = decodeURIComponent(req.url.slice('/notifications/'.length));
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      return res.end(JSON.stringify({ notifications: distributedNotifications.get(userId) || [] }));
+    }
     routingRequests += 1;
     if (!req.url.startsWith('/route/v1/driving/')) {
       res.writeHead(404, { 'Content-Type': 'application/json' });
@@ -77,7 +83,7 @@ before(async () => {
   baseUrl = `http://127.0.0.1:${port}`;
   server = spawn(process.execPath, ['backend.js'], {
     cwd: path.resolve(__dirname, '..'),
-    env: { ...process.env, NODE_ENV: 'test', PORT: String(port), DATA_DIR: dataDir, JWT_SECRET: 'test-secret-not-for-production', ROUTING_BASE_URL: routingBaseUrl, ADMIN_EMAILS: 'mariana@reusa.com, carlos@reusa.com' },
+    env: { ...process.env, NODE_ENV: 'test', PORT: String(port), DATA_DIR: dataDir, JWT_SECRET: 'test-secret-not-for-production', ROUTING_BASE_URL: routingBaseUrl, NOTIFICATION_SERVICE_URL: routingBaseUrl, ADMIN_EMAILS: 'mariana@reusa.com, carlos@reusa.com' },
     stdio: 'ignore'
   });
   await waitForServer();
@@ -623,6 +629,16 @@ test('seller cancels acceptance only before delivery or payment and can choose a
 
 test('buyer cancels their own pending offer and can resend without stale requests cancelling the new offer', async () => {
   await require('./offer-cancellation-flow').exerciseOfferCancellation(request);
+});
+
+test('clearing messages updates unread counts per user and ignores delayed notification events', async () => {
+  await require('./message-clear-flow').exerciseMessageClear(request, {
+    injectNotification: async notice => {
+      const notices = distributedNotifications.get(notice.userId) || [];
+      notices.push({ ...notice, readAt: null });
+      distributedNotifications.set(notice.userId, notices);
+    }
+  });
 });
 
 test('community tools protect alerts, coordinates, public questions, donation offers and reports',async()=>{

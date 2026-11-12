@@ -168,10 +168,31 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
     }
     return next();
   };
-  const emit = async (client, type, data, correlationId) => {
-    const event = { id: id('event'), type, occurredAt: new Date().toISOString(), correlationId, data };
+  const emit = async (client, type, data, correlationId, occurredAt = new Date().toISOString()) => {
+    const event = { id: id('event'), type, occurredAt, correlationId, data };
     await client.query('INSERT INTO event_outbox(id,type,payload_json,correlation_id,created_at) VALUES($1,$2,$3,$4,$5)', [event.id, type, JSON.stringify(data), correlationId || 'system', event.occurredAt]);
     return event;
+  };
+  const messageNoticeLink = (threadId) => `/mensagens/ana?thread=${encodeURIComponent(threadId)}`;
+  const messageClearTimestamp = async (client, userId, threads) => {
+    const previous = (await client.query('SELECT MAX(cleared_at) AS cleared_at FROM message_clears WHERE user_id=$1', [userId])).rows[0];
+    return new Date(Math.max(Date.now(), previous?.cleared_at ? new Date(previous.cleared_at).getTime() : 0,
+      ...threads.map((thread) => thread.last_message_at ? new Date(thread.last_message_at).getTime() : 0))).toISOString();
+  };
+  const markMessageNoticesRead = async (client, userId, threadIds, readAt) => {
+    const links = threadIds.map(messageNoticeLink);
+    for (const table of ['notifications', 'notification_service_notifications']) {
+      await client.query(`UPDATE ${table} SET read_at=$1 WHERE user_id=$2 AND type='message' AND link=ANY($3::text[]) AND read_at IS NULL AND created_at <= $1`, [readAt, userId, links]);
+    }
+  };
+  const unreadMessagesForThread = async (userId, threadId) => {
+    const row = await db.one(`SELECT COUNT(*)::int AS count FROM (
+      SELECT type,link,created_at,read_at FROM notifications WHERE user_id=$1
+      UNION ALL SELECT type,link,created_at,read_at FROM notification_service_notifications WHERE user_id=$1
+    ) notices LEFT JOIN message_clears cleared ON cleared.user_id=$1 AND cleared.thread_id=$2
+    WHERE notices.type='message' AND notices.link=$3 AND notices.read_at IS NULL
+      AND (cleared.cleared_at IS NULL OR notices.created_at > cleared.cleared_at)`, [userId, threadId, messageNoticeLink(threadId)]);
+    return Number(row?.count || 0);
   };
 
   app.post('/api/auth/register', async (req, res, next) => {
@@ -541,7 +562,13 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
   });
   app.get('/api/messages/threads', authenticate, async (req, res, next) => {
     try {
-      const rows = await db.many(`SELECT t.id,t.post_id,t.last_message_at,t.unread_count,
+      const rows = await db.many(`WITH notices AS (
+        SELECT type,link,created_at,read_at FROM notifications WHERE user_id=$1
+        UNION ALL SELECT type,link,created_at,read_at FROM notification_service_notifications WHERE user_id=$1
+      ) SELECT t.id,t.post_id,t.last_message_at,
+        (SELECT COUNT(*)::int FROM notices WHERE type='message' AND read_at IS NULL
+          AND link='/mensagens/ana?thread=' || t.id
+          AND (cleared.cleared_at IS NULL OR created_at > cleared.cleared_at)) AS unread_count,
         p.title AS post_title, u.id AS other_user_id,u.name AS other_user_name,u.avatar AS other_user_avatar,
         last_message.text AS last_message_text,last_message.sent_at AS last_message_sent_at
         FROM threads t
@@ -576,28 +603,39 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       const messages = clear
         ? await db.many('SELECT * FROM messages WHERE thread_id=$1 AND sent_at > $2 ORDER BY sent_at ASC', [thread.id, clear.cleared_at])
         : await db.many('SELECT * FROM messages WHERE thread_id=$1 ORDER BY sent_at ASC', [thread.id]);
-      await db.query('UPDATE threads SET unread_count=0 WHERE id=$1', [thread.id]);
+      const unreadCount = await unreadMessagesForThread(req.user.id, thread.id);
       const otherUserId = json(thread.participants_json).find((item) => item !== req.user.id);
       const otherUser = otherUserId ? await db.one('SELECT id,name,avatar FROM users WHERE id=$1', [otherUserId]) : null;
-      return res.json({ thread: { ...thread, title: otherUser?.name || 'Conversa', avatar: otherUser?.avatar || '' }, participants: json(thread.participants_json), messages });
+      return res.json({ thread: { ...thread, unread_count: unreadCount, title: otherUser?.name || 'Conversa', avatar: otherUser?.avatar || '' }, participants: json(thread.participants_json), messages });
     } catch (error) { return next(error); }
   });
   app.delete('/api/messages/threads/:id/messages', authenticate, async (req, res, next) => {
     try {
-      const thread = await db.one('SELECT id FROM threads WHERE id=$1 AND participants_json::jsonb @> $2::jsonb', [req.params.id, JSON.stringify([req.user.id])]);
-      if (!thread) return res.status(404).json({ error: 'Thread not found' });
-      await db.query(`INSERT INTO message_clears(user_id,thread_id,cleared_at) VALUES($1,$2,now())
-        ON CONFLICT(user_id,thread_id) DO UPDATE SET cleared_at=EXCLUDED.cleared_at`, [req.user.id, thread.id]);
-      return res.json({ ok: true });
-    } catch (error) { return next(error); }
+      const clearedAt = await db.transaction(async (client) => {
+        const thread = (await client.query('SELECT id,last_message_at FROM threads WHERE id=$1 AND participants_json::jsonb @> $2::jsonb FOR UPDATE', [req.params.id, JSON.stringify([req.user.id])])).rows[0];
+        if (!thread) throw Object.assign(new Error('Thread not found'), { status: 404 });
+        const timestamp = await messageClearTimestamp(client, req.user.id, [thread]);
+        await client.query(`INSERT INTO message_clears(user_id,thread_id,cleared_at) VALUES($1,$2,$3)
+          ON CONFLICT(user_id,thread_id) DO UPDATE SET cleared_at=EXCLUDED.cleared_at`, [req.user.id, thread.id, timestamp]);
+        await markMessageNoticesRead(client, req.user.id, [thread.id], timestamp);
+        return timestamp;
+      });
+      return res.json({ ok: true, clearedAt });
+    } catch (error) { if (error.status === 404) return res.status(404).json({ error: error.message }); return next(error); }
   });
   app.delete('/api/messages/threads', authenticate, async (req, res, next) => {
     try {
-      await db.query(`INSERT INTO message_clears(user_id,thread_id,cleared_at)
-        SELECT $1,t.id,now() FROM threads t
-        WHERE t.participants_json::jsonb @> $2::jsonb
-        ON CONFLICT(user_id,thread_id) DO UPDATE SET cleared_at=EXCLUDED.cleared_at`, [req.user.id, JSON.stringify([req.user.id])]);
-      return res.json({ ok: true });
+      const clearedAt = await db.transaction(async (client) => {
+        const rows = (await client.query('SELECT id,last_message_at FROM threads WHERE participants_json::jsonb @> $1::jsonb ORDER BY id FOR UPDATE', [JSON.stringify([req.user.id])])).rows;
+        const timestamp = await messageClearTimestamp(client, req.user.id, rows);
+        const threadIds = rows.map((thread) => thread.id);
+        await client.query(`INSERT INTO message_clears(user_id,thread_id,cleared_at)
+          SELECT $1,t.id,$3::timestamptz FROM threads t WHERE t.id=ANY($2::text[])
+          ON CONFLICT(user_id,thread_id) DO UPDATE SET cleared_at=EXCLUDED.cleared_at`, [req.user.id, threadIds, timestamp]);
+        await markMessageNoticesRead(client, req.user.id, threadIds, timestamp);
+        return timestamp;
+      });
+      return res.json({ ok: true, clearedAt });
     } catch (error) { return next(error); }
   });
   app.post('/api/messages/threads/:id/messages', authenticate, async (req, res, next) => {
@@ -609,18 +647,29 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       const message = { id: id('msg'), thread_id: thread.id, sender_id: req.user.id, text, sent_at: new Date().toISOString(), status: 'sent' };
       const recipientId = json(thread.participants_json).find((item) => item !== req.user.id);
       await db.transaction(async (client) => {
+        // Sending and clearing use the same lock, so a concurrent message and
+        // its notification fall on the same side of the clear watermark.
+        const locked = await client.query('SELECT id FROM threads WHERE id=$1 FOR UPDATE', [thread.id]);
+        if (!locked.rowCount) throw Object.assign(new Error('Thread not found'), { status: 404 });
+        const lastClear = (await client.query('SELECT MAX(cleared_at) AS cleared_at FROM message_clears WHERE thread_id=$1', [thread.id])).rows[0];
+        message.sent_at = new Date(Math.max(Date.now(), lastClear?.cleared_at ? new Date(lastClear.cleared_at).getTime() + 1 : 0)).toISOString();
         await client.query('INSERT INTO messages(id,thread_id,sender_id,text,sent_at,status) VALUES($1,$2,$3,$4,$5,$6)', Object.values(message));
         await client.query('UPDATE threads SET last_message_at=$1,unread_count=unread_count+1 WHERE id=$2', [message.sent_at, thread.id]);
-        if (recipientId) await emit(client, 'message.sent', { messageId: message.id, threadId: thread.id, postId: thread.post_id, senderId: req.user.id, senderName: req.user.name, recipientId }, req.correlationId);
+        if (recipientId) await emit(client, 'message.sent', { messageId: message.id, threadId: thread.id, postId: thread.post_id, senderId: req.user.id, senderName: req.user.name, recipientId }, req.correlationId, message.sent_at);
       });
       queueMicrotask(() => publisher?.flush?.());
       return res.status(201).json({ message });
-    } catch (error) { return next(error); }
+    } catch (error) { if (error.status === 404) return res.status(404).json({ error: error.message }); return next(error); }
   });
   app.get('/api/notifications', authenticate, async (req, res, next) => {
     try {
-      const rows = await db.many('SELECT id,type,title,text,link,created_at AS "createdAt",read_at AS "readAt" FROM (SELECT id,type,title,text,link,created_at,read_at FROM notifications WHERE user_id=$1 UNION ALL SELECT id,type,title,text,link,created_at,read_at FROM notification_service_notifications WHERE user_id=$1) notices ORDER BY created_at DESC LIMIT 100', [req.user.id]);
-      return res.json({ notifications: rows });
+      const rows = await db.many(`SELECT notices.id,notices.type,notices.title,notices.text,notices.link,notices.created_at AS "createdAt",
+        COALESCE(notices.read_at, CASE WHEN notices.created_at <= cleared.cleared_at THEN cleared.cleared_at END) AS "readAt"
+        FROM (SELECT id,type,title,text,link,created_at,read_at FROM notifications WHERE user_id=$1
+          UNION ALL SELECT id,type,title,text,link,created_at,read_at FROM notification_service_notifications WHERE user_id=$1) notices
+        LEFT JOIN message_clears cleared ON cleared.user_id=$1 AND notices.type='message' AND notices.link='/mensagens/ana?thread=' || cleared.thread_id
+        ORDER BY notices.created_at DESC LIMIT 100`, [req.user.id]);
+      return res.json({ notifications: rows, unreadCount: rows.filter((row) => !row.readAt).length });
     } catch (error) { return next(error); }
   });
   app.post('/api/notifications/:id/read', authenticate, async (req, res, next) => {
@@ -631,7 +680,9 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
   });
   app.post('/api/notifications/read-thread/:threadId', authenticate, async (req, res, next) => {
     try {
-      for (const table of ['notifications', 'notification_service_notifications']) await db.query(`UPDATE ${table} SET read_at=now() WHERE user_id=$1 AND type='message' AND link LIKE $2 AND read_at IS NULL`, [req.user.id, `%thread=${req.params.threadId}`]);
+      const thread = await db.one('SELECT id FROM threads WHERE id=$1 AND participants_json::jsonb @> $2::jsonb', [req.params.threadId, JSON.stringify([req.user.id])]);
+      if (!thread) return res.status(404).json({ error: 'Thread not found' });
+      await db.transaction((client) => markMessageNoticesRead(client, req.user.id, [thread.id], new Date().toISOString()));
       return res.json({ ok: true });
     } catch (error) { return next(error); }
   });

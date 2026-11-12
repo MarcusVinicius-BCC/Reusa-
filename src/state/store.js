@@ -7,6 +7,12 @@ const initialFormState = {
   interests: []
 };
 
+let messageClearRevision = 0;
+const notificationThreadId = (notification) => {
+  try { return new URL(notification.link, 'https://reusa.invalid').searchParams.get('thread'); }
+  catch { return null; }
+};
+
 export const useAppStore = create((set, get) => ({
   initialized: false,
   session: null,
@@ -71,13 +77,31 @@ export const useAppStore = create((set, get) => ({
     set({ posts: result.posts || fallbackPosts });
   },
   loadThreads: async () => {
+    const revision = messageClearRevision;
     const result = await api.threads();
-    set({ threads: result.threads || [] });
+    if (revision === messageClearRevision) set({ threads: result.threads || [] });
   },
   loadNotifications: async () => {
+    const revision = messageClearRevision;
     const result = await api.notifications();
-    set({ notifications: result.notifications || [] });
-    return result.notifications || [];
+    if (revision === messageClearRevision) set({ notifications: result.notifications || [] });
+    return get().notifications;
+  },
+  clearMessages: async (threadId) => {
+    const result = threadId ? await api.clearThreadMessages(threadId) : await api.clearAllMessages();
+    if (!result?.ok) throw new Error('Não foi possível limpar as mensagens. Tente novamente.');
+    const clearedAt = result.clearedAt || new Date().toISOString();
+    const cutoff = Date.parse(clearedAt);
+    // Ignore requests started before the clear, so an old poll cannot restore its badge.
+    messageClearRevision += 1;
+    set((state) => ({
+      threads: state.threads.filter((thread) => (threadId && thread.id !== threadId) || Date.parse(thread.time) > cutoff),
+      notifications: state.notifications.map((item) => item.type === 'message' && !item.readAt &&
+        (!threadId || notificationThreadId(item) === threadId) && Date.parse(item.createdAt) <= cutoff
+        ? { ...item, readAt: clearedAt } : item)
+    }));
+    await Promise.all([get().loadThreads(), get().loadNotifications()]);
+    return result;
   },
   readThreadNotifications: async (threadId) => {
     await api.readThreadNotifications(threadId);

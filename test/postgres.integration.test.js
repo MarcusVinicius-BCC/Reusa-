@@ -142,6 +142,17 @@ test('PostgreSQL provider persists a post, thread, reservation and outbox event'
     assert.equal(saved.accepting, false);
     await require('./acceptance-flow').exerciseAcceptanceFlow((path, options) => request(baseUrl, path, options));
     await require('./offer-cancellation-flow').exerciseOfferCancellation((path, options) => request(baseUrl, path, options));
+    const notificationStore = await new (require('../services/persistence').NotificationStore)({}).open();
+    try {
+      const injectNotification = notice => notificationStore.process(
+        { id: notice.id, occurredAt: notice.createdAt, correlationId: 'message-clear-test' },
+        { userId: notice.userId, type: notice.type, title: notice.title, text: notice.text, link: notice.link }
+      );
+      await require('./message-clear-flow').exerciseMessageClear((path, options) => request(baseUrl, path, options), {
+        injectNotification,
+        deliver: (message, recipientId) => injectNotification({ id: `message-clear-${message.id}`, userId: recipientId, type: 'message', title: 'Nova mensagem', text: 'Mensagem recebida no teste de limpeza.', link: `/mensagens/ana?thread=${message.thread_id}`, createdAt: message.sent_at })
+      });
+    } finally { await notificationStore.close(); }
     const communityResult=await require('./community-flow').exerciseCommunity((path,options)=>request(baseUrl,path,options));
     const discoveryDb=new (require('../storage/postgres-repository').PostgresRepository)(require('../storage/database-config').postgresConnectionString());
     try{
