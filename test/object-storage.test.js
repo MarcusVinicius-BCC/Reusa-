@@ -1,6 +1,9 @@
 const assert = require('node:assert/strict');
 const { test } = require('node:test');
 const http = require('node:http');
+const fs = require('node:fs');
+const os = require('node:os');
+const path = require('node:path');
 const { S3Client } = require('@aws-sdk/client-s3');
 const { createObjectStorage } = require('../distributed/object-storage');
 
@@ -27,6 +30,17 @@ test('R2 requires a public image domain and rejects the authenticated S3 endpoin
   assert.throws(() => createObjectStorage({ ...config, publicBaseUrl: config.endpoint }), /public image domain/);
   assert.throws(() => createObjectStorage({ ...config, publicBaseUrl: 'ftp://images.example.test' }), /public image domain/);
   assert.equal(createObjectStorage({}), null);
+});
+
+test('stored objects can be removed and deletion failures remain visible to the caller', async t => {
+  const sent = [];
+  const send = t.mock.method(S3Client.prototype, 'send', async command => { sent.push(command); return {}; });
+  const storage = createObjectStorage(config);
+  await storage.remove({ key: 'uploads/video.webm' });
+  assert.equal(sent[0].constructor.name, 'DeleteObjectCommand');
+  assert.deepEqual(sent[0].input, { Bucket: config.bucket, Key: 'uploads/video.webm' });
+  send.mock.mockImplementation(async () => { throw Object.assign(new Error('deletion denied'), { $metadata: { httpStatusCode: 403 } }); });
+  await assert.rejects(storage.remove({ key: 'uploads/video.webm' }), /deletion denied/);
 });
 
 test('a missing bucket is created, while permission and service errors are preserved', async t => {
@@ -63,7 +77,7 @@ test('compatible providers keep bucket policies; only unsupported operations are
   assert.equal(info.mock.callCount(), 1);
 });
 
-test('the real S3 SDK uploads image bytes and returns a readable public URL', async t => {
+test('the real S3 SDK uploads image bytes and video streams with readable public URLs', async t => {
   const image = Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]);
   const objects = new Map();
   const server = http.createServer(async (req, res) => {
@@ -73,7 +87,7 @@ test('the real S3 SDK uploads image bytes and returns a readable public URL', as
       assert.match(req.headers.authorization || '', /^AWS4-HMAC-SHA256/);
       const body = [];
       for await (const chunk of req) body.push(chunk);
-      objects.set(path, { body: Buffer.concat(body), contentType: req.headers['content-type'] });
+      objects.set(path, { body: Buffer.concat(body), contentType: req.headers['content-type'], contentLength: req.headers['content-length'], contentEncoding: req.headers['content-encoding'] });
       res.writeHead(200); return res.end();
     }
     const stored = objects.get(path.replace('/public/', '/test-images/'));
@@ -90,4 +104,18 @@ test('the real S3 SDK uploads image bytes and returns a readable public URL', as
   assert.equal(response.status, 200);
   assert.equal(response.headers.get('content-type'), 'image/png');
   assert.deepEqual(Buffer.from(await response.arrayBuffer()), image);
+
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'reusa-s3-stream-test-'));
+  t.after(() => fs.rmSync(directory, { recursive: true, force: true }));
+  const video = Buffer.from([0, 0, 0, 16, 102, 116, 121, 112, 105, 115, 111, 109, 0, 0, 0, 0]);
+  const videoFile = path.join(directory, 'video.mp4');
+  fs.writeFileSync(videoFile, video);
+  const videoUrl = await storage.put({ key: 'uploads/video.mp4', body: fs.createReadStream(videoFile), contentType: 'video/mp4', contentLength: video.length });
+  const videoResponse = await fetch(videoUrl);
+  assert.equal(videoResponse.status, 200);
+  assert.equal(videoResponse.headers.get('content-type'), 'video/mp4');
+  assert.deepEqual(Buffer.from(await videoResponse.arrayBuffer()), video);
+  const uploadedVideo = objects.get('/test-images/uploads/video.mp4');
+  assert.equal(uploadedVideo.contentLength, String(video.length));
+  assert.equal(uploadedVideo.contentEncoding, undefined, 'compatible providers receive the media bytes directly, without aws-chunked framing');
 });

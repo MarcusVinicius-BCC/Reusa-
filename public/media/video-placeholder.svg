@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" role="img" aria-labelledby="title desc">
+  <title id="title">Vídeo do anúncio</title>
+  <desc id="desc">Capa verde com símbolo de reprodução para um anúncio com vídeo.</desc>
+  <defs>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#eaf6ee"/>
+      <stop offset="1" stop-color="#cfe7d7"/>
+    </linearGradient>
+  </defs>
+  <rect width="800" height="600" fill="url(#background)"/>
+  <circle cx="694" cy="89" r="155" fill="#f5fbf6" opacity=".65"/>
+  <circle cx="87" cy="570" r="182" fill="#bdddc8" opacity=".45"/>
+  <rect x="230" y="156" width="340" height="238" rx="34" fill="#fff" stroke="#add1ba" stroke-width="3"/>
+  <circle cx="400" cy="275" r="66" fill="#087848"/>
+  <path d="m385 244 48 31-48 31Z" fill="#fff"/>
+  <text x="400" y="455" fill="#17633f" font-family="Arial,sans-serif" font-size="27" font-weight="700" text-anchor="middle">Vídeo do anúncio</text>
+  <text x="400" y="490" fill="#557161" font-family="Arial,sans-serif" font-size="18" text-anchor="middle">Abra a publicação para assistir</text>
+</svg>

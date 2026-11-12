@@ -211,6 +211,12 @@ test('multipart post submission preserves all required item fields', async () =>
   assert.equal(created.payload.post.category, 'Móveis');
 });
 
+test('post media supports videos, preserves edits and rejects invalid uploads atomically', async () => {
+  await require('./post-media-flow').exercisePostMedia(request, {
+    rawFetch: (url, options) => fetch(`${baseUrl}${url}`, options)
+  });
+});
+
 test('CNPJ lookup rejects malformed identifiers before contacting the external service', async () => {
   const lookup = await request('/api/businesses/cnpj/00000000000000');
   assert.equal(lookup.response.status, 400);

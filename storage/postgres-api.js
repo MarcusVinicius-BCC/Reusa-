@@ -5,6 +5,7 @@ const jwt = require('jsonwebtoken');
 const { isLikelyResidentialAddress } = require('./location-validation');
 const { buildCollectionPointAddress, geocodeCollectionPoint } = require('./collection-point-geocoding');
 const stripe = require('../services/stripe-payments');
+const { VIDEO_POSTER, mediaError, uploadedUrl, parseMediaOrder, orderedMedia, rejectRemoteVideos } = require('./post-media');
 
 const DONATION_GOAL = 'Doa\u00e7\u00e3o';
 const SALE_GOAL = 'Venda';
@@ -43,24 +44,24 @@ function parseMoneyToCents(value) {
   return Number.isFinite(amount) ? Math.round(amount * 100) : null;
 }
 
-async function requestedPostImages(db, postId, fallbackImage, imageOrder, files) {
-  const existing = new Set((await db.many('SELECT image_url FROM post_images WHERE post_id=$1', [postId])).map((row) => row.image_url));
-  if (fallbackImage) existing.add(fallbackImage);
-  const uploaded = files || [];
-  const order = Array.isArray(imageOrder) ? imageOrder : uploaded.map((_file, index) => `new:${index}`);
-  const urls = order.map((entry) => {
-    const token = String(entry || '');
-    if (token.startsWith('existing:')) {
-      const url = token.slice('existing:'.length);
-      return existing.has(url) ? url : null;
-    }
-    if (token.startsWith('new:')) {
-      const file = uploaded[Number(token.slice('new:'.length))];
-      return file ? (file.location || `/uploads/${file.filename}`) : null;
-    }
-    return null;
-  }).filter(Boolean);
-  return urls.length <= 8 ? urls : null;
+async function postMedia(client, post, body, files = {}) {
+  rejectRemoteVideos(body);
+  const imageRows = (await client.query('SELECT image_url FROM post_images WHERE post_id=$1 ORDER BY sort_order,created_at', [post.id])).rows;
+  const existingImages = imageRows.length ? imageRows.map((image) => ({ url: image.image_url }))
+    : post.image_url && post.image_url !== VIDEO_POSTER ? [{ url: post.image_url }] : [];
+  const existingVideos = (await client.query('SELECT video_url,mime_type FROM post_videos WHERE post_id=$1 ORDER BY sort_order,created_at', [post.id])).rows
+    .map((video) => ({ url: video.video_url, mimeType: video.mime_type }));
+  const images = orderedMedia(existingImages, (files.images || []).map((file) => ({ url: uploadedUrl(file) })), parseMediaOrder(body?.imageOrder, 'fotos'), 8, 'fotos');
+  const videos = orderedMedia(existingVideos, (files.videos || []).map((file) => ({ url: uploadedUrl(file), mimeType: file.mimetype })), parseMediaOrder(body?.videoOrder, 'vídeos'), 2, 'vídeos');
+  if (!images.length && !videos.length) throw mediaError('Adicione pelo menos uma foto ou um vídeo do item.');
+  return { images, videos, cover: images[0]?.url || VIDEO_POSTER };
+}
+
+async function savePostMedia(client, postId, media) {
+  await client.query('DELETE FROM post_images WHERE post_id=$1', [postId]);
+  for (const [index, image] of media.images.entries()) await client.query('INSERT INTO post_images(id,post_id,image_url,sort_order) VALUES($1,$2,$3,$4)', [id('post-image'), postId, image.url, index]);
+  await client.query('DELETE FROM post_videos WHERE post_id=$1', [postId]);
+  for (const [index, video] of media.videos.entries()) await client.query('INSERT INTO post_videos(id,post_id,video_url,mime_type,sort_order) VALUES($1,$2,$3,$4,$5)', [id('post-video'), postId, video.url, video.mimeType, index]);
 }
 
 function userView(row) {
@@ -102,21 +103,22 @@ function paymentView(payment) {
 }
 
 async function postView(db, row, viewerId) {
-  const [author, interest, reputation, saved, liked, offer, images] = await Promise.all([
+  const [author, interest, reputation, saved, liked, offer, images, videos] = await Promise.all([
     db.one('SELECT id,name,city,neighborhood,account_type,business_name,avatar FROM users WHERE id=$1', [row.author_id]),
     db.one("SELECT COUNT(*)::int AS count FROM negotiations WHERE post_id=$1 AND status IN ('interested','reserved','completed')", [row.id]),
     db.one('SELECT COALESCE(ROUND(AVG(rating),1),0)::float AS average, COUNT(*)::int AS count FROM reviews WHERE reviewee_id=$1', [row.author_id]),
     viewerId ? db.one('SELECT 1 FROM favorites WHERE user_id=$1 AND post_id=$2', [viewerId, row.id]) : null,
     viewerId ? db.one('SELECT 1 FROM post_likes WHERE user_id=$1 AND post_id=$2', [viewerId, row.id]) : null,
     viewerId ? db.one('SELECT proposal_status,proposal_amount_cents,proposal_method FROM negotiations WHERE post_id=$1 AND interested_id=$2 ORDER BY updated_at DESC LIMIT 1', [row.id, viewerId]) : null,
-    db.many('SELECT image_url FROM post_images WHERE post_id=$1 ORDER BY sort_order,created_at', [row.id])
+    db.many('SELECT image_url FROM post_images WHERE post_id=$1 ORDER BY sort_order,created_at', [row.id]),
+    db.many('SELECT video_url,mime_type FROM post_videos WHERE post_id=$1 ORDER BY sort_order,created_at', [row.id])
   ]);
   return {
     transport: JSON.parse(row.transport_json || '{}'), hasApproximateLocation: row.area_lat != null && row.area_lng != null,
     id: row.id, authorId: row.author_id,
     author: author && { id: author.id, name: author.name, city: author.city, neighborhood: author.neighborhood || '', accountType: author.account_type, businessName: author.business_name || '', avatar: author.avatar || '' },
     title: row.title, description: row.description, category: row.category, condition: row.condition,
-    goal: row.goal, imageUrl: row.image_url, imageUrls: images.length ? images.map((image) => image.image_url) : [row.image_url], likes: Number(row.likes), comments: Number(row.comments),
+    goal: row.goal, imageUrl: row.image_url, imageUrls: images.length ? images.map((image) => image.image_url) : row.image_url && row.image_url !== VIDEO_POSTER ? [row.image_url] : [], videos: videos.map((video) => ({ url: video.video_url, mimeType: video.mime_type })), likes: Number(row.likes), comments: Number(row.comments),
     location: row.location, createdAt: row.created_at, chipIcon: row.chip_icon, chipLabel: row.chip_label,
     status: row.status, views: Number(row.views || 0), interestedCount: Number(interest?.count || 0),
     saved: Boolean(saved), liked: Boolean(liked), updatedAt: row.updated_at || row.created_at,
@@ -140,7 +142,7 @@ function verifyPassword(password, stored) {
   return expected.length === actual.length && crypto.timingSafeEqual(actual, expected);
 }
 
-function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publisher, upload, sendVerificationEmail, sendPasswordResetEmail, verificationToken, sha256, isConfiguredAdminEmail = () => false }) {
+function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publisher, upload, postUpload, sendVerificationEmail, sendPasswordResetEmail, verificationToken, sha256, isConfiguredAdminEmail = () => false }) {
   const authenticate = async (req, res, next) => {
     const token = String(req.headers.authorization || '').replace(/^Bearer\s+/, '');
     if (!token) return res.status(401).json({ error: 'Authentication required' });
@@ -319,28 +321,32 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       return res.json(result);
     } catch (error) { return next(error); }
   });
-  app.post('/api/posts', authenticate, upload.array('images', 8), async (req, res, next) => {
+  app.post('/api/posts', authenticate, postUpload, async (req, res, next) => {
     try {
       let extras; try {extras=postExtras(req.body);} catch(error){return res.status(error.status||400).json({error:error.message});}
       const body = req.body || {};
-      const imageUrl = req.files?.[0] ? (req.files[0].location || `/uploads/${req.files[0].filename}`) : String(body.imageUrl || '').trim();
       if (!String(body.title || '').trim() || !String(body.description || '').trim() || !String(body.category || '').trim()) return res.status(400).json({ error: 'Informe o título, a descrição e a categoria do item.' });
-      if (!imageUrl) return res.status(400).json({ error: 'Adicione pelo menos uma foto do item.' });
+      if (String(body.title).trim().length > 140 || String(body.description).trim().length > 3000 || String(body.category).trim().length > 60) return res.status(400).json({ error: 'One or more fields exceed the allowed length' });
       const goal = String(body.goal || DONATION_GOAL).trim() || DONATION_GOAL;
       if (!POST_GOALS.has(goal)) return res.status(400).json({ error: 'Goal must be Doação, Troca or Venda' });
-      const post = { id: id('post'), author_id: req.user.id, title: String(body.title).trim(), description: String(body.description).trim(), category: String(body.category).trim(), condition: String(body.condition || 'Bom estado'), goal, image_url: imageUrl, location: String(body.location || req.user.city), created_at: new Date().toISOString(), chip_icon: String(body.chipIcon || (goal === 'Troca' ? 'swap_horiz' : goal === SALE_GOAL ? 'sell' : 'volunteer_activism')), chip_label: String(body.chipLabel || goal) };
+      const legacyImage = req.files?.images?.length ? '' : String(body.imageUrl || '').trim();
+      if (legacyImage && !/^https?:\/\//i.test(legacyImage) && !legacyImage.startsWith('/uploads/')) return res.status(400).json({ error: 'A URL da foto é inválida.' });
+      const post = { id: id('post'), author_id: req.user.id, title: String(body.title).trim(), description: String(body.description).trim(), category: String(body.category).trim(), condition: String(body.condition || 'Bom estado'), goal, image_url: legacyImage, location: String(body.location || req.user.city), created_at: new Date().toISOString(), chip_icon: String(body.chipIcon || (goal === 'Troca' ? 'swap_horiz' : goal === SALE_GOAL ? 'sell' : 'volunteer_activism')), chip_label: String(body.chipLabel || goal) };
       if (isLikelyResidentialAddress(post.location)) return res.status(400).json({ error: 'Location must be a city or neighborhood, not an exact address' });
       const created = await db.transaction(async (client) => {
+        const media = await postMedia(client, post, body, req.files);
+        post.image_url = media.cover;
         await client.query('INSERT INTO posts(id,author_id,title,description,category,condition,goal,image_url,location,created_at,chip_icon,chip_label) VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)', Object.values(post));
         await client.query('UPDATE posts SET transport_json=$1,area_lat=$2,area_lng=$3 WHERE id=$4',[extras.json,extras.lat,extras.lng,post.id]);
-        const files = req.files?.length ? req.files : [{ location: imageUrl }];
-        for (const [index, file] of files.entries()) await client.query('INSERT INTO post_images(id,post_id,image_url,sort_order) VALUES($1,$2,$3,$4)', [id('post-image'), post.id, file.location || `/uploads/${file.filename}`, index]);
+        await savePostMedia(client, post.id, media);
         await client.query('INSERT INTO threads(id,post_id,participants_json,last_message_at) VALUES($1,$2,$3,$4)', [id('thread'), post.id, JSON.stringify([req.user.id]), post.created_at]);
         return client.query('SELECT * FROM posts WHERE id=$1', [post.id]).then((r) => r.rows[0]);
       });
+      req.postMediaCommitted = true;
       return res.status(201).json({ post: await postView(db, created, req.user.id) });
-    } catch (error) { return next(error); }
+    } catch (error) { if (error.postMediaError) return res.status(400).json({ error: error.message }); return next(error); }
   });
+
   app.delete('/api/posts/:id', authenticate, async (req, res, next) => {
     try {
       const post = await db.one('SELECT id,author_id FROM posts WHERE id=$1', [req.params.id]);
@@ -354,62 +360,33 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       return res.json({ ok: true });
     } catch (error) { return next(error); }
   });
-  app.put('/api/posts/:id', authenticate, upload.array('images', 8), async (req, res, next) => {
+  app.put('/api/posts/:id', authenticate, postUpload, async (req, res, next) => {
     try {
       const post = await db.one('SELECT * FROM posts WHERE id=$1', [req.params.id]);
       if (!post) return res.status(404).json({ error: 'Post not found' });
       if (post.author_id !== req.user.id) return res.status(403).json({ error: 'You can only edit your own posts' });
-      if (['Doado', 'Trocado', 'Vendido', 'Encerrado'].includes(post.status)) return res.status(400).json({ error: 'Completed posts cannot be edited' });
-      const value = (key, fallback) => typeof req.body?.[key] === 'string' ? req.body[key].trim() : fallback;
-      const title = value('title', post.title);
-      const description = value('description', post.description);
-      const category = value('category', post.category);
-      const condition = value('condition', post.condition);
-      const goal = value('goal', post.goal);
-      const location = value('location', post.location);
-      if (!title || !description || !category) return res.status(400).json({ error: 'Title, description and category are required' });
-      if (title.length > 140 || description.length > 3000 || category.length > 60 || condition.length > 60 || goal.length > 40 || location.length > 160) return res.status(400).json({ error: 'One or more fields exceed the allowed length' });
-      if (!POST_GOALS.has(goal)) return res.status(400).json({ error: 'Goal must be Doação, Troca or Venda' });
-      if (isLikelyResidentialAddress(location)) return res.status(400).json({ error: 'Location must be a city or neighborhood, not an exact address' });
-      const imageUrl = req.files?.[0] ? (req.files[0].location || `/uploads/${req.files[0].filename}`) : post.image_url;
-      const updated = await db.one('UPDATE posts SET title=$1,description=$2,category=$3,condition=$4,goal=$5,location=$6,image_url=$7,updated_at=now() WHERE id=$8 RETURNING *', [title, description, category, condition, goal, location, imageUrl, post.id]);
-      let requestedImages = null;
-      if (req.body?.imageOrder !== undefined || req.files?.length) {
-        let imageOrder;
-        try {
-          imageOrder = req.body?.imageOrder ? JSON.parse(req.body.imageOrder) : undefined;
-        } catch {
-          return res.status(400).json({ error: 'Invalid image order' });
-        }
-        requestedImages = await requestedPostImages(db, post.id, post.image_url, imageOrder, req.files);
-        if (!requestedImages?.length) return res.status(400).json({ error: 'An image is required for every post' });
-      }
-      if (requestedImages) {
-        await db.transaction(async (client) => {
-          await client.query('DELETE FROM post_images WHERE post_id=$1', [post.id]);
-          for (const [index, url] of requestedImages.entries()) await client.query('INSERT INTO post_images(id,post_id,image_url,sort_order) VALUES($1,$2,$3,$4)', [id('post-image'), post.id, url, index]);
-          await client.query('UPDATE posts SET image_url=$1 WHERE id=$2', [requestedImages[0], post.id]);
-        });
-      }
-      const refreshed = requestedImages ? await db.one('SELECT * FROM posts WHERE id=$1', [post.id]) : updated;
-      return res.json({ post: await postView(db, refreshed, req.user.id) });
-    } catch (error) { return next(error); }
-  });
-  app.patch('/api/posts/:id/status', authenticate, async (req, res, next) => {
-    try {
-      const status = String(req.body?.status || '').trim();
-      if (!['Disponível', 'Encerrado'].includes(status)) return res.status(400).json({ error: 'Use the reservation or completion flow for this status' });
-      const post = await db.one('SELECT * FROM posts WHERE id=$1', [req.params.id]);
-      if (!post) return res.status(404).json({ error: 'Post not found' });
-      if (post.author_id !== req.user.id) return res.status(403).json({ error: 'Only the owner can change this status' });
-      const updated = await db.one(
-        'UPDATE posts SET status=$1,reserved_by=CASE WHEN $1=$2 THEN NULL ELSE reserved_by END,updated_at=now() WHERE id=$3 RETURNING *',
-        [status, 'Disponível', post.id]
-      );
-      if (status === 'Encerrado') await db.query('DELETE FROM favorites WHERE post_id=$1', [post.id]);
+      const updated = await db.transaction(async (client) => {
+        const locked = (await client.query('SELECT * FROM posts WHERE id=$1 FOR UPDATE', [post.id])).rows[0];
+        if (!locked) throw Object.assign(new Error('Post not found'), { status: 404 });
+        if (['Doado', 'Trocado', 'Vendido', 'Encerrado'].includes(locked.status)) throw mediaError('Completed posts cannot be edited');
+        const value = (key, fallback) => typeof req.body?.[key] === 'string' ? req.body[key].trim() : fallback;
+        const title = value('title', locked.title), description = value('description', locked.description);
+        const category = value('category', locked.category), condition = value('condition', locked.condition);
+        const goal = value('goal', locked.goal), location = value('location', locked.location);
+        if (!title || !description || !category) throw mediaError('Title, description and category are required');
+        if (title.length > 140 || description.length > 3000 || category.length > 60 || condition.length > 60 || goal.length > 40 || location.length > 160) throw mediaError('One or more fields exceed the allowed length');
+        if (!POST_GOALS.has(goal)) throw mediaError('Goal must be Doação, Troca or Venda');
+        if (isLikelyResidentialAddress(location)) throw mediaError('Location must be a city or neighborhood, not an exact address');
+        const media = await postMedia(client, locked, req.body, req.files);
+        const row = (await client.query('UPDATE posts SET title=$1,description=$2,category=$3,condition=$4,goal=$5,location=$6,image_url=$7,updated_at=now() WHERE id=$8 RETURNING *', [title, description, category, condition, goal, location, media.cover, locked.id])).rows[0];
+        await savePostMedia(client, locked.id, media);
+        return row;
+      });
+      req.postMediaCommitted = true;
       return res.json({ post: await postView(db, updated, req.user.id) });
-    } catch (error) { return next(error); }
+    } catch (error) { if (error.postMediaError || error.status === 404) return res.status(error.status || 400).json({ error: error.message }); return next(error); }
   });
+
   app.get('/api/posts/:id/interested', authenticate, async (req, res, next) => {
     try {
       const post = await db.one('SELECT id,author_id FROM posts WHERE id=$1', [req.params.id]);

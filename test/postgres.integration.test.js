@@ -142,6 +142,9 @@ test('PostgreSQL provider persists a post, thread, reservation and outbox event'
     assert.equal(saved.accepting, false);
     await require('./acceptance-flow').exerciseAcceptanceFlow((path, options) => request(baseUrl, path, options));
     await require('./offer-cancellation-flow').exerciseOfferCancellation((path, options) => request(baseUrl, path, options));
+    await require('./post-media-flow').exercisePostMedia((path, options) => request(baseUrl, path, options), {
+      rawFetch: (url, options) => fetch(`${baseUrl}${url}`, options)
+    });
     const notificationStore = await new (require('../services/persistence').NotificationStore)({}).open();
     try {
       const injectNotification = notice => notificationStore.process(

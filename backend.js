@@ -14,6 +14,8 @@ const initSqlJs = require('sql.js');
 const { EventPublisher } = require('./distributed/event-publisher');
 const { PostgresRepository, postgresEnabled, postgresConnectionString } = require('./storage/postgres-repository');
 const { registerPostgresRoutes } = require('./storage/postgres-api');
+const { createPostUpload } = require('./storage/post-media-upload');
+const { VIDEO_POSTER, mediaError, uploadedUrl, parseMediaOrder, orderedMedia, rejectRemoteVideos } = require('./storage/post-media');
 const { isLikelyResidentialAddress } = require('./storage/location-validation');
 const { buildCollectionPointAddress, geocodeCollectionPoint } = require('./storage/collection-point-geocoding');
 const { applyMigrations } = require('./scripts/run-postgres-migrations');
@@ -246,26 +248,35 @@ function formatMoney(cents) {
 
 function postImages(postId, fallbackImage) {
   const images = all('SELECT image_url FROM post_images WHERE post_id = ? ORDER BY sort_order, created_at', [postId]).map((item) => item.image_url);
-  return images.length ? images : (fallbackImage ? [fallbackImage] : []);
+  return images.length ? images : (fallbackImage && fallbackImage !== VIDEO_POSTER ? [fallbackImage] : []);
 }
 
-function requestedPostImages(postId, fallbackImage, imageOrder, files) {
-  const existing = new Set(postImages(postId, fallbackImage));
-  const uploaded = files || [];
-  const order = Array.isArray(imageOrder) ? imageOrder : uploaded.map((_file, index) => `new:${index}`);
-  const urls = order.map((entry) => {
-    const token = String(entry || '');
-    if (token.startsWith('existing:')) {
-      const url = token.slice('existing:'.length);
-      return existing.has(url) ? url : null;
-    }
-    if (token.startsWith('new:')) {
-      const file = uploaded[Number(token.slice('new:'.length))];
-      return file ? (file.location || `/uploads/${file.filename}`) : null;
-    }
-    return null;
-  }).filter(Boolean);
-  return urls.length <= 8 ? urls : null;
+function postVideos(postId) {
+  return all('SELECT video_url, mime_type FROM post_videos WHERE post_id = ? ORDER BY sort_order, created_at', [postId])
+    .map((video) => ({ url: video.video_url, mimeType: video.mime_type }));
+}
+
+function postMedia(post, body, files = {}) {
+  rejectRemoteVideos(body);
+  const images = orderedMedia(
+    postImages(post.id, post.image_url).map((url) => ({ url })),
+    (files.images || []).map((file) => ({ url: uploadedUrl(file) })),
+    parseMediaOrder(body?.imageOrder, 'fotos'), 8, 'fotos'
+  );
+  const videos = orderedMedia(
+    postVideos(post.id),
+    (files.videos || []).map((file) => ({ url: uploadedUrl(file), mimeType: file.mimetype })),
+    parseMediaOrder(body?.videoOrder, 'vídeos'), 2, 'vídeos'
+  );
+  if (!images.length && !videos.length) throw mediaError('Adicione pelo menos uma foto ou um vídeo do item.');
+  return { images, videos, cover: images[0]?.url || VIDEO_POSTER };
+}
+
+function savePostMedia(postId, media, createdAt) {
+  run('DELETE FROM post_images WHERE post_id = ?', [postId]);
+  media.images.forEach((image, index) => run('INSERT INTO post_images (id, post_id, image_url, sort_order, created_at) VALUES (?, ?, ?, ?, ?)', [uid('post-image'), postId, image.url, index, createdAt]));
+  run('DELETE FROM post_videos WHERE post_id = ?', [postId]);
+  media.videos.forEach((video, index) => run('INSERT INTO post_videos (id, post_id, video_url, mime_type, sort_order, created_at) VALUES (?, ?, ?, ?, ?, ?)', [uid('post-video'), postId, video.url, video.mimeType, index, createdAt]));
 }
 
 function googleOauthEnabled() {
@@ -750,6 +761,7 @@ function publicPost(row, viewerId = null) {
     goal: row.goal,
     imageUrl: row.image_url,
     imageUrls: postImages(row.id, row.image_url),
+    videos: postVideos(row.id),
     likes: row.likes,
     comments: row.comments,
     location: approximateLocation(row.location),
@@ -911,6 +923,18 @@ function seedDatabase() {
       FOREIGN KEY(post_id) REFERENCES posts(id)
     );
   `);
+  run(`
+    CREATE TABLE IF NOT EXISTS post_videos (
+      id TEXT PRIMARY KEY,
+      post_id TEXT NOT NULL,
+      video_url TEXT NOT NULL,
+      mime_type TEXT NOT NULL CHECK (mime_type IN ('video/mp4', 'video/webm')),
+      sort_order INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      FOREIGN KEY(post_id) REFERENCES posts(id) ON DELETE CASCADE
+    );
+  `);
+  run('CREATE INDEX IF NOT EXISTS post_videos_post_order_idx ON post_videos(post_id, sort_order)');
   const userColumns = new Set(all('PRAGMA table_info(users)').map((column) => column.name));
   ['neighborhood', 'cep', 'address', 'account_type', 'business_name', 'cnpj'].forEach((column) => {
     if (!userColumns.has(column)) {
@@ -1655,6 +1679,8 @@ async function start() {
     }
   });
 
+  const postUpload = createPostUpload({ uploadDir: UPLOAD_DIR, objectStorage });
+
   const authRateLimit = createRateLimiter({ windowMs: 15 * 60 * 1000, maxRequests: 30 });
   const publicLookupRateLimit = createRateLimiter({ windowMs: 15 * 60 * 1000, maxRequests: 60 });
   const mapRouteRateLimit = createRateLimiter({ windowMs: 15 * 60 * 1000, maxRequests: 60 });
@@ -1687,6 +1713,7 @@ async function start() {
       uid,
       publisher: { flush: flushPendingEvents },
       upload,
+      postUpload,
       sendVerificationEmail,
       sendPasswordResetEmail,
       verificationToken,
@@ -2195,12 +2222,13 @@ async function start() {
     run('DELETE FROM negotiations WHERE post_id = ?', [req.params.id]);
     run('DELETE FROM reports WHERE target_type = ? AND target_id = ?', ['post', req.params.id]);
     run('DELETE FROM post_images WHERE post_id = ?', [req.params.id]);
+    run('DELETE FROM post_videos WHERE post_id = ?', [req.params.id]);
     run('DELETE FROM posts WHERE id = ?', [req.params.id]);
     persistDb();
     res.json({ ok: true });
   });
 
-  app.put('/api/posts/:id', authMiddleware, upload.array('images', 8), (req, res) => {
+  app.put('/api/posts/:id', authMiddleware, postUpload, (req, res) => {
     const post = get('SELECT * FROM posts WHERE id = ?', [req.params.id]);
     if (!post) return res.status(404).json({ error: 'Post not found' });
     if (post.author_id !== req.user.id) return res.status(403).json({ error: 'You can only edit your own posts' });
@@ -2215,26 +2243,18 @@ async function start() {
     if (title.length > 140 || description.length > 3000 || category.length > 60 || condition.length > 60 || goal.length > 40 || location.length > 160) return res.status(400).json({ error: 'One or more fields exceed the allowed length' });
     if (!POST_GOALS.has(goal)) return res.status(400).json({ error: 'Goal must be Doação, Troca or Venda' });
     if (isLikelyResidentialAddress(location)) return res.status(400).json({ error: 'Location must be a city or neighborhood, not an exact address' });
-    const files = req.files || [];
-    let requestedImages = null;
-    if (req.body?.imageOrder !== undefined || files.length) {
-      try {
-        const imageOrder = req.body?.imageOrder ? JSON.parse(req.body.imageOrder) : undefined;
-        requestedImages = requestedPostImages(post.id, post.image_url, imageOrder, files);
-      } catch {
-        return res.status(400).json({ error: 'Invalid image order' });
-      }
-      if (!requestedImages?.length) return res.status(400).json({ error: 'An image is required for every post' });
-    }
-    const imageUrl = files[0] ? (files[0].location || `/uploads/${files[0].filename}`) : post.image_url;
+    let media;
+    try { media = postMedia(post, req.body, req.files); }
+    catch (error) { return res.status(error.status || 400).json({ error: error.message }); }
     const updatedAt = new Date().toISOString();
-    run('UPDATE posts SET title = ?, description = ?, category = ?, condition = ?, goal = ?, location = ?, image_url = ?, updated_at = ? WHERE id = ?', [title, description, category, condition, goal, location, imageUrl, updatedAt, post.id]);
-    if (requestedImages) {
-      run('DELETE FROM post_images WHERE post_id = ?', [post.id]);
-      requestedImages.forEach((url, index) => run('INSERT INTO post_images (id, post_id, image_url, sort_order, created_at) VALUES (?, ?, ?, ?, ?)', [uid('post-image'), post.id, url, index, updatedAt]));
-      run('UPDATE posts SET image_url = ? WHERE id = ?', [requestedImages[0], post.id]);
-    }
+    try {
+      db.exec('BEGIN TRANSACTION');
+      run('UPDATE posts SET title = ?, description = ?, category = ?, condition = ?, goal = ?, location = ?, image_url = ?, updated_at = ? WHERE id = ?', [title, description, category, condition, goal, location, media.cover, updatedAt, post.id]);
+      savePostMedia(post.id, media, updatedAt);
+      db.exec('COMMIT');
+    } catch (error) { try { db.exec('ROLLBACK'); } catch {} throw error; }
     persistDb();
+    req.postMediaCommitted = true;
     return res.json({ post: publicPost(get('SELECT * FROM posts WHERE id = ?', [post.id]), req.user.id) });
   });
 
@@ -2462,7 +2482,7 @@ async function start() {
     res.status(201).json({ comment: { ...comment, name: req.user.name, avatar: req.user.avatar }, comments: get('SELECT comments FROM posts WHERE id = ?', [req.params.id]).comments });
   });
 
-  app.post('/api/posts', authMiddleware, upload.array('images', 8), (req, res) => {
+  app.post('/api/posts', authMiddleware, postUpload, (req, res) => {
     let extras; try { extras=postExtras(req.body); } catch(error) {return res.status(error.status||400).json({error:error.message});}
     const { title, description, category, condition, goal, location, chipLabel, chipIcon } = req.body || {};
     const normalizedTitle = String(title || '').trim();
@@ -2471,10 +2491,6 @@ async function start() {
 
     if (!normalizedTitle || !normalizedDescription || !normalizedCategory) {
       return res.status(400).json({ error: 'Missing required fields' });
-    }
-
-    if (!req.files?.length && !String(req.body?.imageUrl || '').trim()) {
-      return res.status(400).json({ error: 'An image is required for every post' });
     }
 
     if (normalizedTitle.length > 140 || normalizedDescription.length > 3000 || normalizedCategory.length > 60) {
@@ -2486,7 +2502,13 @@ async function start() {
       return res.status(400).json({ error: 'Goal must be Doação, Troca or Venda' });
     }
 
-    const imageUrl = req.files?.[0] ? (req.files[0].location || `/uploads/${req.files[0].filename}`) : safeImageUrl(req.body.imageUrl, '');
+    let media;
+    try {
+      rejectRemoteVideos(req.body);
+      const imageUrl = req.files?.images?.length ? '' : safeImageUrl(req.body.imageUrl, '');
+      media = postMedia({ id: '', image_url: imageUrl }, req.body, req.files);
+    } catch (error) { return res.status(error.status || 400).json({ error: error.message }); }
+    const imageUrl = media.cover;
     const createdAt = new Date().toISOString();
     const post = {
       id: uid('post'),
@@ -2508,15 +2530,14 @@ async function start() {
       return res.status(400).json({ error: 'Location must be a city or neighborhood, not an exact address' });
     }
 
+    try {
+      db.exec('BEGIN TRANSACTION');
     run(
       `INSERT INTO posts (id, author_id, title, description, category, condition, goal, image_url, likes, comments, location, created_at, chip_icon, chip_label)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       [post.id, post.author_id, post.title, post.description, post.category, post.condition, post.goal, post.image_url, post.likes, post.comments, post.location, post.created_at, post.chip_icon, post.chip_label]
     );
-    const imageRows = req.files?.length
-      ? req.files.map((file, index) => [uid('post-image'), post.id, file.location || `/uploads/${file.filename}`, index, createdAt])
-      : [[uid('post-image'), post.id, imageUrl, 0, createdAt]];
-    imageRows.forEach((values) => run('INSERT INTO post_images (id, post_id, image_url, sort_order, created_at) VALUES (?, ?, ?, ?, ?)', values));
+    savePostMedia(post.id, media, createdAt);
 
     run('UPDATE posts SET transport_json=?,area_lat=?,area_lng=? WHERE id=?',[extras.json,extras.lat,extras.lng,post.id]);
     const threadId = uid('thread');
@@ -2526,7 +2547,10 @@ async function start() {
       [threadId, post.id, JSON.stringify([req.user.id]), 0, createdAt]
     );
 
+      db.exec('COMMIT');
+    } catch (error) { try { db.exec('ROLLBACK'); } catch {} throw error; }
     persistDb();
+    req.postMediaCommitted = true;
     return res.status(201).json({ post: publicPost(get('SELECT * FROM posts WHERE id = ?', [post.id])) });
   });
 
@@ -2853,6 +2877,7 @@ async function start() {
       run('DELETE FROM comments WHERE post_id = ?', [postId]);
       run('DELETE FROM reports WHERE target_type = ? AND target_id = ?', ['post', postId]);
       run('DELETE FROM negotiations WHERE post_id = ?', [postId]);
+      run('DELETE FROM post_videos WHERE post_id = ?', [postId]);
       run('DELETE FROM posts WHERE id = ?', [postId]);
     });
     run('DELETE FROM favorites WHERE user_id = ?', [req.user.id]);
@@ -2927,6 +2952,7 @@ async function start() {
       run('DELETE FROM reviews WHERE negotiation_id IN (' + negotiationIds.map(() => '?').join(',') + ')', negotiationIds);
       run('DELETE FROM negotiations WHERE id IN (' + negotiationIds.map(() => '?').join(',') + ')', negotiationIds);
     }
+    run('DELETE FROM post_videos WHERE post_id IN (SELECT id FROM posts WHERE author_id = ?)', [user.id]);
     run('DELETE FROM posts WHERE author_id = ?', [user.id]);
     run('DELETE FROM favorites WHERE user_id = ?', [user.id]);
     run('DELETE FROM post_views WHERE user_id = ?', [user.id]);
@@ -2963,6 +2989,7 @@ async function start() {
     negotiationIds.forEach((id) => run('DELETE FROM reviews WHERE negotiation_id = ?', [id]));
     run('DELETE FROM negotiations WHERE post_id = ?', [post.id]);
     run('DELETE FROM reports WHERE target_type = ? AND target_id = ?', ['post', post.id]);
+    run('DELETE FROM post_videos WHERE post_id = ?', [post.id]);
     run('DELETE FROM posts WHERE id = ?', [post.id]);
     persistDb();
     return res.json({ ok: true });

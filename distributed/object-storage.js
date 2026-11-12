@@ -1,4 +1,4 @@
-const { CreateBucketCommand, HeadBucketCommand, PutBucketPolicyCommand, PutObjectCommand, S3Client } = require('@aws-sdk/client-s3');
+const { CreateBucketCommand, DeleteObjectCommand, HeadBucketCommand, PutBucketPolicyCommand, PutObjectCommand, S3Client } = require('@aws-sdk/client-s3');
 
 function createObjectStorage({ bucket, endpoint, publicBaseUrl, region, accessKeyId, secretAccessKey, forcePathStyle = false }) {
   if (!bucket || !endpoint || !accessKeyId || !secretAccessKey) return null;
@@ -15,6 +15,7 @@ function createObjectStorage({ bucket, endpoint, publicBaseUrl, region, accessKe
     endpoint,
     region: region || (isR2 ? 'auto' : 'us-east-1'),
     forcePathStyle,
+    requestChecksumCalculation: 'WHEN_REQUIRED',
     credentials: { accessKeyId, secretAccessKey }
   });
 
@@ -54,9 +55,12 @@ function createObjectStorage({ bucket, endpoint, publicBaseUrl, region, accessKe
         console.info('[object-storage] This provider manages public access outside S3 bucket policies; configure its public image domain.');
       }
     },
-    async put({ key, body, contentType }) {
-      await client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: contentType }));
+    async put({ key, body, contentType, contentLength }) {
+      await client.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: contentType, ...(contentLength === undefined ? {} : { ContentLength: contentLength }) }));
       return `${imageBaseUrl.replace(/\/$/, '')}/${encodeURIComponent(key).replace(/%2F/g, '/')}`;
+    },
+    async remove({ key }) {
+      await client.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
     }
   };
 }

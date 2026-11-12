@@ -72,7 +72,9 @@ RabbitMQ, o serviço de notificações e o serviço de impacto.
 - Login opcional com Google;
 - Feed de publicações;
 - Publicações para doação, troca ou venda;
-- Upload de até oito imagens por anúncio;
+- Upload de até oito fotos (5 MB cada) e dois vídeos MP4 ou WebM (50 MB cada) por anúncio;
+- Prévia da foto única sem recorte, escolha da capa e galeria com reprodução de vídeos;
+- Publicação com fotos, vídeos ou ambos, com edição e remoção das mídias;
 - Curtidas, favoritos, comentários e visualizações;
 - Edição e exclusão de anúncios;
 - Status `Disponível`, `Reservado`, `Doado`, `Trocado`, `Vendido` e `Encerrado`.
@@ -315,7 +317,7 @@ script [`scripts/run-postgres-migrations.js`](scripts/run-postgres-migrations.js
 
 As entidades principais incluem:
 
-`users`, `posts`, `post_images`, `threads`, `messages`, `negotiations`,
+`users`, `posts`, `post_images`, `post_videos`, `threads`, `messages`, `negotiations`,
 `negotiation_proposals`, `payments`, `reviews`, `comments`, `favorites`,
 `notifications`, `reports`, `collection_points` e `event_outbox`.
 
@@ -692,7 +694,7 @@ bucket sem tentar aplicar essa política. A mensagem de acesso verificado é
 informativa; falhas reais de credenciais, permissões ou upload continuam sendo
 erros. Outros provedores compatíveis com políticas S3 mantêm esse comportamento.
 
-Para imagens no R2, configure nas variáveis do serviço:
+Para fotos e vídeos no R2, configure nas variáveis do serviço:
 
 - `S3_ENDPOINT`: endpoint S3 da conta R2.
 - `S3_BUCKET`, `S3_ACCESS_KEY_ID`, `S3_SECRET_ACCESS_KEY`: bucket e credenciais.

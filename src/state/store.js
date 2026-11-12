@@ -13,6 +13,21 @@ const notificationThreadId = (notification) => {
   catch { return null; }
 };
 
+function postRequestBody(payload, editing = false) {
+  const images = Array.isArray(payload.images) ? payload.images : payload.image instanceof File ? [payload.image] : [];
+  const videos = Array.isArray(payload.videos) ? payload.videos : [];
+  if (!images.length && !videos.length && !(editing && (Array.isArray(payload.images) || Array.isArray(payload.videos)))) return payload;
+  const body = new FormData();
+  Object.entries(payload).forEach(([key, value]) => {
+    if (!['image', 'images', 'videos'].includes(key) && value !== undefined) {
+      body.append(key, value !== null && typeof value === 'object' ? JSON.stringify(value) : value);
+    }
+  });
+  images.forEach((file) => body.append('images', file));
+  videos.forEach((file) => body.append('videos', file));
+  return body;
+}
+
 export const useAppStore = create((set, get) => ({
   initialized: false,
   session: null,
@@ -141,13 +156,7 @@ export const useAppStore = create((set, get) => ({
     return result.user;
   },
   createPost: async (payload) => {
-    const images = Array.isArray(payload.images) ? payload.images : payload.image instanceof File ? [payload.image] : [];
-    const body = images.length ? Object.entries(payload).reduce((formData, [key, value]) => {
-      if (key !== 'image' && key !== 'images' && value !== undefined) formData.append(key, value);
-      return formData;
-    }, new FormData()) : payload;
-    images.forEach((image) => body.append('images', image));
-    const result = await api.createPost(body);
+    const result = await api.createPost(postRequestBody(payload));
     set((state) => ({ posts: [result.post, ...state.posts] }));
     return result.post;
   },
@@ -173,14 +182,7 @@ export const useAppStore = create((set, get) => ({
     return result;
   },
   updatePost: async (postId, payload) => {
-    const body = Array.isArray(payload.images)
-      ? Object.entries(payload).reduce((formData, [key, value]) => {
-        if (key !== 'images' && value !== undefined) formData.append(key, Array.isArray(value) ? JSON.stringify(value) : value);
-        return formData;
-      }, new FormData())
-      : payload;
-    if (Array.isArray(payload.images)) payload.images.forEach((image) => body.append('images', image));
-    const result = await api.updatePost(postId, body);
+    const result = await api.updatePost(postId, postRequestBody(payload, true));
     set((state) => ({ posts: state.posts.map((post) => post.id === postId ? result.post : post) }));
     return result.post;
   },

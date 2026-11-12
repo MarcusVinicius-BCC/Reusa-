@@ -5,6 +5,8 @@ import StripeConnectionCard from './components/StripeConnectionCard';
 import { stripeConnectionState } from './services/stripe-connection-state.mjs';
 import CampaignCreateForm from './components/CampaignCreateForm';
 import CampaignFeed from './components/CampaignFeed';
+import PostMediaPicker from './components/PostMediaPicker';
+import PostMediaGallery from './components/PostMediaGallery';
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Navigate, useLocation, useNavigate } from 'react-router-dom';
@@ -17,6 +19,10 @@ import 'leaflet/dist/leaflet.css';
 import feedLogo from './assets/reusa-logo.png';
 
 const BRAZIL_TIME_ZONE = 'America/Sao_Paulo';
+const postMediaItems = (post) => [
+  ...(Array.isArray(post.imageUrls) ? post.imageUrls : post.imageUrl && post.imageUrl !== '/media/video-placeholder.svg' ? [post.imageUrl] : []).map((url) => ({ url, kind: 'image' })),
+  ...(post.videos || []).map((video) => ({ url: video.url, mimeType: video.mimeType, kind: 'video' }))
+];
 const isValidEmailFormat = (value) => {
   const email = String(value || '').trim();
   if (email.length > 254 || email.includes('..')) return false;
@@ -971,9 +977,8 @@ function FeedCard({ post, onNavigate, onOpenChat, onOpenPayment }) {
         {post.authorId === session?.id ? <button className="icon-btn" onClick={removePost} title="Excluir anúncio" aria-label="Excluir anúncio"><span className="material-symbols-outlined">delete</span></button> : null}
         {offerStatus !== 'none' ? <div className={`offer-status post-offer-status offer-status-${offerStatus}`} role="status" title={offerStatusLabel}><span className="material-symbols-outlined" aria-hidden="true">{offerStatusIcon}</span><span className="offer-status-label">{offerStatusLabel}</span></div> : null}
       </div>
-      <div className="post-image-wrap post-card-clickable" onClick={() => onNavigate(`/anuncios/${post.id}`)} role="link" tabIndex="0" onKeyDown={(event) => { if (event.key === 'Enter' || event.key === ' ') onNavigate(`/anuncios/${post.id}`); }}>
-        <img className="post-image" src={post.imageUrl} alt={post.title} />
-        {post.imageUrls?.length > 1 ? <span className="post-image-count"><span className="material-symbols-outlined">photo_library</span>{post.imageUrls.length}</span> : null}
+      <div className="post-image-wrap">
+        <PostMediaGallery post={post} variant="feed" onOpenPost={() => onNavigate(`/anuncios/${post.id}`)} />
         <div className="chip-float"><span className="material-symbols-outlined">{post.chipIcon}</span>{post.chipLabel}</div>
       </div>
       <div className="post-body">
@@ -1137,11 +1142,8 @@ function CreatePostScreen({ onBack, onSuccess }) {
   const postForm = useAppStore((state) => state.postForm);
   const setPostForm = useAppStore((state) => state.setPostForm);
   const session = useAppStore((state) => state.session);
-  const [images, setImages] = useState([]);
+  const [media, setMedia] = useState([]);
   const [publishing, setPublishing] = useState(false);
-  const imagePreviews = useMemo(() => images.map((image) => URL.createObjectURL(image)), [images]);
-
-  useEffect(() => () => imagePreviews.forEach((preview) => URL.revokeObjectURL(preview)), [imagePreviews]);
   const categories = [
     ['moveis', 'chair', 'Móveis'],
     ['eletronicos', 'devices', 'Eletrônicos'],
@@ -1162,8 +1164,8 @@ function CreatePostScreen({ onBack, onSuccess }) {
       alert('Informe a descrição do item.');
       return;
     }
-    if (!images.length) {
-      alert('Adicione uma foto do item para publicar o anúncio.');
+    if (!media.length) {
+      alert('Adicione uma foto ou um vídeo do item para publicar o anúncio.');
       return;
     }
     const selectedCategory = categories.find(([value]) => value === postForm.categoryId);
@@ -1197,9 +1199,9 @@ function CreatePostScreen({ onBack, onSuccess }) {
     setPublishing(true);
     try {
       const { customCategory: ignoredCustomCategory, category: ignoredCategory, ...postPayload } = postForm;
-      await createPost({ ...postPayload, categoryId, category, images });
+      await createPost({ ...postPayload, categoryId, category, images: media.filter((item) => item.kind === 'image').map((item) => item.file), videos: media.filter((item) => item.kind === 'video').map((item) => item.file) });
       setPostForm({});
-      setImages([]);
+      setMedia([]);
       onSuccess();
     } catch (error) {
       alert(error.message);
@@ -1218,11 +1220,8 @@ function CreatePostScreen({ onBack, onSuccess }) {
         <form onSubmit={submit} className="publish-form">
           <p className="publish-required-note"><strong>*</strong> Campos obrigatórios</p>
           <section className="publish-section publish-photo-section">
-            <div className="publish-section-head"><div><span className="publish-step">01</span><h3>Mostre seu item <strong className="required-mark" title="Campo obrigatório" aria-label="Campo obrigatório">*</strong></h3></div><span>Uma boa foto faz diferença</span></div>
-            <label className={images.length ? 'publish-image-picker has-image' : 'publish-image-picker'}>
-              {images.length ? <div className="publish-image-previews">{images.map((image, index) => <span key={`${image.name}-${index}`}><img src={imagePreviews[index]} alt={`Prévia ${index + 1}`} /><button type="button" onClick={(event) => { event.preventDefault(); setImages((current) => current.filter((_, imageIndex) => imageIndex !== index)); }} aria-label={`Remover foto ${index + 1}`}>×</button></span>)}</div> : <><span className="publish-image-icon material-symbols-outlined">add_a_photo</span><strong>Adicionar fotos</strong><small>Até 8 imagens • JPG, PNG, WebP ou GIF • até 5 MB cada</small></>}
-              <input type="file" multiple accept="image/jpeg,image/png,image/gif,image/webp,image/avif" onChange={(event) => setImages((current) => [...current, ...Array.from(event.target.files || [])].slice(0, 8))} />
-            </label>
+            <div className="publish-section-head"><div><span className="publish-step">01</span><h3>Mostre seu item <strong className="required-mark" title="Campo obrigatório" aria-label="Campo obrigatório">*</strong></h3></div><span>Fotos e vídeos mostram os detalhes</span></div>
+            <PostMediaPicker items={media} onChange={setMedia} disabled={publishing} />
           </section>
 
           <section className="publish-section">
@@ -1312,8 +1311,7 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
   const [offerError, setOfferError] = useState('');
   const [editing, setEditing] = useState(false);
   const [editForm, setEditForm] = useState({});
-  const [editImages, setEditImages] = useState([]);
-  const [editImagePreviews, setEditImagePreviews] = useState([]);
+  const [editMedia, setEditMedia] = useState([]);
   const [editSaving, setEditSaving] = useState(false);
   const [reviewForm, setReviewForm] = useState({ rating: 5, comment: '' });
   const [reviewed, setReviewed] = useState(false);
@@ -1356,7 +1354,7 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
     Promise.all([api.post(postId), api.comments(postId)]).then(([postResult, commentResult]) => {
       setPost(postResult.post);
       setEditForm({ title: postResult.post.title, description: postResult.post.description, category: postResult.post.category, condition: postResult.post.condition, goal: postResult.post.goal, location: postResult.post.location });
-      setEditImages((postResult.post.imageUrls || [postResult.post.imageUrl]).map((url) => ({ url })));
+      setEditMedia(postMediaItems(postResult.post));
       setComments(commentResult.comments || []);
     }).catch((error) => alert(error.message)).finally(() => setBusy(false));
     if (session) api.negotiation(postId).then(async (result) => {
@@ -1379,18 +1377,10 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
     }).catch(() => {});
   }, [postId, session?.id]);
 
-  useEffect(() => {
-    const previews = editImages.map((image) => image.file ? URL.createObjectURL(image.file) : image.url);
-    setEditImagePreviews(previews);
-    return () => previews.forEach((preview, index) => {
-      if (editImages[index]?.file) URL.revokeObjectURL(preview);
-    });
-  }, [editImages]);
-
   function resetEditDraft(source = post) {
     if (!source) return;
     setEditForm({ title: source.title || '', description: source.description || '', category: source.category || '', condition: source.condition || '', goal: source.goal || '', location: source.location || '' });
-    setEditImages((source.imageUrls?.length ? source.imageUrls : [source.imageUrl]).filter(Boolean).map((url) => ({ url })));
+    setEditMedia(postMediaItems(source));
   }
 
   function openEdit() {
@@ -1401,13 +1391,6 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
   function cancelEdit() {
     resetEditDraft();
     setEditing(false);
-  }
-
-  function addEditImages(event) {
-    const files = Array.from(event.target.files || []);
-    event.target.value = '';
-    if (!files.length) return;
-    setEditImages((current) => [...current, ...files.map((file) => ({ file }))].slice(0, 8));
   }
 
   async function refreshPost() {
@@ -1602,17 +1585,19 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
   async function saveEdit(event) {
     event.preventDefault();
     if (editSaving) return;
-    if (!editImages.length) {
-      alert('O anúncio precisa ter pelo menos uma foto.');
+    if (!editMedia.length) {
+      alert('O anúncio precisa ter pelo menos uma foto ou um vídeo.');
       return;
     }
     setEditSaving(true);
     try {
-      const newFiles = editImages.filter((image) => image.file).map((image) => image.file);
-      const imageOrder = editImages.map((image) => image.file
-        ? `new:${newFiles.indexOf(image.file)}`
-        : `existing:${image.url}`);
-      const updated = await useAppStore.getState().updatePost(post.id, { ...editForm, images: newFiles, imageOrder });
+      const images = editMedia.filter((item) => item.kind === 'image');
+      const videos = editMedia.filter((item) => item.kind === 'video');
+      const newImages = images.filter((item) => item.file).map((item) => item.file);
+      const newVideos = videos.filter((item) => item.file).map((item) => item.file);
+      const imageOrder = images.map((item) => item.file ? `new:${newImages.indexOf(item.file)}` : `existing:${item.url}`);
+      const videoOrder = videos.map((item) => item.file ? `new:${newVideos.indexOf(item.file)}` : `existing:${item.url}`);
+      const updated = await useAppStore.getState().updatePost(post.id, { ...editForm, images: newImages, videos: newVideos, imageOrder, videoOrder });
       setPost(updated); setEditing(false);
     } catch (error) { alert(error.message); } finally { setEditSaving(false); }
   }
@@ -1633,7 +1618,7 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
   if (busy || !post) return <div className="loading-stage"><span className="material-symbols-outlined">recycling</span><p>Carregando anúncio...</p></div>;
 
   return <div className="detail-screen"><UnifiedTopbar onBack={onBack} /><main className="detail-page">
-    <section className="detail-image"><img src={post.imageUrl} alt={post.title} /><span className={`status-tag status-${String(post.status || 'Disponível').toLowerCase().replace(/\s+/g, '-')}`}>{post.status || 'Disponível'}</span>{post.imageUrls?.length > 1 ? <div className="detail-gallery-thumbs">{post.imageUrls.map((imageUrl) => <button type="button" key={imageUrl} onClick={() => setPost((current) => ({ ...current, imageUrl }))}><img src={imageUrl} alt="" /></button>)}</div> : null}</section>
+    <section className="detail-image"><PostMediaGallery post={post} /><span className={`status-tag status-${String(post.status || 'Disponível').toLowerCase().replace(/\s+/g, '-')}`}>{post.status || 'Disponível'}</span></section>
     <section className="detail-summary"><div className="detail-kicker"><span>{post.category}</span><span>{post.condition}</span></div><h1>{post.title}</h1><p>{post.description}</p><div className="detail-info"><span><i className="material-symbols-outlined">{post.goal === 'Venda' ? 'sell' : post.goal === 'Troca' ? 'swap_horiz' : 'volunteer_activism'}</i>{post.goal}</span><span><i className="material-symbols-outlined">location_on</i>{post.location}</span><span><i className="material-symbols-outlined">schedule</i>{formatBrazilDate(post.createdAt)} às {formatBrazilTime(post.createdAt)}</span></div><div className="detail-actions"><button className={post.saved ? 'secondary-btn saved-btn' : 'secondary-btn'} onClick={save} title={post.saved ? 'Remover dos salvos' : 'Salvar anúncio'} aria-label={post.saved ? 'Remover dos salvos' : 'Salvar anúncio'}><span className="material-symbols-outlined">{post.saved ? 'bookmark' : 'bookmark_border'}</span>{post.saved ? 'Salvo' : 'Salvar'}</button><button className="secondary-btn" onClick={share} title="Compartilhar anúncio" aria-label="Compartilhar anúncio"><span className="material-symbols-outlined">share</span>Compartilhar</button>{!ownPost ? <button className="primary-btn" disabled={post.status !== 'Disponível'} onClick={startConversation}><span className="material-symbols-outlined">handshake</span>Tenho interesse</button> : null}</div></section>
     <section className="detail-owner"><div>{post.author.avatar ? <img src={post.author.avatar} alt={post.author.name} /> : <span className="avatar-placeholder material-symbols-outlined">person</span>}</div><div><span>Anunciante</span><h2>{post.author.name}</h2><p>{post.author.city} · {post.authorReputation ? `⭐ ${post.authorReputation.toFixed(1)} (${post.authorReviewCount})` : 'Novo na comunidade'}</p></div>{!ownPost ? <div className="owner-actions"><button className="text-btn" onClick={blockAuthor} title="Bloquear anunciante" aria-label="Bloquear anunciante">Bloquear</button><button className="text-btn" onClick={() => openReport('user', post.authorId)} title="Denunciar anunciante" aria-label="Denunciar anunciante">Denunciar</button></div> : null}</section>
     {ownPost ? (
@@ -1652,35 +1637,16 @@ function PostDetailScreen({ postId, onBack, onNavigate }) {
               <div>
                 <span className="eyebrow">Edição do anúncio</span>
                 <h3>Atualize seu anúncio</h3>
-                <p>Revise fotos e informações antes de salvar as alterações.</p>
+                <p>Revise fotos, vídeos e informações antes de salvar as alterações.</p>
               </div>
               <button type="button" className="edit-close-btn" onClick={cancelEdit} disabled={editSaving} aria-label="Cancelar edição" title="Cancelar edição"><span className="material-symbols-outlined">close</span></button>
             </header>
             <section className="edit-form-section edit-media-section">
               <div className="edit-section-heading">
                 <span className="edit-section-icon material-symbols-outlined">photo_library</span>
-                <div><span className="eyebrow">Fotos</span><h3>Mostre o item por todos os ângulos</h3><p>A primeira foto será a capa do anúncio.</p></div>
+                <div><span className="eyebrow">Fotos e vídeos</span><h3>Mostre o item por todos os ângulos</h3><p>A primeira foto será a capa. Se houver apenas vídeos, eles poderão ser reproduzidos no anúncio.</p></div>
               </div>
-              <div className="edit-media-tools">
-                <span className="edit-photo-counter"><span className="material-symbols-outlined">collections</span>{editImages.length}/8 fotos</span>
-                <label className="secondary-btn edit-gallery-add"><span className="material-symbols-outlined">add_photo_alternate</span>Adicionar foto<input type="file" multiple accept="image/jpeg,image/png,image/gif,image/webp,image/avif" onChange={addEditImages} disabled={editImages.length >= 8} /></label>
-              </div>
-              <div className="edit-gallery-grid">
-                {editImages.map((image, index) => (
-                  <article className={index === 0 ? 'edit-gallery-item is-primary' : 'edit-gallery-item'} key={image.file ? `${image.file.name}-${index}` : image.url}>
-                    <img src={editImagePreviews[index] || image.url} alt={index === 0 ? 'Foto principal' : `Foto ${index + 1}`} />
-                    <span className="edit-image-order">{index + 1}</span>
-                    <div className="edit-gallery-item-footer">
-                      <strong>{index === 0 ? 'Foto principal' : `Foto ${index + 1}`}</strong>
-                      <div className="edit-gallery-controls">
-                        <button type="button" disabled={index === 0} onClick={() => setEditImages((current) => { const next = [...current]; [next[index - 1], next[index]] = [next[index], next[index - 1]]; return next; })} aria-label="Mover foto para a esquerda" title="Mover para a esquerda"><span className="material-symbols-outlined">arrow_back</span></button>
-                        <button type="button" disabled={index === editImages.length - 1} onClick={() => setEditImages((current) => { const next = [...current]; [next[index], next[index + 1]] = [next[index + 1], next[index]]; return next; })} aria-label="Mover foto para a direita" title="Mover para a direita"><span className="material-symbols-outlined">arrow_forward</span></button>
-                        <button type="button" disabled={editImages.length === 1} onClick={() => setEditImages((current) => current.filter((_, imageIndex) => imageIndex !== index))} aria-label="Remover foto" title="Remover foto"><span className="material-symbols-outlined">delete</span></button>
-                      </div>
-                    </div>
-                  </article>
-                ))}
-              </div>
+              <PostMediaPicker items={editMedia} onChange={setEditMedia} disabled={editSaving} />
             </section>
             <section className="edit-form-section edit-details-section">
               <div className="edit-section-heading">
