@@ -194,7 +194,16 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
         await client.query(`INSERT INTO users (id,name,email,password_hash,city,neighborhood,cep,address,account_type,business_name,cnpj,interests_json,avatar,achievements_json,email_verified,email_verification_token_hash,email_verification_expires_at,created_at,last_active_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)`, Object.values(user));
         return client.query('SELECT * FROM users WHERE id=$1', [user.id]).then((r) => r.rows[0]);
       });
-      await sendVerificationEmail(created.email, created.name, verification.raw, `${req.protocol}://${req.get('host')}`);
+      try {
+        await sendVerificationEmail(created.email, created.name, verification.raw, `${req.protocol}://${req.get('host')}`);
+      } catch (error) {
+        const requestId = req.correlationId || id('request');
+        console.error(`[registration-email-error] ${requestId}:`, error);
+        return res.status(503).json({
+          error: 'A conta foi criada, mas não foi possível enviar o e-mail de confirmação. Configure RESEND_API_KEY e EMAIL_FROM e solicite um novo envio.',
+          requestId
+        });
+      }
       return res.status(201).json({ token: createToken(created.id), user: userView(created), verificationRequired: true });
     } catch (error) { return next(error); }
   });
