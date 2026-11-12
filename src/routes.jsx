@@ -143,7 +143,7 @@ export function AppRoutes() {
   }, [initialize]);
 
   useEffect(() => {
-    const publicRoute = ['/splash', '/login', '/criar-conta', '/pedidos', '/feed', '/mapa', '/inspiracoes', '/mensagens', '/mensagens/ana', '/nova-publicacao', '/perfil', '/sobre'].includes(location.pathname) || location.pathname.startsWith('/anuncios/');
+    const publicRoute = ['/splash', '/login', '/recuperar-senha', '/redefinir-senha', '/criar-conta', '/pedidos', '/feed', '/mapa', '/inspiracoes', '/mensagens', '/mensagens/ana', '/nova-publicacao', '/perfil', '/sobre'].includes(location.pathname) || location.pathname.startsWith('/anuncios/');
     if (initialized && !session && !publicRoute) {
       navigate('/login', { replace: true });
     }
@@ -188,6 +188,10 @@ function ScreenRouter({ location, navigate }) {
       return <Navigate to="/login" replace />;
     case '/login':
       return <LoginScreen onGoToRegister={() => navigate('/criar-conta')} onSuccess={() => navigate('/feed')} />;
+    case '/recuperar-senha':
+      return <ForgotPasswordScreen onBack={() => navigate('/login')} />;
+    case '/redefinir-senha':
+      return <ResetPasswordScreen onBack={() => navigate('/login')} onSuccess={() => navigate('/login')} />;
     case '/criar-conta':
       return <RegisterScreen onGoToLogin={() => navigate('/login')} onSuccess={() => navigate('/feed')} />;
     case '/feed':
@@ -451,6 +455,7 @@ function LoginScreen({ onGoToRegister, onSuccess }) {
         <form onSubmit={submit} className="auth-form">
           <Field label="E-mail" icon="mail" value={formState.email} onChange={(value) => setFormState((prev) => ({ ...prev, email: value }))} placeholder="seu@email.com" />
           <Field label="Senha" icon="lock" type="password" value={formState.password} onChange={(value) => setFormState((prev) => ({ ...prev, password: value }))} placeholder="••••••••" />
+          <div className="auth-form-link"><button type="button" className="text-btn" onClick={() => window.location.assign('/recuperar-senha')}>Esqueci minha senha</button></div>
           <button type="submit" className="primary-btn full">Entrar <span className="material-symbols-outlined">arrow_forward</span></button>
         </form>
         <GoogleSignInButton iconOnly />
@@ -458,6 +463,50 @@ function LoginScreen({ onGoToRegister, onSuccess }) {
       </div>
     </div>
   );
+}
+
+function ForgotPasswordScreen({ onBack }) {
+  const [email, setEmail] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState('');
+  const [error, setError] = useState('');
+
+  async function submit(event) {
+    event.preventDefault();
+    setBusy(true); setError(''); setMessage('');
+    try {
+      const result = await api.forgotPassword(email);
+      setMessage(result.message);
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally { setBusy(false); }
+  }
+
+  return <div className="auth-layout login-layout"><UnifiedTopbar brandHref="/splash" action={<button className="avatar-btn" onClick={onBack} aria-label="Voltar ao login"><span className="material-symbols-outlined">arrow_back</span></button>} /><div className="login-orb login-orb-one" /><div className="login-orb login-orb-two" /><div className="auth-card login-card"><div className="auth-logo"><img src={feedLogo} alt="REUSA+" /></div><h2>Esqueceu sua senha?</h2><p>Informe seu e-mail e enviaremos um link para criar uma nova senha.</p><form onSubmit={submit} className="auth-form"><Field label="E-mail" icon="mail" value={email} onChange={setEmail} placeholder="seu@email.com" type="email" required /><button type="submit" className="primary-btn full" disabled={busy}>{busy ? 'Enviando...' : 'Enviar link'} <span className="material-symbols-outlined">mail</span></button></form>{message ? <p className="auth-feedback auth-feedback-success" role="status">{message}</p> : null}{error ? <p className="auth-feedback auth-feedback-error" role="alert">{error}</p> : null}<div className="auth-footer"><button className="text-btn" onClick={onBack}>Voltar para o login</button></div></div></div>;
+}
+
+function ResetPasswordScreen({ onBack, onSuccess }) {
+  const token = new URLSearchParams(window.location.search).get('token') || '';
+  const [password, setPassword] = useState('');
+  const [confirmation, setConfirmation] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+
+  async function submit(event) {
+    event.preventDefault();
+    if (password.length < 8) return setError('A senha precisa ter pelo menos 8 caracteres.');
+    if (password !== confirmation) return setError('As senhas não conferem.');
+    setBusy(true); setError('');
+    try {
+      await api.resetPassword(token, password);
+      alert('Senha redefinida com sucesso. Você já pode entrar.');
+      onSuccess();
+    } catch (requestError) {
+      setError(requestError.message);
+    } finally { setBusy(false); }
+  }
+
+  return <div className="auth-layout login-layout"><UnifiedTopbar brandHref="/splash" action={<button className="avatar-btn" onClick={onBack} aria-label="Voltar ao login"><span className="material-symbols-outlined">arrow_back</span></button>} /><div className="login-orb login-orb-one" /><div className="login-orb login-orb-two" /><div className="auth-card login-card"><div className="auth-logo"><img src={feedLogo} alt="REUSA+" /></div><h2>Crie uma nova senha</h2><p>Escolha uma senha com pelo menos 8 caracteres.</p><form onSubmit={submit} className="auth-form"><Field label="Nova senha" icon="lock" type="password" value={password} onChange={setPassword} placeholder="Mínimo 8 caracteres" required minLength={8} /><Field label="Confirme a senha" icon="lock_reset" type="password" value={confirmation} onChange={setConfirmation} placeholder="Digite novamente" required minLength={8} /><button type="submit" className="primary-btn full" disabled={busy}>{busy ? 'Salvando...' : 'Redefinir senha'} <span className="material-symbols-outlined">check</span></button></form>{error ? <p className="auth-feedback auth-feedback-error" role="alert">{error}</p> : null}<div className="auth-footer"><button className="text-btn" onClick={onBack}>Voltar para o login</button></div></div></div>;
 }
 
 function RegisterScreen({ onGoToLogin, onSuccess }) {

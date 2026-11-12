@@ -582,10 +582,30 @@ function verificationToken() {
 async function sendVerificationEmail(email, name, token, requestOrigin = '') {
   const baseUrl = APP_BASE_URL || requestOrigin || `http://localhost:${PORT}`;
   const verificationUrl = `${baseUrl}/api/auth/verify-email?token=${encodeURIComponent(token)}`;
+  return sendSmtpEmail({
+    email,
+    subject: 'Confirme seu e-mail no ReUsa+',
+    text: `Olá, ${name}!\n\nConfirme seu e-mail para ativar sua conta: ${verificationUrl}\n\nEste link expira em 24 horas.`,
+    html: `<p>Olá, ${String(name).replace(/[<>&]/g, '')}!</p><p>Confirme seu e-mail para ativar sua conta:</p><p><a href="${verificationUrl}">Confirmar meu e-mail</a></p><p>Este link expira em 24 horas.</p>`
+  });
+}
+
+async function sendPasswordResetEmail(email, name, token, requestOrigin = '') {
+  const baseUrl = APP_BASE_URL || requestOrigin || `http://localhost:${PORT}`;
+  const resetUrl = `${baseUrl}/redefinir-senha?token=${encodeURIComponent(token)}`;
+  return sendSmtpEmail({
+    email,
+    subject: 'Redefina sua senha no ReUsa+',
+    text: `Olá, ${name}!\n\nRedefina sua senha pelo link: ${resetUrl}\n\nEste link expira em 1 hora.`,
+    html: `<p>Olá, ${String(name).replace(/[<>&]/g, '')}!</p><p>Recebemos uma solicitação para redefinir sua senha.</p><p><a href="${resetUrl}">Redefinir minha senha</a></p><p>Este link expira em 1 hora. Se você não solicitou a alteração, ignore este e-mail.</p>`
+  });
+}
+
+async function sendSmtpEmail({ email, subject, text, html }) {
   if (!SMTP_HOST || !SMTP_USER || !SMTP_PASSWORD || !EMAIL_FROM) {
     if (process.env.NODE_ENV === 'production') throw new Error('Email delivery is not configured. Set SMTP_HOST, SMTP_USER, SMTP_PASSWORD and EMAIL_FROM.');
-    console.warn(`[email] Verification URL for ${email}: ${verificationUrl}`);
-    return { delivered: false, verificationUrl };
+    console.warn(`[email] Email delivery is not configured for ${email}`);
+    return { delivered: false };
   }
   const transporter = nodemailer.createTransport({
     host: SMTP_HOST,
@@ -593,13 +613,12 @@ async function sendVerificationEmail(email, name, token, requestOrigin = '') {
     secure: SMTP_PORT === 465,
     auth: { user: SMTP_USER, pass: SMTP_PASSWORD }
   });
-  const safeName = String(name).replace(/[<>&]/g, '');
   await transporter.sendMail({
     from: EMAIL_FROM,
     to: email,
-    subject: 'Confirme seu e-mail no ReUsa+',
-    text: `Olá, ${safeName}!\n\nConfirme seu e-mail para ativar sua conta: ${verificationUrl}\n\nEste link expira em 24 horas.`,
-    html: `<p>Olá, ${safeName}!</p><p>Confirme seu e-mail para ativar sua conta:</p><p><a href="${verificationUrl}">Confirmar meu e-mail</a></p><p>Este link expira em 24 horas.</p>`
+    subject,
+    text,
+    html
   });
   return { delivered: true };
 }
@@ -1182,6 +1201,8 @@ function seedDatabase() {
   ensureColumn('users', 'email_verified', 'INTEGER NOT NULL DEFAULT 1');
   ensureColumn('users', 'email_verification_token_hash', 'TEXT');
   ensureColumn('users', 'email_verification_expires_at', 'TEXT');
+  ensureColumn('users', 'password_reset_token_hash', 'TEXT');
+  ensureColumn('users', 'password_reset_expires_at', 'TEXT');
   ensureColumn('posts', 'status', "TEXT NOT NULL DEFAULT 'Disponível'");
   ensureColumn('posts', 'reserved_by', 'TEXT');
   ensureColumn('posts', 'completed_with', 'TEXT');
@@ -1632,6 +1653,7 @@ async function start() {
       publisher: { flush: flushPendingEvents },
       upload,
       sendVerificationEmail,
+      sendPasswordResetEmail,
       verificationToken,
       sha256,
       isConfiguredAdminEmail
@@ -1957,6 +1979,39 @@ async function start() {
     run('UPDATE users SET last_active_at = ? WHERE id = ?', [new Date().toISOString(), normalized.id]);
     persistDb();
     return res.json({ token: createToken(normalized.id), user: normalized });
+  });
+
+  app.post('/api/auth/forgot-password', authRateLimit, async (req, res, next) => {
+    try {
+      const email = String(req.body?.email || '').trim().toLowerCase();
+      const generic = { message: 'Se existir uma conta com este e-mail, enviaremos um link para redefinir a senha.' };
+      if (!email || !isValidEmailFormat(email)) return res.json(generic);
+      const user = get('SELECT id,name,email FROM users WHERE lower(email) = lower(?)', [email]);
+      if (!user) return res.json(generic);
+      const rawToken = crypto.randomBytes(32).toString('hex');
+      const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+      run('UPDATE users SET password_reset_token_hash = ?, password_reset_expires_at = ? WHERE id = ?', [sha256(rawToken), expiresAt, user.id]);
+      persistDb();
+      try {
+        await sendPasswordResetEmail(user.email, user.name, rawToken, `${req.protocol}://${req.get('host')}`);
+      } catch (error) {
+        const requestId = req.correlationId || uid('request');
+        console.error(`[password-reset-email-error] ${requestId}:`, error);
+        return res.status(503).json({ error: 'Não foi possível enviar o e-mail de redefinição. Tente novamente mais tarde.', requestId });
+      }
+      return res.json(generic);
+    } catch (error) { return next(error); }
+  });
+
+  app.post('/api/auth/reset-password', authRateLimit, (req, res) => {
+    const tokenHash = sha256(String(req.body?.token || ''));
+    const password = String(req.body?.password || '');
+    if (password.length < 8) return res.status(400).json({ error: 'A senha precisa ter pelo menos 8 caracteres.' });
+    const user = get('SELECT id FROM users WHERE password_reset_token_hash = ? AND password_reset_expires_at > ?', [tokenHash, new Date().toISOString()]);
+    if (!user) return res.status(400).json({ error: 'O link de redefinição é inválido ou expirou. Solicite um novo link.' });
+    run('UPDATE users SET password_hash = ?, email_verified = 1, password_reset_token_hash = NULL, password_reset_expires_at = NULL WHERE id = ?', [passwordHash(password), user.id]);
+    persistDb();
+    return res.json({ ok: true });
   });
 
   app.get('/api/auth/verify-email', async (req, res) => {

@@ -140,7 +140,7 @@ function verifyPassword(password, stored) {
   return expected.length === actual.length && crypto.timingSafeEqual(actual, expected);
 }
 
-function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publisher, upload, sendVerificationEmail, verificationToken, sha256, isConfiguredAdminEmail = () => false }) {
+function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publisher, upload, sendVerificationEmail, sendPasswordResetEmail, verificationToken, sha256, isConfiguredAdminEmail = () => false }) {
   const authenticate = async (req, res, next) => {
     const token = String(req.headers.authorization || '').replace(/^Bearer\s+/, '');
     if (!token) return res.status(401).json({ error: 'Authentication required' });
@@ -215,6 +215,37 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       if (row.email_verified === false) return res.status(403).json({ error: 'Confirme seu e-mail antes de entrar' });
       await db.query('UPDATE users SET last_active_at=now() WHERE id=$1', [row.id]);
       return res.json({ token: createToken(row.id), user: userView(row) });
+    } catch (error) { return next(error); }
+  });
+  app.post('/api/auth/forgot-password', async (req, res, next) => {
+    try {
+      const email = String(req.body?.email || '').trim().toLowerCase();
+      const generic = { message: 'Se existir uma conta com este e-mail, enviaremos um link para redefinir a senha.' };
+      if (!email || !isValidEmailFormat(email)) return res.json(generic);
+      const user = await db.one('SELECT id,name,email FROM users WHERE lower(email)=lower($1)', [email]);
+      if (!user) return res.json(generic);
+      const rawToken = crypto.randomBytes(32).toString('hex');
+      const expiresAt = new Date(Date.now() + 60 * 60 * 1000).toISOString();
+      await db.query('UPDATE users SET password_reset_token_hash=$1,password_reset_expires_at=$2 WHERE id=$3', [sha256(rawToken), expiresAt, user.id]);
+      try {
+        await sendPasswordResetEmail(user.email, user.name, rawToken, `${req.protocol}://${req.get('host')}`);
+      } catch (error) {
+        const requestId = req.correlationId || id('request');
+        console.error(`[password-reset-email-error] ${requestId}:`, error);
+        return res.status(503).json({ error: 'Não foi possível enviar o e-mail de redefinição. Tente novamente mais tarde.', requestId });
+      }
+      return res.json(generic);
+    } catch (error) { return next(error); }
+  });
+  app.post('/api/auth/reset-password', async (req, res, next) => {
+    try {
+      const password = String(req.body?.password || '');
+      if (password.length < 8) return res.status(400).json({ error: 'A senha precisa ter pelo menos 8 caracteres.' });
+      const tokenHash = sha256(String(req.body?.token || ''));
+      const user = await db.one('SELECT id FROM users WHERE password_reset_token_hash=$1 AND password_reset_expires_at>now()', [tokenHash]);
+      if (!user) return res.status(400).json({ error: 'O link de redefinição é inválido ou expirou. Solicite um novo link.' });
+      await db.query('UPDATE users SET password_hash=$1,email_verified=true,password_reset_token_hash=NULL,password_reset_expires_at=NULL WHERE id=$2', [passwordHash(password), user.id]);
+      return res.json({ ok: true });
     } catch (error) { return next(error); }
   });
   app.get('/api/auth/me', authenticate, (req, res) => res.json({ user: req.user }));

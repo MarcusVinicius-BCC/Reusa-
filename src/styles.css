@@ -405,7 +405,11 @@ img { display: block; max-width: 100%; }
 .auth-card h2 { margin: 0 0 8px; font-size: 32px; }
 .auth-card p { margin: 0 0 18px; color: var(--text-variant); }
 .auth-form { display: grid; gap: 16px; }
+.auth-form-link { display: flex; justify-content: flex-end; margin-top: -6px; font-size: 13px; }
 .auth-footer { margin-top: 18px; text-align: center; color: var(--text-variant); }
+.auth-feedback { margin-top: 16px; padding: 12px 14px; border-radius: 12px; font-size: 13px; }
+.auth-feedback-success { color: #17653f; background: #e8f7ed; }
+.auth-feedback-error { color: #9c2f35; background: #fff0f0; }
 
 .field { display: grid; gap: 8px; }
 .field > span { font-family: 'Hanken Grotesk', sans-serif; font-size: 14px; font-weight: 700; color: var(--text-variant); }
