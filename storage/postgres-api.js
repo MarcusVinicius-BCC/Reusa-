@@ -242,7 +242,7 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
     } catch (error) { return next(error); }
   });
   app.get('/api/favorites', authenticate, async (req, res, next) => {
-    try { const rows = await db.many('SELECT p.* FROM favorites f JOIN posts p ON p.id=f.post_id WHERE f.user_id=$1 ORDER BY f.created_at DESC', [req.user.id]); return res.json({ posts: await Promise.all(rows.map((row) => postView(db, row, req.user.id))) }); } catch (error) { return next(error); }
+    try { const rows = await db.many("SELECT p.* FROM favorites f JOIN posts p ON p.id=f.post_id WHERE f.user_id=$1 AND p.status <> 'Encerrado' ORDER BY f.created_at DESC", [req.user.id]); return res.json({ posts: await Promise.all(rows.map((row) => postView(db, row, req.user.id))) }); } catch (error) { return next(error); }
   });
   app.post('/api/posts/:id/favorite', authenticate, async (req, res, next) => {
     try { const exists = await db.one('SELECT 1 FROM favorites WHERE user_id=$1 AND post_id=$2', [req.user.id, req.params.id]); if (exists) await db.query('DELETE FROM favorites WHERE user_id=$1 AND post_id=$2', [req.user.id, req.params.id]); else await db.query('INSERT INTO favorites(user_id,post_id,created_at) VALUES($1,$2,now()) ON CONFLICT DO NOTHING', [req.user.id, req.params.id]); return res.json({ saved: !exists }); } catch (error) { return next(error); }
@@ -345,6 +345,7 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
         'UPDATE posts SET status=$1,reserved_by=CASE WHEN $1=$2 THEN NULL ELSE reserved_by END,updated_at=now() WHERE id=$3 RETURNING *',
         [status, 'Disponível', post.id]
       );
+      if (status === 'Encerrado') await db.query('DELETE FROM favorites WHERE post_id=$1', [post.id]);
       return res.json({ post: await postView(db, updated, req.user.id) });
     } catch (error) { return next(error); }
   });
@@ -445,7 +446,7 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
     try {
       const rows = await db.many(`SELECT n.id AS negotiation_id,n.status,n.proposal_status,n.proposal_amount_cents,n.proposal_method,n.proposal_created_at,p.id AS post_id,p.title,p.image_url,p.location
         FROM negotiations n JOIN posts p ON p.id=n.post_id
-        WHERE n.interested_id=$1 AND n.proposal_status IN ('pending','accepted') AND n.status IN ('interested','reserved')
+        WHERE p.status <> 'Encerrado' AND n.interested_id=$1 AND n.proposal_status IN ('pending','accepted') AND n.status IN ('interested','reserved')
         ORDER BY n.updated_at DESC`, [req.user.id]);
       const payments = await db.many(`SELECT negotiation_id,status,checkout_url FROM payments WHERE payer_id=$1 AND status IN ('processing','failed') ORDER BY created_at DESC`, [req.user.id]);
       const paymentByNegotiation = new Map(payments.map((payment) => [payment.negotiation_id, payment]));
@@ -609,7 +610,7 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
   app.get('/api/profile', authenticate, async (req, res, next) => {
     try {
       const profile = await db.one('SELECT * FROM users WHERE id=$1', [req.user.id]);
-      const posts = await db.many('SELECT * FROM posts WHERE author_id=$1 ORDER BY created_at DESC', [req.user.id]);
+      const posts = await db.many("SELECT * FROM posts WHERE author_id=$1 AND status <> 'Encerrado' ORDER BY created_at DESC", [req.user.id]);
       const reputation = await db.one('SELECT COALESCE(ROUND(AVG(rating),1),0)::float AS rating, COUNT(*)::int AS count FROM reviews WHERE reviewee_id=$1', [req.user.id]);
       return res.json({ user: userView(profile), stats: { donations: Number(profile.donations || 0), received: Number(profile.received || 0), rating: Number(reputation?.rating || 0), carbonSavedPercent: Number(profile.carbon_saved_percent || 0) }, achievements: json(profile.achievements_json), reputation, reviews: [], posts: await Promise.all(posts.map((row) => postView(db, row, req.user.id))) });
     } catch (error) { return next(error); }
@@ -890,6 +891,7 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
         const financial = await client.query('SELECT p.id FROM payments p JOIN negotiations n ON n.id=p.negotiation_id WHERE n.post_id=$1 LIMIT 1', [req.params.id]);
         if (financial.rowCount) {
           await client.query("UPDATE posts SET status='Encerrado', reserved_by=NULL, updated_at=now() WHERE id=$1", [req.params.id]);
+          await client.query('DELETE FROM favorites WHERE post_id=$1', [req.params.id]);
           await client.query("DELETE FROM reports WHERE target_type='post' AND target_id=$1", [req.params.id]);
           return 'archived';
         }

@@ -56,7 +56,7 @@ function registerDeliveryRoutes(app, { postgres, sqlite, authenticate, flush, re
     const items = await work(async c => {
       const all = await rows(c, `SELECT n.*,p.title,p.image_url,p.goal,p.location,owner.name AS owner_name,buyer.name AS buyer_name
         FROM negotiations n JOIN posts p ON p.id=n.post_id JOIN users owner ON owner.id=n.owner_id JOIN users buyer ON buyer.id=n.interested_id
-        WHERE n.owner_id=$1 OR n.interested_id=$2 ORDER BY n.updated_at DESC`, [req.user.id,req.user.id]);
+        WHERE p.status <> 'Encerrado' AND (n.owner_id=$1 OR n.interested_id=$2) ORDER BY n.updated_at DESC`, [req.user.id,req.user.id]);
       return Promise.all(all.map(async n => {
         const d=await delivery(c,n.id);
         const p=await one(c,'SELECT status,amount_cents,method FROM payments WHERE negotiation_id=$1 ORDER BY created_at DESC LIMIT 1',[n.id]);

@@ -2037,7 +2037,7 @@ async function start() {
   });
 
   app.get('/api/favorites', authMiddleware, (req, res) => {
-    const rows = all('SELECT posts.* FROM favorites JOIN posts ON posts.id = favorites.post_id WHERE favorites.user_id = ? ORDER BY favorites.created_at DESC', [req.user.id]);
+    const rows = all("SELECT posts.* FROM favorites JOIN posts ON posts.id = favorites.post_id WHERE favorites.user_id = ? AND posts.status <> 'Encerrado' ORDER BY favorites.created_at DESC", [req.user.id]);
     res.json({ posts: rows.map((row) => publicPost(row, req.user.id)) });
   });
 
@@ -2229,7 +2229,7 @@ async function start() {
   app.get('/api/profile/payment-items', authMiddleware, (req, res) => {
     const rows = all(`SELECT n.id AS negotiation_id,n.status,n.proposal_status,n.proposal_amount_cents,n.proposal_method,n.proposal_created_at,p.id AS post_id,p.title,p.image_url,p.location
       FROM negotiations n JOIN posts p ON p.id=n.post_id
-      WHERE n.interested_id = ? AND n.proposal_status IN ('pending','accepted') AND n.status IN ('interested','reserved')
+      WHERE p.status <> 'Encerrado' AND n.interested_id = ? AND n.proposal_status IN ('pending','accepted') AND n.status IN ('interested','reserved')
       ORDER BY n.updated_at DESC`, [req.user.id]);
     const payments = all("SELECT negotiation_id,status,checkout_url FROM payments WHERE payer_id = ? AND status IN ('processing','failed') ORDER BY created_at DESC", [req.user.id]);
     const paymentByNegotiation = new Map(payments.map((payment) => [payment.negotiation_id, payment]));
@@ -2278,6 +2278,7 @@ async function start() {
     if (!['Disponível', 'Encerrado'].includes(status)) return res.status(400).json({ error: 'Use the reservation or completion flow for this status' });
     const now = new Date().toISOString();
     run('UPDATE posts SET status = ?, reserved_by = CASE WHEN ? = ? THEN NULL ELSE reserved_by END, updated_at = ? WHERE id = ?', [status, status, 'Disponível', now, post.id]);
+    if (status === 'Encerrado') run('DELETE FROM favorites WHERE post_id = ?', [post.id]);
     if (status === 'Disponível') run("UPDATE negotiations SET status = 'interested', updated_at = ? WHERE post_id = ? AND status = 'reserved'", [now, post.id]);
     persistDb();
     return res.json({ post: publicPost(get('SELECT * FROM posts WHERE id = ?', [post.id]), req.user.id) });
@@ -2647,7 +2648,7 @@ async function start() {
   });
 
   app.get('/api/profile', authMiddleware, (req, res) => {
-    const posts = all('SELECT * FROM posts WHERE author_id = ?', [req.user.id]);
+    const posts = all("SELECT * FROM posts WHERE author_id = ? AND status <> 'Encerrado'", [req.user.id]);
     const impact = impactForUser(req.user.id);
     const reputation = get('SELECT ROUND(AVG(rating), 1) AS average, COUNT(*) AS count FROM reviews WHERE reviewee_id = ?', [req.user.id]);
     const reviews = all('SELECT reviews.id, reviews.rating, reviews.comment, reviews.created_at, users.name AS reviewer_name FROM reviews JOIN users ON users.id = reviews.reviewer_id WHERE reviews.reviewee_id = ? ORDER BY reviews.created_at DESC LIMIT 10', [req.user.id]);
@@ -2790,6 +2791,7 @@ async function start() {
     if (!post) return res.status(404).json({ error: 'Post not found' });
     if (get('SELECT id FROM payments p JOIN negotiations n ON n.id = p.negotiation_id WHERE n.post_id = ? LIMIT 1', [post.id])) {
       run("UPDATE posts SET status = 'Encerrado', reserved_by = NULL, updated_at = ? WHERE id = ?", [new Date().toISOString(), post.id]);
+      run('DELETE FROM favorites WHERE post_id = ?', [post.id]);
       run('DELETE FROM reports WHERE target_type = ? AND target_id = ?', ['post', post.id]);
       persistDb();
       return res.json({ ok: true, archived: true });
