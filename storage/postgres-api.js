@@ -200,7 +200,7 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
         const requestId = req.correlationId || id('request');
         console.error(`[registration-email-error] ${requestId}:`, error);
         return res.status(503).json({
-          error: 'A conta foi criada, mas não foi possível enviar o e-mail de confirmação. Configure RESEND_API_KEY e EMAIL_FROM e solicite um novo envio.',
+          error: 'A conta foi criada, mas não foi possível enviar o e-mail de confirmação. Configure SMTP_HOST, SMTP_USER, SMTP_PASSWORD e EMAIL_FROM e solicite um novo envio.',
           requestId
         });
       }

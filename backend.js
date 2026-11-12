@@ -9,6 +9,7 @@ const path = require('path');
 const crypto = require('crypto');
 const jwt = require('jsonwebtoken');
 const multer = require('multer');
+const nodemailer = require('nodemailer');
 const initSqlJs = require('sql.js');
 const { EventPublisher } = require('./distributed/event-publisher');
 const { PostgresRepository, postgresEnabled, postgresConnectionString } = require('./storage/postgres-repository');
@@ -39,8 +40,11 @@ const APP_BASE_URL = String(process.env.APP_BASE_URL || '').trim().replace(/\/$/
 const NOTIFICATION_SERVICE_URL = String(process.env.NOTIFICATION_SERVICE_URL || '').trim().replace(/\/$/, '');
 const IMPACT_SERVICE_URL = String(process.env.IMPACT_SERVICE_URL || '').trim().replace(/\/$/, '');
 const SERVICE_AUTH_TOKEN = String(process.env.SERVICE_AUTH_TOKEN || '').trim();
-const RESEND_API_KEY = String(process.env.RESEND_API_KEY || '').trim();
-const EMAIL_FROM = String(process.env.EMAIL_FROM || 'ReUsa+ <onboarding@resend.dev>').trim();
+const SMTP_HOST = String(process.env.SMTP_HOST || '').trim();
+const SMTP_PORT = Number(process.env.SMTP_PORT || 587);
+const SMTP_USER = String(process.env.SMTP_USER || '').trim();
+const SMTP_PASSWORD = String(process.env.SMTP_PASSWORD || '').trim();
+const EMAIL_FROM = String(process.env.EMAIL_FROM || SMTP_USER).trim();
 const INSTANCE_ID = String(process.env.INSTANCE_ID || `core-${crypto.randomUUID()}`).slice(0, 120);
 const DEFAULT_ROUTING_BASE_URL = 'https://router.project-osrm.org';
 const ROUTING_BASE_URL = validatedRoutingBaseUrl(process.env.ROUTING_BASE_URL || DEFAULT_ROUTING_BASE_URL);
@@ -578,17 +582,25 @@ function verificationToken() {
 async function sendVerificationEmail(email, name, token, requestOrigin = '') {
   const baseUrl = APP_BASE_URL || requestOrigin || `http://localhost:${PORT}`;
   const verificationUrl = `${baseUrl}/api/auth/verify-email?token=${encodeURIComponent(token)}`;
-  if (!RESEND_API_KEY) {
-    if (process.env.NODE_ENV === 'production') throw new Error('Email delivery is not configured. Set RESEND_API_KEY and EMAIL_FROM.');
+  if (!SMTP_HOST || !SMTP_USER || !SMTP_PASSWORD || !EMAIL_FROM) {
+    if (process.env.NODE_ENV === 'production') throw new Error('Email delivery is not configured. Set SMTP_HOST, SMTP_USER, SMTP_PASSWORD and EMAIL_FROM.');
     console.warn(`[email] Verification URL for ${email}: ${verificationUrl}`);
     return { delivered: false, verificationUrl };
   }
-  const response = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ from: EMAIL_FROM, to: [email], subject: 'Confirme seu e-mail no ReUsa+', html: `<p>Olá, ${String(name).replace(/[<>&]/g, '')}!</p><p>Confirme seu e-mail para ativar sua conta:</p><p><a href="${verificationUrl}">Confirmar meu e-mail</a></p><p>Este link expira em 24 horas.</p>` })
+  const transporter = nodemailer.createTransport({
+    host: SMTP_HOST,
+    port: SMTP_PORT,
+    secure: SMTP_PORT === 465,
+    auth: { user: SMTP_USER, pass: SMTP_PASSWORD }
   });
-  if (!response.ok) throw new Error(`Email provider returned ${response.status}`);
+  const safeName = String(name).replace(/[<>&]/g, '');
+  await transporter.sendMail({
+    from: EMAIL_FROM,
+    to: email,
+    subject: 'Confirme seu e-mail no ReUsa+',
+    text: `Olá, ${safeName}!\n\nConfirme seu e-mail para ativar sua conta: ${verificationUrl}\n\nEste link expira em 24 horas.`,
+    html: `<p>Olá, ${safeName}!</p><p>Confirme seu e-mail para ativar sua conta:</p><p><a href="${verificationUrl}">Confirmar meu e-mail</a></p><p>Este link expira em 24 horas.</p>`
+  });
   return { delivered: true };
 }
 
@@ -1920,7 +1932,7 @@ async function start() {
       const requestId = req.correlationId || uid('request');
       console.error(`[registration-email-error] ${requestId}:`, error);
       return res.status(503).json({
-        error: 'A conta foi criada, mas não foi possível enviar o e-mail de confirmação. Configure RESEND_API_KEY e EMAIL_FROM e tente reenviar a confirmação.',
+        error: 'A conta foi criada, mas não foi possível enviar o e-mail de confirmação. Configure SMTP_HOST, SMTP_USER, SMTP_PASSWORD e EMAIL_FROM e tente reenviar a confirmação.',
         requestId
       });
     }

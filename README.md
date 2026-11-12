@@ -253,7 +253,10 @@ segredos no Git.
 | `GOOGLE_CLIENT_ID` | Login Google | Client ID OAuth. |
 | `GOOGLE_CLIENT_SECRET` | Login Google | Segredo OAuth; não versionar. |
 | `GOOGLE_REDIRECT_URI` | Login Google | Callback `/api/auth/google/callback`. |
-| `RESEND_API_KEY` | E-mail | Chave para envio de confirmação por e-mail. |
+| `SMTP_HOST` | E-mail | Servidor SMTP do provedor, por exemplo `smtp.gmail.com`. |
+| `SMTP_PORT` | E-mail | Porta SMTP segura, normalmente `587`. |
+| `SMTP_USER` | E-mail | Conta de e-mail usada para enviar mensagens. |
+| `SMTP_PASSWORD` | E-mail | Senha de aplicativo da conta SMTP. |
 | `EMAIL_FROM` | E-mail | Remetente das mensagens de confirmação. |
 | `REDIS_URL` | Opcional | Conexão Redis. |
 | `AMQP_URL` | Opcional | Conexão RabbitMQ. |
@@ -354,7 +357,7 @@ pelo backend quando a funcionalidade correspondente é utilizada.
 | --- | --- |
 | Google OAuth | Login social |
 | BrasilAPI | Consulta de empresas por CNPJ |
-| Resend | Envio de confirmação de e-mail |
+| Gmail SMTP | Envio de confirmação de e-mail |
 | Nominatim | Geocodificação de endereços |
 | Overpass API | Busca de pontos públicos no OpenStreetMap |
 | OSRM | Cálculo de rotas |
