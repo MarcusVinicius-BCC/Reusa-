@@ -1854,7 +1854,7 @@ function ProfileScreen({ onGoToFeed, onSettings, onOpenPost, onAdmin }) {
               <div className="mini-post-thumb"><img src={post.imageUrl} alt={post.title} /><span>{post.category || 'Anúncio'}</span></div>
               <strong>{post.title}</strong>
               <p>{[post.location, post.status].filter(Boolean).join(' · ') || formatRelativeTime(post.createdAt)}</p>
-              <div className="profile-post-actions"><button type="button" className="text-btn" onClick={() => onOpenPost(post.id)}>Ver anúncio</button>{listingTab === 'saved' ? <button type="button" className="text-btn" onClick={() => toggleFavorite(post.id).catch((error) => alert(error.message))}>Remover</button> : null}</div>
+              <div className="profile-post-actions"><button type="button" className="profile-view-post-btn" onClick={() => onOpenPost(post.id)}><span className="material-symbols-outlined" aria-hidden="true">visibility</span>Ver anúncio</button>{listingTab === 'saved' ? <button type="button" className="text-btn" onClick={() => toggleFavorite(post.id).catch((error) => alert(error.message))}>Remover</button> : null}</div>
             </article>
           )) : <EmptyState icon={listingTab === 'mine' ? 'inventory_2' : 'bookmark_border'} title={listingTab === 'mine' ? 'Você ainda não publicou anúncios' : 'Nenhum item salvo'} text={listingTab === 'mine' ? 'Seus próximos anúncios aparecerão aqui.' : 'Salve anúncios para encontrá-los rapidamente aqui.'} action={listingTab === 'saved' ? 'Explorar anúncios' : undefined} onAction={onGoToFeed} />}
         </section>
