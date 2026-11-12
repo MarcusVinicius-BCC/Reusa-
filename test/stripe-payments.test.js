@@ -314,7 +314,7 @@ test('Seller creation uses Accounts v2 with Stripe collecting losses and fees', 
         assert.equal(new URL(url).pathname,'/v2/core/accounts');assert.equal(options.method,'POST');
         const headers=new Headers(options.headers);assert.match(headers.get('content-type'),/application\/json/);assert.equal(headers.get('idempotency-key'),'seller-v2-test');
         const body=JSON.parse(options.body);assert.equal(body.type,undefined);assert.equal(body.contact_email,'seller@example.test');assert.equal(body.identity.country,'BR');
-        assert.equal(body.dashboard,'full');assert.deepEqual(body.defaults.responsibilities,{fees_collector:'stripe',losses_collector:'stripe'});assert.equal(body.configuration.merchant.capabilities.card_payments.requested,true);assert.equal(body.configuration.merchant.capabilities.pix_payments.requested,true);
+        assert.equal(body.dashboard,'full');assert.deepEqual(body.defaults.responsibilities,{fees_collector:'stripe',losses_collector:'stripe'});assert.equal(body.configuration.merchant.capabilities.card_payments.requested,true);assert.equal(body.configuration.merchant.capabilities.pix_payments,undefined);
         return new Response(JSON.stringify({id:'acct_managed',object:'v2.core.account',livemode:false}),{headers:{'Content-Type':'application/json'}});
       };
       assert.equal((await stripe.createConnectedAccount('seller@example.test','seller-v2-test')).id,'acct_managed');

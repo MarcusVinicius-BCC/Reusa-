@@ -158,7 +158,7 @@ async function createConnectedAccount(email, idempotencyKey) {
   return accountRequest('/v2/core/accounts','POST',client => client.v2.core.accounts.create({
     contact_email:email, identity:{country:'BR'}, dashboard:'full',
     defaults:{currency:'brl',locales:['pt-BR'],responsibilities:{fees_collector:'stripe',losses_collector:'stripe'}},
-    configuration:{merchant:{capabilities:{card_payments:{requested:true},pix_payments:{requested:true}}}}, include:accountInclude
+    configuration:{merchant:{capabilities:{card_payments:{requested:true}}}}, include:accountInclude
   },{idempotencyKey}));
 }
 async function accountLink(accountId, refreshUrl, returnUrl, version='v2') {
