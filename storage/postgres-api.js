@@ -757,8 +757,8 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
       const adminCheck = await db.one('SELECT role FROM users WHERE id=$1', [req.user.id]);
       if (adminCheck.role !== 'admin') return res.status(403).json({ error: 'Administrator access required' });
       const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
-      const totals = await db.one(`SELECT COUNT(*)::int AS total_users, (SELECT COUNT(*)::int FROM users WHERE suspended=false AND last_active_at >= $1)::int AS active_users, (SELECT COUNT(*)::int FROM posts)::int AS total_posts, (SELECT COUNT(*)::int FROM posts WHERE status IN ('Disponível','Reservado'))::int AS active_posts, (SELECT COUNT(*)::int FROM posts WHERE status='Doado')::int AS donations, (SELECT COUNT(*)::int FROM posts WHERE status='Trocado')::int AS exchanges, (SELECT COUNT(*)::int FROM collection_points)::int AS collection_points, (SELECT COUNT(*)::int FROM reports WHERE status='pending')::int AS reports, (SELECT COUNT(*)::int FROM users WHERE last_active_at >= $1)::int AS new_users FROM users`, [since]);
-      const categories = await db.many('SELECT category, COUNT(*)::int AS count FROM posts GROUP BY category ORDER BY count DESC LIMIT 8');
+      const totals = await db.one(`SELECT COUNT(*)::int AS total_users, (SELECT COUNT(*)::int FROM users WHERE suspended=false AND last_active_at >= $1)::int AS active_users, (SELECT COUNT(*)::int FROM posts WHERE status <> 'Encerrado')::int AS total_posts, (SELECT COUNT(*)::int FROM posts WHERE status IN ('Disponível','Reservado'))::int AS active_posts, (SELECT COUNT(*)::int FROM posts WHERE status='Doado')::int AS donations, (SELECT COUNT(*)::int FROM posts WHERE status='Trocado')::int AS exchanges, (SELECT COUNT(*)::int FROM collection_points)::int AS collection_points, (SELECT COUNT(*)::int FROM reports WHERE status='pending')::int AS reports, (SELECT COUNT(*)::int FROM users WHERE last_active_at >= $1)::int AS new_users FROM users`, [since]);
+      const categories = await db.many("SELECT category, COUNT(*)::int AS count FROM posts WHERE status <> 'Encerrado' GROUP BY category ORDER BY count DESC LIMIT 8");
       return res.json({ totals: { totalUsers: totals.total_users, activeUsers: totals.active_users, totalPosts: totals.total_posts, activePosts: totals.active_posts, donations: totals.donations, exchanges: totals.exchanges, collectionPoints: totals.collection_points, reports: totals.reports, newUsers: totals.new_users }, categories, impact: { itemsReused: Number(totals.donations) + Number(totals.exchanges), beneficiaries: 0, estimated: true } });
     } catch (error) { return next(error); }
   });
@@ -876,7 +876,7 @@ function registerPostgresRoutes(app, { db, jwtSecret, createToken, uid, publishe
   app.get('/api/admin/posts', authenticate, async (req, res, next) => {
     try {
       if (!await requireAdmin(req, res)) return;
-      const rows = await db.many('SELECT * FROM posts ORDER BY created_at DESC LIMIT 200');
+      const rows = await db.many("SELECT * FROM posts WHERE status <> 'Encerrado' ORDER BY created_at DESC LIMIT 200");
       return res.json({ posts: await Promise.all(rows.map((row) => postView(db, row, req.user.id))) });
     } catch (error) { return next(error); }
   });

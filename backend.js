@@ -2753,14 +2753,14 @@ async function start() {
     const since = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
     const totalUsers = get('SELECT COUNT(*) AS count FROM users')?.count || 0;
     const activeUsers = get('SELECT COUNT(*) AS count FROM users WHERE suspended = 0 AND last_active_at >= ?', [since])?.count || 0;
-    const totalPosts = get('SELECT COUNT(*) AS count FROM posts')?.count || 0;
+    const totalPosts = get("SELECT COUNT(*) AS count FROM posts WHERE status <> 'Encerrado'")?.count || 0;
     const activePosts = get("SELECT COUNT(*) AS count FROM posts WHERE status IN ('Disponível', 'Reservado')")?.count || 0;
     const donations = get("SELECT COUNT(*) AS count FROM posts WHERE status = 'Doado'")?.count || 0;
     const exchanges = get("SELECT COUNT(*) AS count FROM posts WHERE status = 'Trocado'")?.count || 0;
     const collectionPoints = get('SELECT COUNT(*) AS count FROM collection_points')?.count || 0;
     const reports = get("SELECT COUNT(*) AS count FROM reports WHERE status = 'pending'")?.count || 0;
     const newUsers = get('SELECT COUNT(*) AS count FROM users WHERE last_active_at >= ?', [since])?.count || 0;
-    const categories = all('SELECT category, COUNT(*) AS count FROM posts GROUP BY category ORDER BY count DESC LIMIT 8');
+    const categories = all("SELECT category, COUNT(*) AS count FROM posts WHERE status <> 'Encerrado' GROUP BY category ORDER BY count DESC LIMIT 8");
     return res.json({ totals: { totalUsers, activeUsers, totalPosts, activePosts, donations, exchanges, collectionPoints, reports, newUsers }, categories, impact: await communityImpact() });
   });
 
@@ -2781,7 +2781,7 @@ async function start() {
   });
 
   app.get('/api/admin/posts', authMiddleware, adminMiddleware, (_req, res) => {
-    const rows = all('SELECT * FROM posts ORDER BY created_at DESC LIMIT 200');
+    const rows = all("SELECT * FROM posts WHERE status <> 'Encerrado' ORDER BY created_at DESC LIMIT 200");
     return res.json({ posts: rows.map((row) => publicPost(row)) });
   });
 

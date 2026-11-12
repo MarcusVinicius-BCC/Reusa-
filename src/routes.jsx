@@ -2416,7 +2416,7 @@ function AdminScreen({ onBack }) {
     setDeletingPostId(post.id);
     try {
       await api.removeAdminPost(post.id);
-      setPosts((currentPosts) => currentPosts.filter((item) => item.id !== post.id));
+      await load();
     } catch (error) {
       alert(error.message);
     } finally {
